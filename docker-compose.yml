@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  job-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data      # persist SQLite DB
+      - ./logs:/app/logs      # persist logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('data/jobs.db').execute('SELECT 1')"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
