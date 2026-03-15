@@ -88,44 +88,38 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_fetch_parses_job_cards(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert len(jobs) == 3
 
     @pytest.mark.asyncio
     async def test_fetch_title(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[0].title == "Senior Software Engineer"
 
     @pytest.mark.asyncio
     async def test_fetch_company(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[0].company == "Impact Foundation"
 
     @pytest.mark.asyncio
     async def test_fetch_source(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[0].source == "techjobsforgood"
 
     @pytest.mark.asyncio
     async def test_fetch_all_jobs_are_ngo(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         for job in jobs:
             assert job.is_ngo is True
 
     @pytest.mark.asyncio
     async def test_fetch_all_jobs_are_remote(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         for job in jobs:
             assert job.is_remote is True
@@ -134,22 +128,19 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_fetch_location_worldwide(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[0].location == "Remote - Worldwide"
 
     @pytest.mark.asyncio
     async def test_fetch_location_europe(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[1].location == "Remote - Europe"
 
     @pytest.mark.asyncio
     async def test_fetch_location_berlin(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[2].location == "Berlin, Germany (Remote)"
 
@@ -157,8 +148,7 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_fetch_extracts_tags(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert "Python" in jobs[0].tags
         assert "Django" in jobs[0].tags
@@ -171,8 +161,7 @@ class TestTechJobsForGoodSource:
         for i in range(15):
             many_tags_html += f'<span class="tag">Tag{i}</span>'
         many_tags_html += '</div></body></html>'
-        mock_resp = _mock_response(many_tags_html)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=many_tags_html):
             jobs = await self.source.fetch()
         if jobs:
             assert len(jobs[0].tags) <= 10
@@ -181,8 +170,7 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_fetch_builds_full_url(self):
-        mock_resp = _mock_response(SAMPLE_TECHJOBS_HTML)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=SAMPLE_TECHJOBS_HTML):
             jobs = await self.source.fetch()
         assert jobs[0].url == "https://www.techjobsforgood.com/jobs/123-senior-software-engineer"
 
@@ -192,8 +180,7 @@ class TestTechJobsForGoodSource:
         <a href="https://www.techjobsforgood.com/jobs/999-external">Ext Job</a>
         <span class="company">Org</span>
         </div></body></html>"""
-        mock_resp = _mock_response(html)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=html):
             jobs = await self.source.fetch()
         if jobs:
             assert jobs[0].url.startswith("https://")
@@ -202,29 +189,25 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_fetch_handles_rate_limit(self):
-        mock_resp = _mock_response(status_code=429)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=""):
             jobs = await self.source.fetch()
         assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_handles_empty_html(self):
-        mock_resp = _mock_response("<html><body></body></html>")
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value="<html><body></body></html>"):
             jobs = await self.source.fetch()
         assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_handles_very_short_response(self):
-        mock_resp = _mock_response("ok")
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value="ok"):
             jobs = await self.source.fetch()
         assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_handles_500_error(self):
-        mock_resp = _mock_response("<html>Server Error</html>", status_code=500)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=""):
             jobs = await self.source.fetch()
         assert jobs == []
 
@@ -235,7 +218,7 @@ class TestTechJobsForGoodSource:
 
     @pytest.mark.asyncio
     async def test_safe_fetch_catches_exceptions(self):
-        with patch.object(self.source, "_get", new_callable=AsyncMock, side_effect=Exception("boom")):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, side_effect=Exception("boom")):
             jobs = await self.source.safe_fetch()
         assert jobs == []
 
@@ -264,8 +247,7 @@ class TestTechJobsForGoodSource:
         </div>
         </body></html>
         """
-        mock_resp = _mock_response(fallback_html)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_fetch_html", new_callable=AsyncMock, return_value=fallback_html):
             jobs = await self.source.fetch()
         assert len(jobs) >= 1
 
