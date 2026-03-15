@@ -289,7 +289,7 @@ class TestPreClassifiedScope:
 class TestDiscordNotifier:
     @pytest.mark.asyncio
     async def test_send_jobs_creates_embeds(self):
-        """Verify send_jobs calls the webhook for each job."""
+        """Verify send_jobs calls the webhook for each job (+ batch header)."""
         notifier = DiscordNotifier(webhook_url="https://discord.com/api/webhooks/test/test")
 
         jobs = [
@@ -304,8 +304,8 @@ class TestDiscordNotifier:
 
             await notifier.send_jobs(jobs)
 
-            # Should have been called once per job
-            assert MockWebhook.call_count == 2
+            # 1 batch header + 2 job embeds = 3 webhook calls
+            assert MockWebhook.call_count == 3
 
     @pytest.mark.asyncio
     async def test_send_jobs_ngo_uses_ngo_webhook(self):
@@ -335,8 +335,10 @@ class TestDiscordNotifier:
 
             await notifier.send_jobs([ngo_job, general_job])
 
-            assert webhook_urls_used[0] == "https://discord.com/api/webhooks/ngo"
-            assert webhook_urls_used[1] == "https://discord.com/api/webhooks/general"
+            # [0] = batch header (general webhook), [1] = NGO job, [2] = general job
+            assert webhook_urls_used[0] == "https://discord.com/api/webhooks/general"  # batch header
+            assert webhook_urls_used[1] == "https://discord.com/api/webhooks/ngo"      # NGO job
+            assert webhook_urls_used[2] == "https://discord.com/api/webhooks/general"  # general job
 
     @pytest.mark.asyncio
     async def test_send_jobs_skips_when_no_url(self):
