@@ -41,10 +41,13 @@ jobs:
           host: ${{ secrets.ORACLE_HOST }}
           username: opc
           key: ${{ secrets.ORACLE_SSH_KEY }}
+          command_timeout: 30m
           script: |
             cd ~/jobs-tracker-bot
             git pull origin main
-            sudo docker compose up -d --build
+            # Skip Playwright in Docker — saves ~3 min build + 500MB RAM
+            export INSTALL_PLAYWRIGHT=false
+            sudo -E docker compose up -d --build
             # Wait for container to be healthy
             sleep 10
             sudo docker compose ps
