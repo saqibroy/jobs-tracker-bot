@@ -1,14 +1,29 @@
 # 🔍 Job Tracker Bot
 
-A fully async Python bot that monitors 6 remote job boards, filters for full-stack developer positions accessible from the EU/Germany, classifies NGO/nonprofit roles, and sends rich notifications to Discord and Telegram.
+A fully async Python bot that monitors **11 remote job boards**, filters for full-stack developer positions accessible from the EU/Germany, classifies NGO/nonprofit roles, and sends modern rich notifications to Discord and Telegram.
 
 Built for a specific use case: finding remote tech roles at NGOs and impact-driven organizations, while also catching good general remote positions.
 
 ## Features
 
-- **6 job sources** — Remotive, Arbeitnow, RemoteOK, We Work Remotely, Idealist (Algolia API), ReliefWeb (RSS feeds)
-- **Smart location filter** — accepts worldwide remote, EU remote, and Germany-based roles; rejects UK-only, US-only, and other restricted postings. **v1.1**: unknown scope defaults to reject, country blocklist, worldwide corroboration
-- **Role filter** — two-stage: rejects non-dev titles (HR, marketing, intern, native mobile, etc.), then requires a positive dev keyword match (expanded to 50+ keywords including React, Next.js, Django, Docker, LLM)
+### Sources (11 job boards)
+
+- **Remotive** — JSON API, all remote tech jobs
+- **Arbeitnow** — JSON API, Germany/EU focused
+- **RemoteOK** — JSON feed with User-Agent requirement
+- **We Work Remotely** — RSS/XML feed parsing
+- **Idealist** — Algolia search API with multi-index queries
+- **ReliefWeb** — RSS feeds (3 career categories: ICT, PPM, IM)
+- **Tech Jobs for Good** — Playwright + BeautifulSoup (Cloudflare-protected, NGO/impact)
+- **EuroBrussels** — httpx + BeautifulSoup (EU-focused NGO/policy/civil society)
+- **80,000 Hours** — Playwright-based scraper (Effective Altruism / impact sector)
+- **GoodJobs.eu** — httpx + BeautifulSoup (DE/EU mission-driven organisations)
+- **Devex** — JSON API (international development sector, NGO/INGO)
+
+### Filtering & Classification
+
+- **Smart location filter** — accepts worldwide remote, EU remote, and Germany-based roles; rejects UK-only, US-only, and other restricted postings. Unknown scope defaults to reject, country blocklist, worldwide corroboration
+- **Role filter** — two-stage: rejects non-dev titles (HR, marketing, intern, native mobile, etc.), then requires a positive dev keyword match (50+ keywords including React, Next.js, Django, Docker, LLM)
 - **Language filter** — English-only postings (uses `langdetect`, defaults to accept on uncertainty)
 - **NGO classifier** — score-based detection using company name, description keywords, and a curated org list
 - **Match score** — 0–100% score based on tech stack keyword weights, shown as a visual bar in notifications
@@ -16,12 +31,27 @@ Built for a specific use case: finding remote tech roles at NGOs and impact-driv
 - **Recency filter** — configurable max age (14 days default, 30 for ReliefWeb)
 - **Content dedup** — both in-memory (per scan) and database-backed (across scans) using URL hash + content hash
 - **Per-company cap** — max 2 jobs per employer per scan to prevent flooding
-- **Discord notifications** — rich embeds with color-coding (green = NGO, blue = general), match score bar, optional separate NGO channel
+
+### Notifications
+
+- **Discord notifications** — modern rich embeds with colour-coded cards:
+  - 🟢 **Emerald green** = NGO/nonprofit/humanitarian
+  - 🟣 **Indigo** = general remote tech
+  - 🟡 **Amber** = high match score (≥ 60%)
+  - Batch header summarizing incoming jobs
+  - Source-specific emoji icons for visual differentiation
+  - Match score labels (🔥 Excellent, ⭐ Strong, 📊 Moderate)
+  - Tag chips in `code` formatting, relative time display
+  - Optional separate NGO webhook channel
 - **Discord bot** — `stats`, `scan`/`r`/`refresh`, and `help` commands via discord.py
 - **Telegram notifications** — HTML-formatted messages with rate limit handling and match score
+
+### Infrastructure
+
+- **Playwright + Chromium** — headless browser for JS-rendered sites (80,000 Hours, Tech Jobs for Good), with shared browser context for performance
 - **APScheduler** — 45-minute scan cycle, 6-hour digest summary, hourly health check
-- **Docker ready** — Dockerfile + docker-compose.yml for local and production use
-- **300+ tests** across 5 test files
+- **Docker ready** — Dockerfile + docker-compose.yml with Playwright/Chromium pre-installed, `shm_size: 256mb`
+- **475+ tests** across 6 test files
 
 ## Quick Start
 
@@ -84,7 +114,8 @@ python main.py [OPTIONS]
 Options:
   --dry-run          One-shot scan, print results, no DB writes or notifications
   --source NAME      Test a single source (remotive, arbeitnow, remoteok,
-                     weworkremotely, idealist, reliefweb)
+                     weworkremotely, idealist, reliefweb, techjobsforgood,
+                     eurobrussels, hours80k, goodjobs, devex)
   --max-age DAYS     Override MAX_JOB_AGE_DAYS for this run
   --verbose          Show all rejected jobs with reasons (use with --dry-run)
   --stats            Print database statistics and exit
@@ -110,9 +141,12 @@ If you want NGO/nonprofit jobs in a different Discord channel:
    DISCORD_WEBHOOK_URL_NGO=https://discord.com/api/webhooks/0987654321/hijklmn...
    ```
 
-Jobs are color-coded:
-- 🟢 **Green** embeds = NGO/nonprofit/humanitarian
-- 🔵 **Blue** embeds = general remote tech
+Jobs are colour-coded with modern embeds:
+- 🟢 **Emerald green** embeds = NGO/nonprofit/humanitarian
+- � **Indigo** embeds = general remote tech
+- 🟡 **Amber** embeds = high match score (≥ 60%)
+
+Each embed includes the company name, location with remote scope, match score with visual bar, tag chips, source icon, and relative posting time. Multi-job notifications include a batch header summarizing the count and sources.
 
 ## Setting Up Telegram Notifications
 
@@ -193,18 +227,24 @@ job-bot/
 ├── discord_bot.py                # Discord bot (stats, scan, help commands)
 ├── requirements.txt
 ├── .env.example
-├── Dockerfile                    # Production container image
-├── docker-compose.yml            # One-command deployment
+├── Dockerfile                    # Production container (Python 3.11 + Playwright)
+├── docker-compose.yml            # One-command deployment (shm_size: 256mb)
 ├── .dockerignore
 │
 ├── sources/
 │   ├── base.py                   # Abstract BaseSource with retry + rate-limit
+│   ├── playwright_base.py        # Shared Playwright browser context manager
 │   ├── remotive.py               # Remotive JSON API
 │   ├── arbeitnow.py              # Arbeitnow JSON API (DE/EU focus)
 │   ├── remoteok.py               # RemoteOK JSON feed
 │   ├── weworkremotely.py         # We Work Remotely RSS
 │   ├── idealist.py               # Idealist via Algolia search API
-│   └── reliefweb.py              # ReliefWeb RSS feeds (3 career categories)
+│   ├── reliefweb.py              # ReliefWeb RSS feeds (3 career categories)
+│   ├── techjobsforgood.py        # Tech Jobs for Good (Playwright + BS4)
+│   ├── eurobrussels.py           # EuroBrussels (httpx + BS4, EU/NGO focus)
+│   ├── hours80k.py               # 80,000 Hours (Playwright, EA/impact)
+│   ├── goodjobs.py               # GoodJobs.eu (httpx + BS4, DE/EU impact)
+│   └── devex.py                  # Devex JSON API (intl development sector)
 │
 ├── filters/
 │   ├── location.py               # Remote scope classification + location filter
@@ -221,12 +261,13 @@ job-bot/
 │
 ├── notifiers/
 │   ├── base.py                   # Abstract BaseNotifier
-│   ├── discord_notifier.py       # Discord rich embeds (green/blue color-coded)
+│   ├── discord_notifier.py       # Discord modern embeds (emerald/indigo/amber)
 │   └── telegram_notifier.py      # Telegram HTML messages with rate limiting
 │
 └── tests/
     ├── test_filters.py           # 120+ tests — location, role, language, NGO, match
     ├── test_main_fixes.py        # 55+ tests — pipeline, recency, verbose, stats
+    ├── test_new_sources.py       # 200+ tests — all v1.2 sources, Playwright, integration
     ├── test_idealist.py          # 50 tests — Algolia parsing, multi-query
     ├── test_reliefweb.py         # 27 tests — RSS parsing, PPM/IM feeds
     └── test_database.py          # 10 tests — stats, dedup, persistence
@@ -294,7 +335,8 @@ python main.py --dry-run --source mysource --verbose
 Key things to know:
 - `BaseSource` gives you `self._get()` with retries, timeouts, and 429 handling
 - Return raw `Job` objects — don't filter. The pipeline in `main.py` handles all filtering
-- Set `is_ngo=True` if the source is exclusively NGO (like ReliefWeb)
+- Set `is_ngo=True` if the source is exclusively NGO (like ReliefWeb, Devex, 80,000 Hours)
+- For JS-rendered sites, use `playwright_base.py` — see `hours80k.py` for an example. Add the source name to `_PLAYWRIGHT_SOURCES` in `main.py`
 - Use `safe_fetch()` (called by the scheduler) — it catches all exceptions so one broken source never crashes the bot
 - Write tests with mocked HTTP responses
 
@@ -380,6 +422,8 @@ python main.py
    ```
 
 ### Option 5: Docker (recommended for production)
+
+The Docker image includes Python 3.11, Playwright, and Chromium for scraping JS-rendered sites.
 
 ```bash
 # Build and start

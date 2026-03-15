@@ -4,6 +4,64 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] — 2025-07-12
+
+### Added
+
+- **5 new job sources** (total: 11):
+  - **Tech Jobs for Good** — Playwright + BeautifulSoup scraper for Cloudflare-protected NGO/impact tech board; all listings classified as `is_ngo=True`
+  - **EuroBrussels** — httpx + BeautifulSoup scraper for EU-focused NGO/policy/civil society jobs; link dedup preferring text links, company from `div.companyName`, location from `div.location`, NGO classification from category tags
+  - **80,000 Hours** — Playwright-based scraper for JS-rendered Effective Altruism job board; card parser with `p.font-bold span` for title, text-line parsing for company/location/tags, relative time parsing
+  - **GoodJobs.eu** — httpx + BeautifulSoup scraper for German/EU mission-driven organisations; title from `h3`, company from `div.mb-1 > p`, salary extraction, German legal form NGO detection (gGmbH, e.V., Stiftung)
+  - **Devex** — JSON API scraper (`/api/public/search/jobs`) for international development sector; structured JSON parsing with places array for location, topics for tags; all listings `is_ngo=True`
+
+- **Playwright infrastructure** (`sources/playwright_base.py`):
+  - Shared async Playwright browser context manager for headless Chromium
+  - `get_playwright_page()` — standalone page context manager
+  - `shared_browser_context()` — shared browser for multiple sources
+  - `new_page_from_browser()` — create pages from shared browser
+  - Resource blocking (images/fonts) for faster scraping
+  - Realistic fingerprint (User-Agent, viewport 1280×800, locale en-US)
+
+- **Playwright source orchestration** in `main.py`:
+  - `_PLAYWRIGHT_SOURCES` set for hours80k and techjobsforgood
+  - `_run_playwright_sources()` — launches one shared Chromium browser, runs all Playwright sources concurrently, 90s combined timeout
+  - Automatic separation of httpx vs Playwright sources in `run_scan()`
+
+- **Impact board scope defaults** — hours80k and idealist jobs with `remote_scope="unknown"` now default to `"worldwide"`
+
+- **Modern Discord embed styling**:
+  - New colour scheme: emerald green (NGO), indigo (general), amber (high match ≥ 60%)
+  - Description-based layout with company, location, salary, and match score
+  - Source-specific emoji icons (🟣 remotive, 🔴 arbeitnow, 🟠 remoteok, etc.)
+  - Match score labels: 🔥 Excellent (≥80%), ⭐ Strong (≥50%), 📊 Moderate (≥20%)
+  - Tag chips in `code` formatting
+  - `set_author()` for category badges (🏛️ NGO / Nonprofit, 💼 General)
+  - Batch header message for multi-job notifications with source list
+  - Relative time display in footer (a few minutes ago, X hours ago, X days ago)
+  - Modern digest embed with source-specific icons and violet colour
+
+### Changed
+
+- Discord notifier completely rewritten for modern embed design
+- Digest embed in `main.py` updated with source icons, database field, violet colour
+- Docker image includes Playwright + Chromium (`playwright install --with-deps chromium`)
+- `docker-compose.yml` updated with `shm_size: 256mb` for Chromium
+
+### Fixed
+
+- **hours80k 0 jobs** — `.job-card` selector now prioritized over `a[href*='/job/']` (which matched icon elements); card parser rewritten for actual HTML structure
+- **techjobsforgood tuple unpacking** — `new_page_from_browser()` returns `(context, page)`, fixed destructuring + added `context.close()`
+- **techjobsforgood Cloudflare** — Added hard IP block detection with clear warning message, graceful skip
+- **eurobrussels link dedup** — Prefers text links over image/logo links; fixed title/company/location CSS selectors
+- **goodjobs title/company** — Title from `h3` instead of full card text; company from `div.mb-1 > p` with GoodCompany/Nachhaltigkeits filter
+- **devex complete rewrite** — From HTML scraping to JSON API for reliable structured data
+
+### Testing
+
+- 475 tests across 6 test files
+- New `test_new_sources.py` with 200+ tests covering all 5 new sources, Playwright base, source registration, filter integration, Discord relative time formatting, and company display
+
 ## [0.1.1] — 2025-07-10
 
 ### Changed
