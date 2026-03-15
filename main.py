@@ -31,10 +31,15 @@ from models.job import Job
 from notifiers.discord_notifier import DiscordNotifier
 from notifiers.telegram_notifier import TelegramNotifier
 from sources.arbeitnow import ArbeitnowSource
+from sources.devex import DevexSource
+from sources.eurobrussels import EuroBrusselsSource
+from sources.goodjobs import GoodJobsSource
+from sources.hours80k import Hours80kSource
 from sources.idealist import IdealistSource
 from sources.reliefweb import ReliefWebSource
 from sources.remoteok import RemoteOKSource
 from sources.remotive import RemotiveSource
+from sources.techjobsforgood import TechJobsForGoodSource
 from sources.weworkremotely import WeWorkRemotelySource
 from storage.database import (
     filter_unseen,
@@ -63,7 +68,15 @@ ALL_SOURCES = {
     "weworkremotely": WeWorkRemotelySource,
     "idealist": IdealistSource,
     "reliefweb": ReliefWebSource,
+    "techjobsforgood": TechJobsForGoodSource,
+    "eurobrussels": EuroBrusselsSource,
+    "hours80k": Hours80kSource,
+    "goodjobs": GoodJobsSource,
+    "devex": DevexSource,
 }
+
+# Sources that require Playwright (JS rendering / Cloudflare)
+_PLAYWRIGHT_SOURCES: set[str] = {"hours80k", "techjobsforgood"}
 
 
 def _get_sources(source_name: str | None) -> list:
@@ -136,6 +149,12 @@ def _apply_filters(
         #     after classification, they're remote-only boards so benefit
         #     of the doubt → worldwide.
         if job.source in ("weworkremotely", "remotive") and job.remote_scope == "unknown":
+            job.remote_scope = "worldwide"
+
+        # 1d. Impact boards default: unknown scope → "worldwide"
+        #     80,000 Hours and Idealist are impact boards with often
+        #     worldwide-remote or EU-accessible jobs.
+        if job.source in ("hours80k", "idealist") and job.remote_scope == "unknown":
             job.remote_scope = "worldwide"
 
         # 1c. Arbeitnow on-site rejection: if the API says is_remote=False
@@ -245,6 +264,64 @@ def _print_rejections(rejected: list[tuple[Job, str]]) -> None:
         print()
 
 
+async def _run_playwright_sources(sources: list) -> list[Job]:
+    """Run all Playwright sources with a shared browser instance.
+
+    - Launches one Chromium browser
+    - Runs all Playwright sources concurrently (asyncio.gather)
+    - Closes browser after all finish
+    - Returns combined job list
+    - Graceful fallback: if Playwright fails to launch, logs error and returns []
+    """
+    try:
+        from sources.playwright_base import shared_browser_context, _playwright_available
+    except ImportError:
+        logger.warning("Playwright not installed — skipping Playwright sources")
+        return []
+
+    if not _playwright_available():
+        logger.warning("Playwright not available — skipping Playwright sources")
+        return []
+
+    all_jobs: list[Job] = []
+
+    try:
+        async with shared_browser_context() as browser:
+            # Set the shared browser on each Playwright source
+            for src in sources:
+                if hasattr(src, "set_shared_browser"):
+                    src.set_shared_browser(browser)
+
+            # Run all Playwright sources concurrently with a timeout
+            fetch_tasks = [src.safe_fetch() for src in sources]
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*fetch_tasks, return_exceptions=True),
+                    timeout=90,  # 90s max for all Playwright sources combined
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Playwright sources timed out after 90s — aborting")
+                return []
+
+            for result in results:
+                if isinstance(result, list):
+                    all_jobs.extend(result)
+                elif isinstance(result, Exception):
+                    logger.error("Playwright source failed: {}", result)
+
+            # Clear shared browser references
+            for src in sources:
+                if hasattr(src, "set_shared_browser"):
+                    src.set_shared_browser(None)
+
+    except Exception as exc:
+        logger.error("Failed to launch Playwright browser: {}", exc)
+        return []
+
+    logger.info("Playwright sources returned {} total jobs", len(all_jobs))
+    return all_jobs
+
+
 async def run_scan(
     sources: list,
     dry_run: bool = False,
@@ -253,14 +330,23 @@ async def run_scan(
 ) -> list[Job]:
     """Fetch from all sources, filter, deduplicate, and optionally persist."""
 
-    # Fetch from all sources concurrently
-    fetch_tasks = [src.safe_fetch() for src in sources]
+    # Separate Playwright sources from httpx sources
+    httpx_sources = [s for s in sources if s.name not in _PLAYWRIGHT_SOURCES]
+    pw_sources = [s for s in sources if s.name in _PLAYWRIGHT_SOURCES]
+
+    # Fetch from httpx sources concurrently
+    fetch_tasks = [src.safe_fetch() for src in httpx_sources]
     results = await asyncio.gather(*fetch_tasks)
 
-    # Flatten
+    # Flatten httpx results
     all_jobs: list[Job] = []
     for batch in results:
         all_jobs.extend(batch)
+
+    # Fetch from Playwright sources (shared browser)
+    if pw_sources:
+        pw_jobs = await _run_playwright_sources(pw_sources)
+        all_jobs.extend(pw_jobs)
 
     logger.info("Total raw jobs fetched: {}", len(all_jobs))
 
@@ -594,20 +680,38 @@ async def _scheduled_digest() -> None:
                 "📋 Digest: {} unnotified jobs in last {} hours (total in DB: {})",
                 len(recent), config.DIGEST_INTERVAL_HOURS, total,
             )
-            # Send digest via Discord as a summary message
+            # Send digest via Discord as a modern summary embed
             if config.DISCORD_WEBHOOK_URL:
                 from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
 
+                job_lines = []
+                for r in recent[:15]:
+                    source_icon = {
+                        "remotive": "🟣", "arbeitnow": "🔴", "remoteok": "🟠",
+                        "reliefweb": "🔵", "hours80k": "⚫", "goodjobs": "🟢",
+                        "devex": "🔴", "eurobrussels": "🔵",
+                    }.get(r.get("source", ""), "🌐")
+                    job_lines.append(
+                        f"{source_icon} **{r['title']}**\n"
+                        f"> 🏢 {r['company']}  ·  `{r['source']}`"
+                    )
+
+                description = "\n\n".join(job_lines)
+                if len(recent) > 15:
+                    description += f"\n\n*…and {len(recent) - 15} more*"
+
                 webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
                 embed = DiscordEmbed(
-                    title=f"📋 Digest — {len(recent)} jobs in last {config.DIGEST_INTERVAL_HOURS}h",
-                    description="\n".join(
-                        f"• **{r['title']}** at {r['company']} ({r['source']})"
-                        for r in recent[:20]  # cap at 20 to avoid embed limits
-                    ),
-                    color=0x9B59B6,  # purple for digest
+                    title=f"📋  Digest — {len(recent)} jobs in the last {config.DIGEST_INTERVAL_HOURS}h",
+                    description=description,
+                    color=0x8B5CF6,  # violet for digest
                 )
-                embed.set_footer(text=f"Total jobs tracked: {total}")
+                embed.add_embed_field(
+                    name="📊 Database",
+                    value=f"`{total}` total jobs tracked",
+                    inline=True,
+                )
+                embed.set_footer(text="Job Tracker Bot · Periodic Digest")
                 embed.set_timestamp(datetime.now(timezone.utc).isoformat())
                 webhook.add_embed(embed)
                 await webhook.execute()
