@@ -4,6 +4,90 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] — 2026-03-15
+
+### Added
+
+- **GitHub Actions CI/CD** (`.github/workflows/deploy.yml`):
+  - Runs all tests on push to `main` (Python 3.11 + Playwright)
+  - Auto-deploys to Oracle Cloud via SSH if tests pass
+  - Uses `appleboy/ssh-action` with `ORACLE_HOST` and `ORACLE_SSH_KEY` secrets
+
+- **Health endpoint** (`health.py`):
+  - `GET /health` on port 8080 returns JSON: status, uptime, last scan, jobs tracked, next scan countdown
+  - Paused state support (shows `"status": "paused"` when scanning is paused)
+  - Runs alongside the scheduler via aiohttp
+
+- **Startup & crash Discord notifications**:
+  - Startup embed: source count, server info, blocklist/Playwright status
+  - Crash embed: error message + auto-restart notice
+  - Sent via Discord webhook on bot start and unhandled exceptions
+
+- **Company blocklist** (`COMPANY_BLOCKLIST` env var):
+  - Comma-separated company names to always skip (case-insensitive substring match)
+  - Integrated into `_apply_filters()` pipeline
+
+- **Senior-only filter** (`FILTER_SENIOR_ONLY` env var, default off):
+  - Accepts senior/lead/staff/principal titles
+  - Rejects junior/mid-level titles
+  - No seniority mention → assume senior (accept)
+
+- **Salary filter** (`MIN_SALARY_EUR` env var, default 0 = off):
+  - Parses salary strings, annualizes monthly values
+  - Rejects jobs with explicit salary below threshold
+  - Unparseable salary → accept (benefit of the doubt)
+
+- **Telegram /commands** (`/scan`, `/stats`, `/help`, `/pause`, `/resume`):
+  - Full python-telegram-bot Application with CommandHandlers
+  - `register_commands()` registers commands with BotFather API
+  - `/pause` and `/resume` control scanning via health module paused state
+  - Integrated into `main()` event loop alongside scheduler and Discord bot
+
+- **DISABLE_PLAYWRIGHT** env var:
+  - When `true`, all Playwright sources are skipped (saves ~50MB RAM)
+  - Dockerfile conditionally installs Playwright via `INSTALL_PLAYWRIGHT` build arg
+
+- **MAX_CONCURRENT_SOURCES** env var (default 6):
+  - Limits concurrent source fetches to reduce peak memory
+  - Sources run in batches when set lower than total source count
+
+- **Docker log rotation** in docker-compose.yml:
+  - `json-file` driver with `max-size: 10m`, `max-file: 3` (30MB cap)
+
+- **Server scripts**:
+  - `scripts/update.sh` — git pull + docker rebuild + health check
+  - `scripts/backup.sh` — SQLite backup, keeps last 7
+
+- **Digest improvements**:
+  - Only sends digest if there are jobs OR no scan ran in last 2 hours (health alert)
+  - Health alert embed (red) when no scans completed recently
+
+- **45 new tests** (`tests/test_v13_features.py`):
+  - Health endpoint JSON, paused state
+  - Company blocklist (6 tests including pipeline integration)
+  - Senior filter (8 tests)
+  - Salary filter (6 tests)
+  - DISABLE_PLAYWRIGHT (3 tests)
+  - Startup/crash notifications (3 tests)
+  - Telegram commands (4 tests)
+  - Concurrency batching (1 test)
+  - Config defaults (6 tests)
+
+### Changed
+
+- **Dockerfile** — multi-stage with `INSTALL_PLAYWRIGHT` build arg; conditionally installs system deps + Chromium
+- **docker-compose.yml** — port 8080 exposed, build args, log rotation, healthcheck via `/health` endpoint
+- **config.py** — 6 new env vars: `COMPANY_BLOCKLIST`, `FILTER_SENIOR_ONLY`, `MIN_SALARY_EUR`, `DISABLE_PLAYWRIGHT`, `MAX_CONCURRENT_SOURCES`, `HEALTH_PORT`
+- **main.py** — Telegram bot integration in event loop, scan concurrency batching, paused state check in scheduled scan
+- **requirements.txt** — added `aiohttp>=3.9.0`
+- **.env.example** — all new variables documented
+- **README.md** — CI/CD, Monitoring, Telegram Commands, Scripts sections; updated features list, config table, project structure
+
+### Stats
+
+- Total tests: **520+** (was 475)
+- Test files: **7** (was 6)
+
 ## [1.2.0] — 2025-07-12
 
 ### Added

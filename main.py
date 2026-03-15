@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import signal
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -78,16 +80,103 @@ ALL_SOURCES = {
 # Sources that require Playwright (JS rendering / Cloudflare)
 _PLAYWRIGHT_SOURCES: set[str] = {"hours80k", "techjobsforgood"}
 
+# ── Senior-only title keywords ────────────────────────────────────────────
+_SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
+_SENIOR_REJECT = {"junior", "mid-level", "mid level", "entry-level", "entry level", "intern"}
+
+# ── Salary parsing regex ──────────────────────────────────────────────────
+_SALARY_NUM_RE = re.compile(r"[\d,.]+")
+
 
 def _get_sources(source_name: str | None) -> list:
-    """Return source instances to run — all or a single one."""
+    """Return source instances to run — all or a single one.
+
+    Respects DISABLE_PLAYWRIGHT: when True, Playwright sources are excluded.
+    """
     if source_name:
         cls = ALL_SOURCES.get(source_name)
         if cls is None:
             logger.error("Unknown source '{}'. Available: {}", source_name, list(ALL_SOURCES.keys()))
             sys.exit(1)
+        if config.DISABLE_PLAYWRIGHT and source_name in _PLAYWRIGHT_SOURCES:
+            logger.warning("Playwright disabled — skipping source '{}'", source_name)
+            return []
         return [cls()]
-    return [cls() for cls in ALL_SOURCES.values()]
+
+    sources = []
+    for name, cls in ALL_SOURCES.items():
+        if config.DISABLE_PLAYWRIGHT and name in _PLAYWRIGHT_SOURCES:
+            logger.info("Playwright disabled — skipping source '{}'", name)
+            continue
+        sources.append(cls())
+    return sources
+
+
+def _passes_company_blocklist(job: Job) -> bool:
+    """Return True if the job's company is NOT on the blocklist."""
+    if not config.COMPANY_BLOCKLIST:
+        return True
+    company_lower = job.company.lower().strip()
+    for blocked in config.COMPANY_BLOCKLIST:
+        if blocked in company_lower:
+            return False
+    return True
+
+
+def _passes_senior_filter(job: Job) -> bool:
+    """Return True if the job passes the senior-only filter.
+
+    When FILTER_SENIOR_ONLY is enabled:
+    - Accept if title contains a senior keyword
+    - Accept if title has NO seniority mention at all (assume senior)
+    - Reject if title explicitly mentions junior/mid-level
+    """
+    if not config.FILTER_SENIOR_ONLY:
+        return True
+
+    title_lower = job.title.lower()
+
+    # Check for senior keywords (accept)
+    for kw in _SENIOR_ACCEPT:
+        if kw in title_lower:
+            return True
+
+    # Check for junior/mid-level keywords (reject)
+    for kw in _SENIOR_REJECT:
+        if kw in title_lower:
+            return False
+
+    # No seniority mention → assume senior, accept
+    return True
+
+
+def _passes_salary_filter(job: Job) -> bool:
+    """Return True if the job passes the minimum salary filter.
+
+    When MIN_SALARY_EUR > 0 and the job has a salary field:
+    - Try to parse the first number from the salary string
+    - Reject if the parsed value is below MIN_SALARY_EUR
+    - Accept if salary can't be parsed (benefit of the doubt)
+    """
+    if config.MIN_SALARY_EUR <= 0:
+        return True
+    if not job.salary:
+        return True  # no salary listed → accept
+
+    # Try to parse numbers from the salary string
+    nums = _SALARY_NUM_RE.findall(job.salary.replace(",", ""))
+    if not nums:
+        return True  # can't parse → accept
+
+    try:
+        # Take the first number as the salary
+        salary_val = float(nums[0])
+        # If it looks like a monthly salary (< 10000), annualize
+        if salary_val < 10000:
+            salary_val *= 12
+        return salary_val >= config.MIN_SALARY_EUR
+    except (ValueError, IndexError):
+        return True  # can't parse → accept
 
 
 def _apply_filters(
@@ -177,6 +266,22 @@ def _apply_filters(
         # 4. Language filter
         if not passes_language_filter(job):
             _reject(job, "language: non-English content detected")
+            continue
+
+        # 4b. Company blocklist
+        if not _passes_company_blocklist(job):
+            logger.debug("Company BLOCKLIST reject: {} ({})", job.title, job.company)
+            _reject(job, f"company blocklist: '{job.company}'")
+            continue
+
+        # 4c. Senior-only filter (optional, off by default)
+        if not _passes_senior_filter(job):
+            _reject(job, f"senior filter: title '{job.title}' has junior/mid-level")
+            continue
+
+        # 4d. Salary filter (optional, off by default)
+        if not _passes_salary_filter(job):
+            _reject(job, f"salary filter: '{job.salary}' below min {config.MIN_SALARY_EUR}")
             continue
 
         # 5. Recency filter — reject jobs older than max_age_days
@@ -328,20 +433,33 @@ async def run_scan(
     max_age_days: int | None = None,
     verbose: bool = False,
 ) -> list[Job]:
-    """Fetch from all sources, filter, deduplicate, and optionally persist."""
+    """Fetch from all sources, filter, deduplicate, and optionally persist.
+
+    Respects MAX_CONCURRENT_SOURCES to limit peak memory usage.
+    """
 
     # Separate Playwright sources from httpx sources
     httpx_sources = [s for s in sources if s.name not in _PLAYWRIGHT_SOURCES]
     pw_sources = [s for s in sources if s.name in _PLAYWRIGHT_SOURCES]
 
-    # Fetch from httpx sources concurrently
-    fetch_tasks = [src.safe_fetch() for src in httpx_sources]
-    results = await asyncio.gather(*fetch_tasks)
-
-    # Flatten httpx results
     all_jobs: list[Job] = []
-    for batch in results:
-        all_jobs.extend(batch)
+
+    # Fetch from httpx sources with concurrency limit
+    max_concurrent = config.MAX_CONCURRENT_SOURCES
+    if max_concurrent >= len(httpx_sources):
+        # All at once
+        fetch_tasks = [src.safe_fetch() for src in httpx_sources]
+        results = await asyncio.gather(*fetch_tasks)
+        for batch in results:
+            all_jobs.extend(batch)
+    else:
+        # Run in batches
+        for i in range(0, len(httpx_sources), max_concurrent):
+            batch_sources = httpx_sources[i : i + max_concurrent]
+            fetch_tasks = [src.safe_fetch() for src in batch_sources]
+            results = await asyncio.gather(*fetch_tasks)
+            for batch in results:
+                all_jobs.extend(batch)
 
     # Fetch from Playwright sources (shared browser)
     if pw_sources:
@@ -562,12 +680,27 @@ def main():
         config.SCAN_INTERVAL_MINUTES,
         config.DIGEST_INTERVAL_HOURS,
     )
+    if config.DISABLE_PLAYWRIGHT:
+        logger.info("Playwright DISABLED — Playwright sources will be skipped")
+    if config.COMPANY_BLOCKLIST:
+        logger.info("Company blocklist active: {}", config.COMPANY_BLOCKLIST)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     # Initialize DB before scheduling
     loop.run_until_complete(init_db())
+
+    # ── Start health HTTP server ────────────────────────────────────────
+    health_runner = None
+    try:
+        from health import start_health_server, set_jobs_tracked
+        health_runner = loop.run_until_complete(start_health_server())
+        # Set initial jobs count
+        total = loop.run_until_complete(get_total_count())
+        set_jobs_tracked(total)
+    except Exception:
+        logger.exception("Failed to start health server — continuing without it")
 
     scheduler = AsyncIOScheduler(event_loop=loop)
 
@@ -602,6 +735,9 @@ def main():
     scheduler.start()
     logger.info("Scheduler started — press Ctrl+C to stop")
 
+    # ── Send startup notification ──────────────────────────────────────
+    loop.run_until_complete(_send_startup_notification(len(sources)))
+
     # ── Discord bot (optional — runs if DISCORD_BOT_TOKEN is set) ──────
     discord_bot = None
     if config.DISCORD_BOT_TOKEN and config.DISCORD_COMMAND_CHANNEL_ID:
@@ -632,6 +768,44 @@ def main():
     else:
         logger.info("Discord bot not configured (set DISCORD_BOT_TOKEN and DISCORD_COMMAND_CHANNEL_ID)")
 
+    # ── Telegram bot commands (optional — runs if TELEGRAM_BOT_TOKEN is set) ──
+    telegram_app = None
+    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
+        try:
+            from notifiers.telegram_notifier import TelegramNotifier
+            from storage.database import get_stats as _tg_get_stats
+
+            tg_notifier = TelegramNotifier()
+
+            async def _tg_scan_callback():
+                """Callback for Telegram /scan command."""
+                sources_list = _get_sources(None)
+                return await run_scan(sources_list, dry_run=False)
+
+            async def _tg_stats_callback():
+                """Callback for Telegram /stats command."""
+                await init_db()
+                return await _tg_get_stats()
+
+            telegram_app = tg_notifier.build_application(
+                scan_callback=_tg_scan_callback,
+                stats_callback=_tg_stats_callback,
+            )
+
+            # Register /commands with BotFather
+            loop.run_until_complete(tg_notifier.register_commands())
+
+            # Start polling in the background (non-blocking)
+            loop.create_task(telegram_app.initialize())
+            loop.create_task(telegram_app.updater.start_polling(drop_pending_updates=True))
+            loop.create_task(telegram_app.start())
+            logger.info("Telegram bot started with /commands support")
+        except Exception:
+            logger.exception("Failed to start Telegram bot — continuing without it")
+            telegram_app = None
+    else:
+        logger.info("Telegram bot not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+
     # Graceful shutdown on SIGINT / SIGTERM
     def _shutdown(sig, frame):
         logger.info("Received signal {} — shutting down...", sig)
@@ -639,6 +813,12 @@ def main():
             scheduler.shutdown(wait=False)
         if discord_bot:
             loop.create_task(discord_bot.close())
+        if telegram_app:
+            loop.create_task(telegram_app.updater.stop())
+            loop.create_task(telegram_app.stop())
+            loop.create_task(telegram_app.shutdown())
+        if health_runner:
+            loop.run_until_complete(health_runner.cleanup())
         loop.stop()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -648,11 +828,27 @@ def main():
         loop.run_forever()
     except (KeyboardInterrupt, SystemExit):
         pass
+    except Exception as exc:
+        # Unhandled crash — send notification before exiting
+        logger.exception("Unhandled exception — bot is crashing")
+        try:
+            loop.run_until_complete(_send_crash_notification(exc))
+        except Exception:
+            logger.exception("Failed to send crash notification")
     finally:
         if scheduler.running:
             scheduler.shutdown(wait=False)
         if discord_bot and not discord_bot.is_closed():
             loop.run_until_complete(discord_bot.close())
+        if telegram_app:
+            try:
+                loop.run_until_complete(telegram_app.updater.stop())
+                loop.run_until_complete(telegram_app.stop())
+                loop.run_until_complete(telegram_app.shutdown())
+            except Exception:
+                pass
+        if health_runner:
+            loop.run_until_complete(health_runner.cleanup())
         loop.close()
         logger.info("Job Tracker Bot stopped")
 
@@ -661,19 +857,50 @@ def main():
 
 async def _scheduled_scan() -> None:
     """Scheduled scan task — runs all sources."""
+    from health import is_paused
+    if is_paused():
+        logger.info("⏸️ Scanning is paused — skipping scheduled scan")
+        return
+
     logger.info("⏰ Scheduled scan starting...")
     sources = _get_sources(None)
     try:
         await run_scan(sources, dry_run=False)
+        # Update health endpoint
+        try:
+            from health import set_last_scan, set_jobs_tracked, set_next_scan_seconds
+            set_last_scan(datetime.now(timezone.utc))
+            total = await get_total_count()
+            set_jobs_tracked(total)
+            set_next_scan_seconds(config.SCAN_INTERVAL_MINUTES * 60)
+        except Exception:
+            pass
     except Exception:
         logger.exception("Scheduled scan failed")
 
 
 async def _scheduled_digest() -> None:
-    """Send a digest summary of recent unnotified jobs."""
+    """Send a digest summary of recent unnotified jobs.
+
+    Only sends if there are jobs to show OR if no scan has run
+    successfully in the last 2 hours (health alert).
+    """
     try:
         recent = await get_recent_unnotified(hours=config.DIGEST_INTERVAL_HOURS)
         total = await get_total_count()
+
+        # Check if any scan ran in the last 2 hours
+        no_recent_scan = False
+        try:
+            from health import _last_scan_time
+            if _last_scan_time is not None:
+                scan_age = datetime.now(timezone.utc) - _last_scan_time
+                if scan_age > timedelta(hours=2):
+                    no_recent_scan = True
+            else:
+                no_recent_scan = True
+        except ImportError:
+            pass
 
         if recent:
             logger.info(
@@ -716,6 +943,30 @@ async def _scheduled_digest() -> None:
                 webhook.add_embed(embed)
                 await webhook.execute()
                 logger.info("📋 Digest sent to Discord")
+        elif no_recent_scan:
+            # Health alert — no scan ran recently and no new jobs
+            logger.warning("📋 Digest: no scans in last 2 hours — health alert")
+            if config.DISCORD_WEBHOOK_URL:
+                from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
+
+                webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
+                embed = DiscordEmbed(
+                    title="⚠️  Health Alert — No recent scans",
+                    description=(
+                        "No scan has completed successfully in the last 2 hours.\n"
+                        "The bot may be experiencing issues."
+                    ),
+                    color=0xEF4444,  # red
+                )
+                embed.add_embed_field(
+                    name="📊 Database",
+                    value=f"`{total}` total jobs tracked",
+                    inline=True,
+                )
+                embed.set_footer(text="Job Tracker Bot · Health Alert")
+                embed.set_timestamp(datetime.now(timezone.utc).isoformat())
+                webhook.add_embed(embed)
+                await webhook.execute()
         else:
             logger.info(
                 "📋 Digest: no unnotified jobs in last {} hours (total in DB: {})",
@@ -726,12 +977,86 @@ async def _scheduled_digest() -> None:
 
 
 async def _scheduled_health_check() -> None:
-    """Log a health-check message."""
+    """Log a health-check message and update health endpoint."""
     try:
         total = await get_total_count()
         logger.info("💚 Health check — bot is alive, {} jobs tracked so far", total)
+        try:
+            from health import set_jobs_tracked
+            set_jobs_tracked(total)
+        except Exception:
+            pass
     except Exception:
         logger.exception("Health check failed")
+
+
+# ── Startup / crash notifications ──────────────────────────────────────────
+
+async def _send_startup_notification(source_count: int) -> None:
+    """Send a Discord embed when the bot starts."""
+    if not config.DISCORD_WEBHOOK_URL:
+        return
+
+    try:
+        from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
+
+        webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
+        embed = DiscordEmbed(
+            title="🤖  Job Tracker Bot started",
+            description=(
+                f"📡 Monitoring **{source_count}** sources\n"
+                f"⏰ Next scan in ~1 minute\n"
+                f"🖥️ Server: Oracle Cloud Frankfurt"
+            ),
+            color=0x10B981,  # emerald green
+        )
+        if config.DISABLE_PLAYWRIGHT:
+            embed.add_embed_field(
+                name="⚠️ Note",
+                value="Playwright is disabled — browser-based sources skipped",
+                inline=False,
+            )
+        if config.COMPANY_BLOCKLIST:
+            embed.add_embed_field(
+                name="🚫 Company blocklist",
+                value=", ".join(f"`{c}`" for c in config.COMPANY_BLOCKLIST),
+                inline=False,
+            )
+        embed.set_footer(text="Job Tracker Bot")
+        embed.set_timestamp(datetime.now(timezone.utc).isoformat())
+        webhook.add_embed(embed)
+        await webhook.execute()
+        logger.info("Startup notification sent to Discord")
+    except Exception:
+        logger.exception("Failed to send startup notification")
+
+
+async def _send_crash_notification(exc: Exception) -> None:
+    """Send a Discord alert when the bot crashes."""
+    if not config.DISCORD_WEBHOOK_URL:
+        return
+
+    try:
+        from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
+
+        error_msg = str(exc)[:500] if exc else "Unknown error"
+
+        webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
+        embed = DiscordEmbed(
+            title="⚠️  Job Tracker Bot crashed",
+            description=(
+                f"**Error:** `{error_msg}`\n\n"
+                "The bot will restart automatically via Docker."
+            ),
+            color=0xEF4444,  # red
+        )
+        embed.set_footer(text="Job Tracker Bot · Crash Alert")
+        embed.set_timestamp(datetime.now(timezone.utc).isoformat())
+        webhook.add_embed(embed)
+        await webhook.execute()
+        logger.info("Crash notification sent to Discord")
+    except Exception:
+        logger.exception("Failed to send crash notification")
 
 
 if __name__ == "__main__":

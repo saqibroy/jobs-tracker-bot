@@ -49,6 +49,21 @@ SOURCE_MAX_AGE_DAYS: dict[str, int] = {
     "reliefweb": int(_get("MAX_JOB_AGE_DAYS_RELIEFWEB", "30")),
 }
 
+# ── Company blocklist ──────────────────────────────────────────────────────
+# Comma-separated company names to always skip (case-insensitive).
+COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
+
+# ── Optional quality filters ──────────────────────────────────────────────
+FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true", "1", "yes")
+MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
+
+# ── Playwright / Memory ───────────────────────────────────────────────────
+DISABLE_PLAYWRIGHT: bool = _get("DISABLE_PLAYWRIGHT", "false").lower() in ("true", "1", "yes")
+MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "6"))
+
+# ── Health endpoint ────────────────────────────────────────────────────────
+HEALTH_PORT: int = int(_get("HEALTH_PORT", "8080"))
+
 # ── Database ───────────────────────────────────────────────────────────────
 DATABASE_PATH: str = _get("DATABASE_PATH", "./data/jobs.db")
 

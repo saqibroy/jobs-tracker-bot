@@ -1,9 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
+
+ARG INSTALL_PLAYWRIGHT=true
 
 WORKDIR /app
 
-# System dependencies for Playwright
-RUN apt-get update && apt-get install -y \
+# System dependencies for Playwright (only installed if INSTALL_PLAYWRIGHT=true)
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+    apt-get update && apt-get install -y \
     gcc \
     wget \
     gnupg \
@@ -27,14 +30,17 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium only (smallest footprint)
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Install Playwright Chromium only when enabled
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+    playwright install chromium && \
+    playwright install-deps chromium; \
+    fi
 
 COPY . .
 

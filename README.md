@@ -43,15 +43,26 @@ Built for a specific use case: finding remote tech roles at NGOs and impact-driv
   - Match score labels (🔥 Excellent, ⭐ Strong, 📊 Moderate)
   - Tag chips in `code` formatting, relative time display
   - Optional separate NGO webhook channel
+  - **Startup/crash notifications** — Discord embeds on bot start/restart and crashes
 - **Discord bot** — `stats`, `scan`/`r`/`refresh`, and `help` commands via discord.py
 - **Telegram notifications** — HTML-formatted messages with rate limit handling and match score
+- **Telegram bot commands** — `/scan`, `/stats`, `/help`, `/pause`, `/resume`
+
+### Filtering Extras
+
+- **Company blocklist** — skip jobs from configured companies (e.g. body-shopping firms)
+- **Senior-only filter** — optional, only accept senior/lead/staff titles
+- **Salary filter** — optional, reject jobs with salary below threshold
 
 ### Infrastructure
 
-- **Playwright + Chromium** — headless browser for JS-rendered sites (80,000 Hours, Tech Jobs for Good), with shared browser context for performance
+- **GitHub Actions CI/CD** — auto-deploy to Oracle Cloud on push to `main` (tests run first)
+- **Health endpoint** — `GET /health` returns JSON status (uptime, last scan, jobs tracked)
+- **Playwright + Chromium** — headless browser for JS-rendered sites, with optional `DISABLE_PLAYWRIGHT` for low-memory servers
 - **APScheduler** — 45-minute scan cycle, 6-hour digest summary, hourly health check
-- **Docker ready** — Dockerfile + docker-compose.yml with Playwright/Chromium pre-installed, `shm_size: 256mb`
-- **475+ tests** across 6 test files
+- **Docker ready** — multi-stage Dockerfile with optional Playwright, log rotation (30MB cap), memory limits
+- **Concurrency control** — `MAX_CONCURRENT_SOURCES` to limit peak RAM usage
+- **520+ tests** across 7 test files
 
 ## Quick Start
 
@@ -214,6 +225,12 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `LOCATION_ALLOWLIST` | `worldwide,eu,...` | Comma-separated location accept keywords |
 | `LOCATION_BLOCKLIST` | `uk only,...` | Comma-separated location reject keywords |
 | `MIN_NGO_SCORE` | `1` | Minimum score to classify as NGO |
+| `COMPANY_BLOCKLIST` | — | Comma-separated company names to always skip |
+| `FILTER_SENIOR_ONLY` | `false` | Only accept senior/lead/staff titles |
+| `MIN_SALARY_EUR` | `0` | Reject jobs with salary below this (0 = off) |
+| `DISABLE_PLAYWRIGHT` | `false` | Skip Playwright sources (saves ~50MB RAM) |
+| `MAX_CONCURRENT_SOURCES` | `6` | Max sources fetched in parallel (lower = less RAM) |
+| `HEALTH_PORT` | `8080` | Port for the health HTTP endpoint |
 | `DATABASE_PATH` | `./data/jobs.db` | SQLite database file |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG` for verbose logs) |
 | `LOG_FILE` | `./logs/job_bot.log` | Log file (rotates at 10MB, 7 days retention) |
@@ -225,11 +242,20 @@ job-bot/
 ├── main.py                       # Entry point, CLI, scheduler, filter pipeline
 ├── config.py                     # Environment config loader
 ├── discord_bot.py                # Discord bot (stats, scan, help commands)
+├── health.py                     # Lightweight aiohttp health endpoint (/health)
 ├── requirements.txt
 ├── .env.example
-├── Dockerfile                    # Production container (Python 3.11 + Playwright)
-├── docker-compose.yml            # One-command deployment (shm_size: 256mb)
+├── Dockerfile                    # Multi-stage container (optional Playwright)
+├── docker-compose.yml            # One-command deployment with log limits
 ├── .dockerignore
+│
+├── .github/
+│   └── workflows/
+│       └── deploy.yml            # CI/CD: test + deploy to Oracle Cloud on push
+│
+├── scripts/
+│   ├── update.sh                 # Manual update script (git pull + rebuild)
+│   └── backup.sh                 # SQLite backup script (keeps last 7)
 │
 ├── sources/
 │   ├── base.py                   # Abstract BaseSource with retry + rate-limit
@@ -262,7 +288,7 @@ job-bot/
 ├── notifiers/
 │   ├── base.py                   # Abstract BaseNotifier
 │   ├── discord_notifier.py       # Discord modern embeds (emerald/indigo/amber)
-│   └── telegram_notifier.py      # Telegram HTML messages with rate limiting
+│   └── telegram_notifier.py      # Telegram HTML messages + /commands support
 │
 └── tests/
     ├── test_filters.py           # 120+ tests — location, role, language, NGO, match
@@ -270,7 +296,8 @@ job-bot/
     ├── test_new_sources.py       # 200+ tests — all v1.2 sources, Playwright, integration
     ├── test_idealist.py          # 50 tests — Algolia parsing, multi-query
     ├── test_reliefweb.py         # 27 tests — RSS parsing, PPM/IM feeds
-    └── test_database.py          # 10 tests — stats, dedup, persistence
+    ├── test_database.py          # 10 tests — stats, dedup, persistence
+    └── test_v13_features.py      # 45 tests — health, blocklist, filters, CI/CD
 ```
 
 ## How to Add a New Job Source
@@ -345,6 +372,101 @@ Key things to know:
 ```bash
 source venv/bin/activate
 python -m pytest tests/ -v
+```
+
+## CI/CD (GitHub Actions)
+
+The project includes automatic deployment via GitHub Actions. On every push to `main`:
+
+1. **Tests run** in CI (Python 3.11, all 520+ tests)
+2. **If tests pass**, the workflow SSHes into the Oracle Cloud server and redeploys
+
+### Setup
+
+1. In your GitHub repo, go to **Settings → Secrets → Actions → New repository secret**
+2. Add these secrets:
+   - `ORACLE_HOST` = `158.180.30.164` (your server IP)
+   - `ORACLE_SSH_KEY` = full contents of your SSH private key file (including BEGIN/END lines)
+
+3. On the server, make sure git pull works without interaction:
+   ```bash
+   cd ~/jobs-tracker-bot
+   git checkout main
+   git branch --set-upstream-to=origin/main main
+   git pull  # should work without prompts
+   ```
+
+The workflow file is at `.github/workflows/deploy.yml`.
+
+## Monitoring
+
+### Health Endpoint
+
+The bot exposes a lightweight HTTP health endpoint at `http://<server>:8080/health`.
+
+Response:
+```json
+{
+  "status": "ok",
+  "uptime_seconds": 3600,
+  "last_scan": "2026-03-15T22:00:00+00:00",
+  "jobs_tracked": 1247,
+  "next_scan_in_seconds": 1800
+}
+```
+
+When scanning is paused (via Telegram `/pause`), `status` changes to `"paused"`.
+
+### UptimeRobot (free monitoring)
+
+1. Register at [uptimerobot.com](https://uptimerobot.com) (free tier)
+2. Add monitor:
+   - Type: HTTP(s)
+   - URL: `http://158.180.30.164:8080/health`
+   - Interval: 5 minutes
+   - Alert: email when down
+
+### Firewall
+
+Open port 8080 on the server:
+```bash
+sudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --reload
+```
+
+### Startup & Crash Notifications
+
+- **Startup**: when the bot starts (or restarts), a Discord embed is sent with source count and config
+- **Crash**: if the bot catches an unhandled exception, a Discord alert is sent before exiting
+- Docker's `restart: unless-stopped` ensures automatic restart after crashes
+
+## Telegram Commands
+
+The Telegram bot supports these commands (register with BotFather):
+
+| Command | Description |
+|---------|-------------|
+| `/scan` | Trigger an immediate scan |
+| `/stats` | Show job tracking statistics |
+| `/help` | List available commands |
+| `/pause` | Pause scanning |
+| `/resume` | Resume scanning |
+
+## Server Scripts
+
+### Manual update (`scripts/update.sh`)
+```bash
+~/jobs-tracker-bot/scripts/update.sh
+```
+Pulls latest code, rebuilds Docker image, shows health status.
+
+### Database backup (`scripts/backup.sh`)
+```bash
+~/jobs-tracker-bot/scripts/backup.sh
+```
+Backs up SQLite DB, keeps last 7 backups. Add to crontab for weekly:
+```
+0 2 * * 0 /home/opc/jobs-tracker-bot/scripts/backup.sh
 ```
 
 ## Deployment Options
