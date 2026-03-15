@@ -8,6 +8,12 @@ services:
     volumes:
       - ./data:/app/data      # persist SQLite DB
       - ./logs:/app/logs      # persist logs
+    # Playwright needs /dev/shm for Chromium
+    shm_size: '256mb'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     healthcheck:
       test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('data/jobs.db').execute('SELECT 1')"]
       interval: 5m
