@@ -4,8 +4,6 @@ services:
   job-bot:
     build:
       context: .
-      args:
-        - INSTALL_PLAYWRIGHT=${INSTALL_PLAYWRIGHT:-true}
     restart: unless-stopped
     env_file: .env
     ports:
@@ -13,8 +11,6 @@ services:
     volumes:
       - ./data:/app/data      # persist SQLite DB
       - ./logs:/app/logs      # persist logs
-    # Playwright needs /dev/shm for Chromium
-    shm_size: '256mb'
     logging:
       driver: "json-file"
       options:

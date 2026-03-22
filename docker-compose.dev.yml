@@ -1,0 +1,26 @@
+# docker-compose.dev.yml — Local development overrides
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   or just: ./scripts/dev.sh up  (auto-detects this file)
+#
+# What's different from prod:
+#   - Mounts source code for live editing (no rebuild needed)
+#   - More aggressive health checks
+#   - No memory limits (so you can debug freely)
+#   - Uses .env.dev if it exists, otherwise .env
+
+services:
+  job-bot:
+    volumes:
+      - .:/app                   # mount source for live editing
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    deploy:
+      resources:
+        limits:
+          memory: 1G             # relaxed for dev
+    healthcheck:
+      interval: 30s             # faster health checks in dev

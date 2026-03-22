@@ -13,14 +13,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          # Install Playwright browsers for tests
-          playwright install chromium
-          playwright install-deps chromium
+        run: pip install --no-cache-dir -r requirements.txt
 
       - name: Run tests
         env:
@@ -30,7 +26,7 @@ jobs:
         run: python -m pytest tests/ -v --tb=short --timeout=30
 
   deploy:
-    needs: test  # only deploy if tests pass
+    needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
 
@@ -41,14 +37,26 @@ jobs:
           host: ${{ secrets.ORACLE_HOST }}
           username: opc
           key: ${{ secrets.ORACLE_SSH_KEY }}
-          command_timeout: 30m
+          command_timeout: 10m
           script: |
             cd ~/jobs-tracker-bot
+
+            # Backup DB before deploy
+            bash scripts/backup.sh 2>/dev/null || true
+
+            # Pull and rebuild
             git pull origin main
-            # Skip Playwright in Docker — saves ~3 min build + 500MB RAM
-            export INSTALL_PLAYWRIGHT=false
-            sudo -E docker compose up -d --build
-            # Wait for container to be healthy
-            sleep 10
+            sudo docker compose up -d --build
+
+            # Wait for health check
+            echo "Waiting for container..."
+            for i in $(seq 1 12); do
+              if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+                echo "✓ Health check passed"
+                break
+              fi
+              sleep 5
+            done
+
             sudo docker compose ps
             echo "Deploy complete"
