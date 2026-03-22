@@ -617,6 +617,109 @@ class TestRoleFilter:
         job = _make_job(title="Laravel Developer")
         assert passes_role_filter(job) is True
 
+    # ── v1.4: New reject patterns (GTM/PM/Web3) ───────────────────────
+    def test_reject_go_to_market_engineer(self):
+        job = _make_job(title="Go to Market Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_go_to_market_hyphenated(self):
+        job = _make_job(title="Go-to-Market Strategy Lead")
+        assert passes_role_filter(job) is False
+
+    def test_reject_gtm_engineer(self):
+        job = _make_job(title="GTM Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_product_manager(self):
+        """Product Manager should be rejected (not engineering)."""
+        job = _make_job(title="Product Manager")
+        assert passes_role_filter(job) is False
+
+    def test_reject_senior_product_manager(self):
+        job = _make_job(title="Senior Product Manager")
+        assert passes_role_filter(job) is False
+
+    def test_reject_staff_product_manager(self):
+        job = _make_job(title="Staff Product Manager")
+        assert passes_role_filter(job) is False
+
+    def test_reject_head_of_product(self):
+        job = _make_job(title="Head of Product")
+        assert passes_role_filter(job) is False
+
+    def test_reject_smart_contract_engineer(self):
+        job = _make_job(title="Smart Contract Engineer SVM")
+        assert passes_role_filter(job) is False
+
+    def test_reject_blockchain_engineer(self):
+        job = _make_job(title="Blockchain Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_web3_engineer(self):
+        job = _make_job(title="Web3 Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_solidity_developer(self):
+        job = _make_job(title="Solidity Developer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_defi_engineer(self):
+        job = _make_job(title="DeFi Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_crypto_engineer(self):
+        job = _make_job(title="Crypto Engineer")
+        assert passes_role_filter(job) is False
+
+    def test_reject_svm_engineer(self):
+        job = _make_job(title="SVM Engineer")
+        assert passes_role_filter(job) is False
+
+    # ── v1.4: New accept patterns ──────────────────────────────────────
+    def test_accept_api_engineer(self):
+        job = _make_job(title="API Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_api_developer(self):
+        job = _make_job(title="API Developer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_platform_engineer(self):
+        job = _make_job(title="Platform Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_solutions_engineer(self):
+        job = _make_job(title="Solutions Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_integration_engineer(self):
+        job = _make_job(title="Integration Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_technical_lead(self):
+        job = _make_job(title="Technical Lead")
+        assert passes_role_filter(job) is True
+
+    def test_accept_staff_engineer(self):
+        job = _make_job(title="Staff Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_principal_engineer(self):
+        job = _make_job(title="Principal Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_sre(self):
+        job = _make_job(title="Site Reliability Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_cloud_engineer(self):
+        job = _make_job(title="Cloud Engineer")
+        assert passes_role_filter(job) is True
+
+    def test_accept_application_developer(self):
+        job = _make_job(title="Application Developer")
+        assert passes_role_filter(job) is True
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  NGO filter
@@ -635,12 +738,24 @@ class TestNGOFilter:
         assert score >= 1
 
     def test_description_keywords(self):
+        """Description keywords alone should NOT be enough without company signal."""
         job = _make_job(
             company="Random Startup",
             description="We are a mission-driven organization focused on digital rights.",
         )
         score = compute_ngo_score(job)
-        assert score >= 1
+        # v1.4: description alone is NOT enough — require company keyword match
+        assert score == 0
+
+    def test_description_keywords_with_company_signal(self):
+        """Description keywords + company keyword → NGO."""
+        job = _make_job(
+            company="Digital Rights Foundation",
+            description="We are a mission-driven organization focused on digital rights.",
+        )
+        score = compute_ngo_score(job)
+        # +2 for "foundation" in company, +1 for desc keywords (2 matches + company kw)
+        assert score >= 2
 
     def test_generic_company_no_match(self):
         job = _make_job(company="Google", description="Build ads infrastructure.")
@@ -697,6 +812,74 @@ class TestNGOFilter:
         )
         classify_ngo(job)
         assert job.is_ngo is True
+
+    # ── v1.4: NGO misclassification fixes ──────────────────────────────
+    def test_testgorilla_not_ngo(self):
+        """TestGorilla (hiring assessment SaaS) must NOT be classified as NGO."""
+        job = _make_job(
+            company="TestGorilla",
+            description="TestGorilla is a talent assessment platform. We help companies "
+                        "make better hiring decisions with skills testing and assessment tools. "
+                        "Our mission-driven approach to transparency in hiring.",
+        )
+        classify_ngo(job)
+        assert job.is_ngo is False
+
+    def test_anthropic_not_ngo(self):
+        """Anthropic (AI safety company) must NOT be classified as NGO."""
+        job = _make_job(
+            company="Anthropic",
+            description="Anthropic is an AI safety company building reliable AI systems. "
+                        "Series B funded. Our mission is to build safe, beneficial AI.",
+        )
+        classify_ngo(job)
+        assert job.is_ngo is False
+
+    def test_shopify_not_ngo(self):
+        """Shopify (e-commerce platform) must NOT be classified as NGO."""
+        job = _make_job(
+            company="Shopify",
+            description="Shopify is the leading e-commerce platform for businesses of all sizes. "
+                        "Our open source contributions and social impact initiatives.",
+        )
+        classify_ngo(job)
+        assert job.is_ngo is False
+
+    def test_mozilla_foundation_is_ngo(self):
+        """Mozilla Foundation is a real NGO."""
+        job = _make_job(company="Mozilla Foundation")
+        classify_ngo(job)
+        assert job.is_ngo is True
+
+    def test_amnesty_international_is_ngo(self):
+        """Amnesty International is a real NGO."""
+        job = _make_job(company="Amnesty International")
+        classify_ngo(job)
+        assert job.is_ngo is True
+
+    def test_unhcr_is_ngo(self):
+        """UNHCR is a real NGO."""
+        job = _make_job(company="UNHCR")
+        classify_ngo(job)
+        assert job.is_ngo is True
+
+    def test_assessment_platform_strong_penalty(self):
+        """'assessment platform' in description → strong NOT-NGO penalty."""
+        job = _make_job(
+            company="HireRight",
+            description="We are an assessment platform focused on social impact and transparency.",
+        )
+        classify_ngo(job)
+        assert job.is_ngo is False
+
+    def test_saas_platform_strong_penalty(self):
+        """'saas platform' in description → strong NOT-NGO penalty."""
+        job = _make_job(
+            company="TechCo",
+            description="Our saas platform helps with public interest and policy work.",
+        )
+        classify_ngo(job)
+        assert job.is_ngo is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -14,7 +14,7 @@ import pytest_asyncio
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.job import Job
-from storage.database import get_stats, get_total_count, init_db, save_jobs
+from storage.database import get_stats, get_total_count, get_recent_unnotified, mark_notified, init_db, save_jobs
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -165,3 +165,76 @@ class TestGetTotalCount:
         ]
         await save_jobs(jobs)
         assert await get_total_count() == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Digest: mark_notified + get_recent_unnotified
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestDigestNotification:
+    @pytest.mark.asyncio
+    async def test_recent_unnotified_returns_new_jobs(self, tmp_db):
+        """Jobs saved in the last 6 hours with notified=0 should appear."""
+        jobs = [
+            _make_job(title="Fresh Dev", url="https://example.com/fresh1"),
+            _make_job(title="Fresh Dev 2", url="https://example.com/fresh2"),
+        ]
+        await save_jobs(jobs)
+        recent = await get_recent_unnotified(hours=6)
+        assert len(recent) == 2
+
+    @pytest.mark.asyncio
+    async def test_mark_notified_excludes_from_digest(self, tmp_db):
+        """After mark_notified, jobs should NOT appear in get_recent_unnotified."""
+        jobs = [
+            _make_job(title="Job A", url="https://example.com/a"),
+            _make_job(title="Job B", url="https://example.com/b"),
+            _make_job(title="Job C", url="https://example.com/c"),
+        ]
+        await save_jobs(jobs)
+
+        # All 3 should appear before marking
+        recent = await get_recent_unnotified(hours=6)
+        assert len(recent) == 3
+
+        # Mark first two as notified
+        ids_to_mark = [jobs[0].id, jobs[1].id]
+        await mark_notified(ids_to_mark)
+
+        # Only 1 should remain
+        recent_after = await get_recent_unnotified(hours=6)
+        assert len(recent_after) == 1
+        assert recent_after[0]["title"] == "Job C"
+
+    @pytest.mark.asyncio
+    async def test_digest_does_not_repeat_after_mark(self, tmp_db):
+        """Simulates two digest cycles — second should return 0 jobs."""
+        jobs = [
+            _make_job(title="Dev X", url="https://example.com/x"),
+        ]
+        await save_jobs(jobs)
+
+        # First digest cycle
+        recent1 = await get_recent_unnotified(hours=6)
+        assert len(recent1) == 1
+        await mark_notified([r["id"] for r in recent1])
+
+        # Second digest cycle — should be empty
+        recent2 = await get_recent_unnotified(hours=6)
+        assert len(recent2) == 0
+
+    @pytest.mark.asyncio
+    async def test_mark_notified_empty_list_no_error(self, tmp_db):
+        """Calling mark_notified with empty list should not raise."""
+        await mark_notified([])  # Should be a no-op
+
+    @pytest.mark.asyncio
+    async def test_recent_unnotified_respects_limit(self, tmp_db):
+        """get_recent_unnotified should respect the limit parameter."""
+        jobs = [
+            _make_job(title=f"Dev {i}", url=f"https://example.com/{i}")
+            for i in range(20)
+        ]
+        await save_jobs(jobs)
+        recent = await get_recent_unnotified(hours=6, limit=5)
+        assert len(recent) == 5

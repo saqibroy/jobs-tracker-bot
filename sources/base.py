@@ -72,6 +72,42 @@ class BaseSource(ABC):
         logger.error("[{}] All {} retries failed", self.name, config.HTTP_MAX_RETRIES)
         raise last_exc  # type: ignore[misc]
 
+    # ── Retry-enabled HTTP POST ─────────────────────────────────────────
+    async def _post(
+        self,
+        url: str,
+        *,
+        json_body: dict | None = None,
+        headers: dict | None = None,
+    ) -> httpx.Response:
+        """POST with retries + exponential backoff (for JSON APIs like Algolia)."""
+        last_exc: Exception | None = None
+        for attempt in range(1, config.HTTP_MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    resp = await client.post(url, json=json_body, headers=headers)
+
+                    if resp.status_code == 429:
+                        logger.warning(
+                            "[{}] Rate limited (429) — skipping this cycle", self.name
+                        )
+                        return resp
+
+                    resp.raise_for_status()
+                    return resp
+
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                last_exc = exc
+                wait = 2 ** attempt
+                logger.warning(
+                    "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
+                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
+                )
+                await asyncio.sleep(wait)
+
+        logger.error("[{}] All {} POST retries failed", self.name, config.HTTP_MAX_RETRIES)
+        raise last_exc  # type: ignore[misc]
+
     # ── Abstract interface ──────────────────────────────────────────────
     @abstractmethod
     async def fetch(self) -> list[Job]:

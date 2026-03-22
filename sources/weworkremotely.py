@@ -1,14 +1,19 @@
-"""WeWorkRemotely source — RSS feed.
+"""WeWorkRemotely source — RSS feeds (multiple categories).
 
-Endpoint: https://weworkremotely.com/categories/remote-programming-jobs.rss
-Standard RSS 2.0 with <item> entries.
+Fetches from all developer-related RSS feeds in parallel and deduplicates
+by URL before returning.
 
-Fields per item:
-  title, link, guid, pubDate, description (HTML), category, region
+Endpoints:
+  - https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss
+  - https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss
+  - https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss
+  - https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss
+  - https://weworkremotely.com/categories/remote-programming-jobs.rss
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import feedparser
@@ -18,14 +23,25 @@ from pydantic import ValidationError
 from models.job import Job
 from sources.base import BaseSource
 
-_RSS_URL = "https://weworkremotely.com/categories/remote-programming-jobs.rss"
+_RSS_FEEDS: list[str] = [
+    "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
+    "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",
+    "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss",
+    "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
+    "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+]
 
 
 class WeWorkRemotelySource(BaseSource):
     name = "weworkremotely"
 
-    async def fetch(self) -> list[Job]:
-        resp = await self._get(_RSS_URL)
+    async def _fetch_feed(self, feed_url: str) -> list[Job]:
+        """Fetch and parse a single RSS feed, returning Job objects."""
+        try:
+            resp = await self._get(feed_url)
+        except Exception as exc:
+            logger.warning("[{}] Failed to fetch {}: {}", self.name, feed_url, exc)
+            return []
 
         if resp.status_code == 429:
             return []
@@ -90,3 +106,23 @@ class WeWorkRemotelySource(BaseSource):
                 continue
 
         return jobs
+
+    async def fetch(self) -> list[Job]:
+        """Fetch all RSS feeds in parallel and deduplicate by URL."""
+        tasks = [self._fetch_feed(url) for url in _RSS_FEEDS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_jobs: list[Job] = []
+        seen_urls: set[str] = set()
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("[{}] Feed fetch failed: {}", self.name, result)
+                continue
+            for job in result:
+                if job.url not in seen_urls:
+                    seen_urls.add(job.url)
+                    all_jobs.append(job)
+
+        logger.info("[{}] Fetched {} unique jobs from {} feeds", self.name, len(all_jobs), len(_RSS_FEEDS))
+        return all_jobs

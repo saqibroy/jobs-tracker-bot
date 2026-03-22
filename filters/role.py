@@ -56,6 +56,24 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "project manager",  # keep "technical project manager" via positive match
     "scrum master",
     "agile coach",
+    # Sales/marketing hybrids
+    "go to market",
+    "go-to-market",
+    "gtm engineer",
+    # Product roles (not engineering)
+    "product manager",
+    "senior product manager",
+    "staff product manager",
+    "principal product manager",
+    "head of product",
+    # Web3/blockchain (not in user's stack)
+    "smart contract",
+    "blockchain engineer",
+    "web3 engineer",
+    "solidity",
+    "defi engineer",
+    "crypto engineer",
+    "svm engineer",  # Solana Virtual Machine
     # Seniority/type we don't want
     "intern ",       # trailing space to avoid matching "internal" / "internet"
     "intern,",
@@ -92,7 +110,21 @@ _ROLE_KEYWORDS: list[str] = [
     "frontend", "front-end", "front end",
     "backend", "back-end", "back end",
     "software engineer", "software developer",
+    "software development engineer",
     "web developer", "web engineer",
+    "web application developer",
+    "api developer", "api engineer",
+    "platform developer", "platform engineer",
+    "solutions engineer",
+    "integration engineer",
+    "technical lead",
+    "staff engineer",
+    "principal engineer",
+    "site reliability engineer", "sre",
+    "cloud engineer",
+    "systems engineer",
+    "application developer",
+    "application engineer",
 
     # Languages & frameworks
     "react", "next.js", "nextjs", "vue", "vue.js", "nuxt",
@@ -102,7 +134,7 @@ _ROLE_KEYWORDS: list[str] = [
 
     # Infrastructure & tools
     "docker", "kubernetes", "ci/cd", "gitlab ci", "github actions",
-    "devops", "platform engineer", "site reliability",
+    "devops", "site reliability",
 
     # Data & AI
     "postgresql", "mysql", "graphql", "apollo graphql", "rest api",

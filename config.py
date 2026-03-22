@@ -57,8 +57,7 @@ COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
 FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true", "1", "yes")
 MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
 
-# ── Playwright / Memory ───────────────────────────────────────────────────
-DISABLE_PLAYWRIGHT: bool = _get("DISABLE_PLAYWRIGHT", "false").lower() in ("true", "1", "yes")
+# ── Concurrency ────────────────────────────────────────────────────────────
 MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "6"))
 
 # ── Health endpoint ────────────────────────────────────────────────────────

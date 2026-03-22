@@ -32,6 +32,8 @@ _SOURCE_ICONS: dict[str, str] = {
     "hours80k": "⚫",
     "goodjobs": "🟢",
     "devex": "🔴",
+    "linkedin": "🔷",
+    "stepstone": "🟦",
 }
 
 # Discord webhook rate-limit: ~30 requests per 60 seconds per webhook.
@@ -207,10 +209,13 @@ class DiscordNotifier(BaseNotifier):
         desc_lines.append("")  # blank line separator
 
         # Match score — visual bar
-        if job.match_score > 0:
+        if job.match_score is not None and job.match_score > 0:
             bar = match_score_bar(job.match_score)
             match_label = "🔥 Excellent" if job.match_score >= 80 else "⭐ Strong" if job.match_score >= 50 else "📊 Moderate" if job.match_score >= 20 else "📊 Low"
             desc_lines.append(f"{match_label} match — **{job.match_score}%**\n`{bar}`")
+        elif job.match_score is not None:
+            bar = match_score_bar(0)
+            desc_lines.append(f"📊 Match — **0%**\n`{bar}`")
         else:
             desc_lines.append("📊 Match — *not scored*")
 

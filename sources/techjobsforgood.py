@@ -1,22 +1,24 @@
-"""Tech Jobs for Good source — Playwright + BeautifulSoup scraper.
+"""Tech Jobs for Good source — httpx + BeautifulSoup scraper.
 
 URL: https://www.techjobsforgood.com/jobs/?q=&job_type=full-time&remote=on
 
 Best intersection of tech + NGO/impact.  Highly targeted board — all
 jobs are from impact-driven organisations, so ``is_ngo=True`` for all.
 
-Method: Playwright (Cloudflare-protected) → parse HTML job cards with
-BeautifulSoup.
+Method: httpx GET → parse HTML job cards with BeautifulSoup.
 
 Location note: Tech Jobs for Good is US-heavy but has worldwide/EU
 remote roles.  We set ``is_ngo=True`` and let the standard location
 filter handle EU/worldwide acceptance.
+
+Note: This site uses Cloudflare.  From datacenter IPs (cloud servers)
+the request may be blocked.  From residential IPs or with a proxy it
+works fine.  We detect the block and log a warning.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
 
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -41,11 +43,6 @@ _HEADERS = {
 
 class TechJobsForGoodSource(BaseSource):
     name = "techjobsforgood"
-    _shared_browser = None  # set by main.py for Playwright sources
-
-    @classmethod
-    def set_shared_browser(cls, browser):
-        cls._shared_browser = browser
 
     async def fetch(self) -> list[Job]:
         html = await self._fetch_html()
@@ -96,52 +93,16 @@ class TechJobsForGoodSource(BaseSource):
         return jobs
 
     async def _fetch_html(self) -> str:
-        """Fetch HTML via Playwright (preferred) or httpx fallback."""
-        # Try Playwright first — site uses Cloudflare
-        if self._shared_browser is not None:
-            try:
-                return await self._fetch_with_playwright()
-            except Exception as exc:
-                logger.warning("[{}] Playwright fetch failed: {} — trying httpx", self.name, exc)
-
-        # Also try Playwright without shared browser
-        try:
-            from sources.playwright_base import get_playwright_page
-            return await self._fetch_with_standalone_playwright()
-        except ImportError:
-            pass
-        except Exception as exc:
-            logger.warning("[{}] Standalone Playwright failed: {} — trying httpx", self.name, exc)
-
-        # httpx fallback
+        """Fetch HTML via httpx."""
         try:
             resp = await self._get(_LISTING_URL, headers=_HEADERS)
             if resp.status_code == 429:
+                logger.warning("[{}] Rate-limited (429)", self.name)
                 return ""
             return resp.text
         except Exception as exc:
-            logger.error("[{}] httpx fallback failed: {}", self.name, exc)
+            logger.error("[{}] httpx fetch failed: {}", self.name, exc)
             return ""
-
-    async def _fetch_with_playwright(self) -> str:
-        """Fetch using the shared Playwright browser from main.py."""
-        from sources.playwright_base import new_page_from_browser
-        context, page = await new_page_from_browser(self._shared_browser)
-        try:
-            await page.goto(_LISTING_URL, wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(2000)
-            return await page.content()
-        finally:
-            await page.close()
-            await context.close()
-
-    async def _fetch_with_standalone_playwright(self) -> str:
-        """Fetch using a standalone Playwright context."""
-        from sources.playwright_base import get_playwright_page
-        async with get_playwright_page() as page:
-            await page.goto(_LISTING_URL, wait_until="domcontentloaded", timeout=30_000)
-            await page.wait_for_timeout(2000)
-            return await page.content()
 
     def _parse_card(self, card) -> Job | None:
         """Parse a single job card element into a Job."""

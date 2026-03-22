@@ -136,14 +136,15 @@ async def mark_notified(job_ids: list[str]) -> None:
         return
     path = await _db_path()
     async with aiosqlite.connect(path) as db:
-        placeholders = ",".join("?" for _ in job_ids)
-        await db.execute(
-            f"UPDATE jobs SET notified = 1 WHERE id IN ({placeholders})", job_ids
+        await db.executemany(
+            "UPDATE jobs SET notified = 1 WHERE id = ?",
+            [(jid,) for jid in job_ids],
         )
         await db.commit()
+    logger.info("Marked {} jobs as notified", len(job_ids))
 
 
-async def get_recent_unnotified(hours: int = 6) -> list[dict]:
+async def get_recent_unnotified(hours: int = 6, limit: int = 15) -> list[dict]:
     """Fetch jobs from the last N hours that haven't been notified (for digest)."""
     path = await _db_path()
     cutoff = datetime.now(timezone.utc).isoformat()
@@ -155,8 +156,9 @@ async def get_recent_unnotified(hours: int = 6) -> list[dict]:
             WHERE notified = 0
               AND fetched_at >= datetime(?, '-' || ? || ' hours')
             ORDER BY fetched_at DESC
+            LIMIT ?
             """,
-            (cutoff, hours),
+            (cutoff, hours, limit),
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]

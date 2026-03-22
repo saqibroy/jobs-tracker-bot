@@ -1,5 +1,5 @@
 """Tests for v1.3 features: health endpoint, startup notification, company blocklist,
-Telegram commands, senior/salary filters, concurrency, DISABLE_PLAYWRIGHT.
+Telegram commands, senior/salary filters, concurrency.
 """
 
 from __future__ import annotations
@@ -326,44 +326,6 @@ class TestSalaryFilter:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  DISABLE_PLAYWRIGHT
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestDisablePlaywright:
-    """Test that DISABLE_PLAYWRIGHT skips Playwright sources."""
-
-    def test_playwright_sources_excluded_when_disabled(self):
-        """When DISABLE_PLAYWRIGHT=true, Playwright sources are skipped."""
-        from main import _get_sources
-        with patch("main.config") as mock_config:
-            mock_config.DISABLE_PLAYWRIGHT = True
-            sources = _get_sources(None)
-            source_names = [s.name for s in sources]
-            assert "hours80k" not in source_names
-            assert "techjobsforgood" not in source_names
-            # Non-Playwright sources should still be present
-            assert "remotive" in source_names
-
-    def test_playwright_sources_included_when_enabled(self):
-        """When DISABLE_PLAYWRIGHT=false, all sources are returned."""
-        from main import _get_sources
-        with patch("main.config") as mock_config:
-            mock_config.DISABLE_PLAYWRIGHT = False
-            sources = _get_sources(None)
-            source_names = [s.name for s in sources]
-            assert "hours80k" in source_names
-            assert "remotive" in source_names
-
-    def test_single_playwright_source_skipped_when_disabled(self):
-        """Requesting a single Playwright source when disabled returns empty."""
-        from main import _get_sources
-        with patch("main.config") as mock_config:
-            mock_config.DISABLE_PLAYWRIGHT = True
-            sources = _get_sources("hours80k")
-            assert sources == []
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 #  Startup / Crash Notifications
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -376,7 +338,6 @@ class TestStartupNotification:
         from main import _send_startup_notification
         with patch("main.config") as mock_config:
             mock_config.DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/test"
-            mock_config.DISABLE_PLAYWRIGHT = False
             mock_config.COMPANY_BLOCKLIST = []
 
             with patch("discord_webhook.AsyncDiscordWebhook") as MockWebhook:
@@ -505,10 +466,10 @@ class TestConfig:
         # The actual default depends on .env, but the parsing should work
         assert isinstance(cfg.COMPANY_BLOCKLIST, list)
 
-    def test_disable_playwright_default_false(self):
-        """DISABLE_PLAYWRIGHT defaults to False."""
+    def test_playwright_removed_from_config(self):
+        """DISABLE_PLAYWRIGHT no longer exists after v1.5."""
         import config as cfg
-        assert isinstance(cfg.DISABLE_PLAYWRIGHT, bool)
+        assert not hasattr(cfg, "DISABLE_PLAYWRIGHT")
 
     def test_max_concurrent_sources_default(self):
         """MAX_CONCURRENT_SOURCES has a sensible default."""

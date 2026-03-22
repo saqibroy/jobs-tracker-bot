@@ -1,11 +1,17 @@
-"""Remotive.com source — free JSON API.
+"""Remotive.com source — free JSON API (multiple categories).
 
-Endpoint: https://remotive.com/api/remote-jobs?category=software-dev
-Returns JSON with a "jobs" array.
+Fetches from multiple Remotive categories in parallel and deduplicates
+by URL before returning.
+
+Endpoints:
+  - https://remotive.com/api/remote-jobs?category=software-dev&limit=100
+  - https://remotive.com/api/remote-jobs?category=devops-sysadmin&limit=100
+  - https://remotive.com/api/remote-jobs?category=data&limit=100
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -16,12 +22,26 @@ from sources.base import BaseSource
 
 _API_URL = "https://remotive.com/api/remote-jobs"
 
+# Categories to fetch — role filter handles non-dev roles from broader categories
+_CATEGORIES: list[str] = [
+    "software-dev",
+    "devops-sysadmin",
+    "data",
+]
+
 
 class RemotiveSource(BaseSource):
     name = "remotive"
 
-    async def fetch(self) -> list[Job]:
-        resp = await self._get(_API_URL, params={"category": "software-dev"})
+    async def _fetch_category(self, category: str) -> list[Job]:
+        """Fetch and parse jobs from a single Remotive category."""
+        try:
+            resp = await self._get(
+                _API_URL, params={"category": category, "limit": 100}
+            )
+        except Exception as exc:
+            logger.warning("[{}] Failed to fetch category {}: {}", self.name, category, exc)
+            return []
 
         if resp.status_code == 429:
             return []
@@ -66,3 +86,26 @@ class RemotiveSource(BaseSource):
                 continue
 
         return jobs
+
+    async def fetch(self) -> list[Job]:
+        """Fetch all categories in parallel and deduplicate by URL."""
+        tasks = [self._fetch_category(cat) for cat in _CATEGORIES]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_jobs: list[Job] = []
+        seen_urls: set[str] = set()
+
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("[{}] Category fetch failed: {}", self.name, result)
+                continue
+            for job in result:
+                if job.url not in seen_urls:
+                    seen_urls.add(job.url)
+                    all_jobs.append(job)
+
+        logger.info(
+            "[{}] Fetched {} unique jobs from {} categories",
+            self.name, len(all_jobs), len(_CATEGORIES),
+        )
+        return all_jobs

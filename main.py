@@ -36,12 +36,18 @@ from sources.arbeitnow import ArbeitnowSource
 from sources.devex import DevexSource
 from sources.eurobrussels import EuroBrusselsSource
 from sources.goodjobs import GoodJobsSource
+from sources.himalayas import HimalayasSource
 from sources.hours80k import Hours80kSource
 from sources.idealist import IdealistSource
+from sources.landingjobs import LandingJobsSource
+from sources.linkedin import LinkedInSource
+from sources.nofluffjobs import NoFluffJobsSource
 from sources.reliefweb import ReliefWebSource
 from sources.remoteok import RemoteOKSource
 from sources.remotive import RemotiveSource
+from sources.stepstone import StepstoneSource
 from sources.techjobsforgood import TechJobsForGoodSource
+from sources.themuse import TheMuseSource
 from sources.weworkremotely import WeWorkRemotelySource
 from storage.database import (
     filter_unseen,
@@ -49,6 +55,7 @@ from storage.database import (
     get_stats,
     get_total_count,
     init_db,
+    mark_notified,
     save_jobs,
 )
 
@@ -75,10 +82,13 @@ ALL_SOURCES = {
     "hours80k": Hours80kSource,
     "goodjobs": GoodJobsSource,
     "devex": DevexSource,
+    "linkedin": LinkedInSource,
+    "stepstone": StepstoneSource,
+    "nofluffjobs": NoFluffJobsSource,
+    "himalayas": HimalayasSource,
+    "landingjobs": LandingJobsSource,
+    "themuse": TheMuseSource,
 }
-
-# Sources that require Playwright (JS rendering / Cloudflare)
-_PLAYWRIGHT_SOURCES: set[str] = {"hours80k", "techjobsforgood"}
 
 # ── Senior-only title keywords ────────────────────────────────────────────
 _SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
@@ -89,27 +99,15 @@ _SALARY_NUM_RE = re.compile(r"[\d,.]+")
 
 
 def _get_sources(source_name: str | None) -> list:
-    """Return source instances to run — all or a single one.
-
-    Respects DISABLE_PLAYWRIGHT: when True, Playwright sources are excluded.
-    """
+    """Return source instances to run — all or a single one."""
     if source_name:
         cls = ALL_SOURCES.get(source_name)
         if cls is None:
             logger.error("Unknown source '{}'. Available: {}", source_name, list(ALL_SOURCES.keys()))
             sys.exit(1)
-        if config.DISABLE_PLAYWRIGHT and source_name in _PLAYWRIGHT_SOURCES:
-            logger.warning("Playwright disabled — skipping source '{}'", source_name)
-            return []
         return [cls()]
 
-    sources = []
-    for name, cls in ALL_SOURCES.items():
-        if config.DISABLE_PLAYWRIGHT and name in _PLAYWRIGHT_SOURCES:
-            logger.info("Playwright disabled — skipping source '{}'", name)
-            continue
-        sources.append(cls())
-    return sources
+    return [cls() for cls in ALL_SOURCES.values()]
 
 
 def _passes_company_blocklist(job: Job) -> bool:
@@ -246,11 +244,23 @@ def _apply_filters(
         if job.source in ("hours80k", "idealist") and job.remote_scope == "unknown":
             job.remote_scope = "worldwide"
 
-        # 1c. Arbeitnow on-site rejection: if the API says is_remote=False
+        # 1e. RemoteOK: unknown scope → "worldwide"
+        #     RemoteOK is a remote-only board — if scope is unknown,
+        #     default to worldwide (benefit of the doubt).
+        if job.source == "remoteok" and job.remote_scope == "unknown":
+            job.remote_scope = "worldwide"
+
+        # 1f. Arbeitnow on-site rejection: if the API says is_remote=False
         #     and the scope is "germany", the job is on-site only — reject.
         if job.source == "arbeitnow" and not job.is_remote and job.remote_scope == "germany":
             logger.debug("Location REJECT (arbeitnow on-site): {}", job.title)
             _reject(job, "location: arbeitnow on-site (germany, not remote)")
+            continue
+
+        # 1g. Company blocklist — checked BEFORE all other filters
+        if not _passes_company_blocklist(job):
+            logger.info("[{}] Rejected: {} at {} (company blocklist)", job.source, job.title, job.company)
+            _reject(job, f"company blocklist: '{job.company}'")
             continue
 
         # 2. Location filter
@@ -266,12 +276,6 @@ def _apply_filters(
         # 4. Language filter
         if not passes_language_filter(job):
             _reject(job, "language: non-English content detected")
-            continue
-
-        # 4b. Company blocklist
-        if not _passes_company_blocklist(job):
-            logger.debug("Company BLOCKLIST reject: {} ({})", job.title, job.company)
-            _reject(job, f"company blocklist: '{job.company}'")
             continue
 
         # 4c. Senior-only filter (optional, off by default)
@@ -311,7 +315,11 @@ def _apply_filters(
         classify_ngo(job)
 
         # 6b. Match score (enrichment — never rejects)
-        job.match_score = compute_match_score(job)
+        try:
+            job.match_score = compute_match_score(job)
+        except Exception as exc:
+            logger.warning("Match scoring failed for '{}': {} — defaulting to 0", job.title, exc)
+            job.match_score = 0
 
         # 7. Per-company cap
         company_key = job.company.lower().strip()
@@ -328,6 +336,10 @@ def _apply_filters(
         accepted.append(job)
 
     logger.info("Filters: {} in → {} accepted", len(jobs), len(accepted))
+    logger.debug(
+        "[match] {} jobs accepted, {} with match_score set",
+        len(accepted), sum(1 for j in accepted if j.match_score is not None),
+    )
 
     # Sort by match_score DESC so highest-match jobs appear first
     accepted.sort(key=lambda j: j.match_score, reverse=True)
@@ -369,64 +381,6 @@ def _print_rejections(rejected: list[tuple[Job, str]]) -> None:
         print()
 
 
-async def _run_playwright_sources(sources: list) -> list[Job]:
-    """Run all Playwright sources with a shared browser instance.
-
-    - Launches one Chromium browser
-    - Runs all Playwright sources concurrently (asyncio.gather)
-    - Closes browser after all finish
-    - Returns combined job list
-    - Graceful fallback: if Playwright fails to launch, logs error and returns []
-    """
-    try:
-        from sources.playwright_base import shared_browser_context, _playwright_available
-    except ImportError:
-        logger.warning("Playwright not installed — skipping Playwright sources")
-        return []
-
-    if not _playwright_available():
-        logger.warning("Playwright not available — skipping Playwright sources")
-        return []
-
-    all_jobs: list[Job] = []
-
-    try:
-        async with shared_browser_context() as browser:
-            # Set the shared browser on each Playwright source
-            for src in sources:
-                if hasattr(src, "set_shared_browser"):
-                    src.set_shared_browser(browser)
-
-            # Run all Playwright sources concurrently with a timeout
-            fetch_tasks = [src.safe_fetch() for src in sources]
-            try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(*fetch_tasks, return_exceptions=True),
-                    timeout=90,  # 90s max for all Playwright sources combined
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Playwright sources timed out after 90s — aborting")
-                return []
-
-            for result in results:
-                if isinstance(result, list):
-                    all_jobs.extend(result)
-                elif isinstance(result, Exception):
-                    logger.error("Playwright source failed: {}", result)
-
-            # Clear shared browser references
-            for src in sources:
-                if hasattr(src, "set_shared_browser"):
-                    src.set_shared_browser(None)
-
-    except Exception as exc:
-        logger.error("Failed to launch Playwright browser: {}", exc)
-        return []
-
-    logger.info("Playwright sources returned {} total jobs", len(all_jobs))
-    return all_jobs
-
-
 async def run_scan(
     sources: list,
     dry_run: bool = False,
@@ -438,33 +392,24 @@ async def run_scan(
     Respects MAX_CONCURRENT_SOURCES to limit peak memory usage.
     """
 
-    # Separate Playwright sources from httpx sources
-    httpx_sources = [s for s in sources if s.name not in _PLAYWRIGHT_SOURCES]
-    pw_sources = [s for s in sources if s.name in _PLAYWRIGHT_SOURCES]
-
     all_jobs: list[Job] = []
 
-    # Fetch from httpx sources with concurrency limit
+    # Fetch from all sources with concurrency limit
     max_concurrent = config.MAX_CONCURRENT_SOURCES
-    if max_concurrent >= len(httpx_sources):
+    if max_concurrent >= len(sources):
         # All at once
-        fetch_tasks = [src.safe_fetch() for src in httpx_sources]
+        fetch_tasks = [src.safe_fetch() for src in sources]
         results = await asyncio.gather(*fetch_tasks)
         for batch in results:
             all_jobs.extend(batch)
     else:
         # Run in batches
-        for i in range(0, len(httpx_sources), max_concurrent):
-            batch_sources = httpx_sources[i : i + max_concurrent]
+        for i in range(0, len(sources), max_concurrent):
+            batch_sources = sources[i : i + max_concurrent]
             fetch_tasks = [src.safe_fetch() for src in batch_sources]
             results = await asyncio.gather(*fetch_tasks)
             for batch in results:
                 all_jobs.extend(batch)
-
-    # Fetch from Playwright sources (shared browser)
-    if pw_sources:
-        pw_jobs = await _run_playwright_sources(pw_sources)
-        all_jobs.extend(pw_jobs)
 
     logger.info("Total raw jobs fetched: {}", len(all_jobs))
 
@@ -680,8 +625,6 @@ def main():
         config.SCAN_INTERVAL_MINUTES,
         config.DIGEST_INTERVAL_HOURS,
     )
-    if config.DISABLE_PLAYWRIGHT:
-        logger.info("Playwright DISABLED — Playwright sources will be skipped")
     if config.COMPANY_BLOCKLIST:
         logger.info("Company blocklist active: {}", config.COMPANY_BLOCKLIST)
 
@@ -943,6 +886,10 @@ async def _scheduled_digest() -> None:
                 webhook.add_embed(embed)
                 await webhook.execute()
                 logger.info("📋 Digest sent to Discord")
+
+                # Mark digest jobs as notified so they don't repeat
+                digest_job_ids = [r["id"] for r in recent if r.get("id")]
+                await mark_notified(digest_job_ids)
         elif no_recent_scan:
             # Health alert — no scan ran recently and no new jobs
             logger.warning("📋 Digest: no scans in last 2 hours — health alert")
@@ -1010,12 +957,6 @@ async def _send_startup_notification(source_count: int) -> None:
             ),
             color=0x10B981,  # emerald green
         )
-        if config.DISABLE_PLAYWRIGHT:
-            embed.add_embed_field(
-                name="⚠️ Note",
-                value="Playwright is disabled — browser-based sources skipped",
-                inline=False,
-            )
         if config.COMPANY_BLOCKLIST:
             embed.add_embed_field(
                 name="🚫 Company blocklist",

@@ -692,3 +692,115 @@ class TestShowStats:
 
         captured = capsys.readouterr()
         assert "3 hours ago" in captured.out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Match score is never None after pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMatchScoreAlwaysSet:
+    def test_match_score_never_none_after_pipeline(self):
+        """Every accepted job must have a numeric match_score, never None."""
+        jobs = [
+            _make_job(
+                title="Software Engineer",
+                company="Acme Corp",
+                location="Remote - Worldwide",
+                source="remotive",
+                url=f"https://example.com/job/{i}",
+            )
+            for i in range(5)
+        ]
+        results = _apply_filters(jobs)
+        for job in results:
+            assert job.match_score is not None, f"Job '{job.title}' has match_score=None"
+            assert isinstance(job.match_score, int)
+
+    def test_match_score_zero_renders_as_zero_percent(self):
+        """A job with match_score=0 should NOT show 'not scored'."""
+        job = _make_job(title="Unknown Role Specialist")
+        job.match_score = 0
+        # Verify the model holds 0, not None
+        assert job.match_score == 0
+        assert job.match_score is not None
+
+    def test_match_score_defaults_to_zero_in_model(self):
+        """Job model match_score defaults to 0, not None."""
+        job = _make_job(title="Test Dev")
+        assert job.match_score == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Company blocklist runs BEFORE other filters in pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCompanyBlocklistOrder:
+    def test_techbiz_global_blocked_in_pipeline(self):
+        """TechBiz Global should be rejected by company blocklist."""
+        import config
+        original = config.COMPANY_BLOCKLIST
+        config.COMPANY_BLOCKLIST = ["techbiz global", "lemon.io", "turing", "toptal"]
+        try:
+            job = _make_job(
+                title="Software Engineer",
+                company="TechBiz Global",
+                location="Remote - Worldwide",
+                source="remotive",
+                url="https://example.com/techbiz",
+            )
+            results = _apply_filters([job])
+            assert len(results) == 0
+        finally:
+            config.COMPANY_BLOCKLIST = original
+
+    def test_lemon_io_blocked_in_pipeline(self):
+        """Lemon.io should be rejected by company blocklist."""
+        import config
+        original = config.COMPANY_BLOCKLIST
+        config.COMPANY_BLOCKLIST = ["lemon.io"]
+        try:
+            job = _make_job(
+                title="Software Engineer",
+                company="Lemon.io",
+                location="Remote - Worldwide",
+                source="remotive",
+                url="https://example.com/lemon",
+            )
+            results = _apply_filters([job])
+            assert len(results) == 0
+        finally:
+            config.COMPANY_BLOCKLIST = original
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  RemoteOK + is_remote=True + scope=unknown → accepted (volume fix)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRemoteOKUnknownScopeAccepted:
+    def test_remoteok_unknown_scope_defaults_worldwide(self):
+        """RemoteOK job with scope=unknown → defaults to 'worldwide' → accepted."""
+        job = _make_job(
+            title="Software Engineer",
+            company="Remote Co",
+            location="Remote",
+            source="remoteok",
+            is_remote=True,
+            remote_scope="unknown",
+            url="https://remoteok.com/job/123",
+        )
+        results = _apply_filters([job])
+        assert len(results) == 1
+        assert results[0].remote_scope == "worldwide"
+
+    def test_remoteok_remote_no_scope_accepted(self):
+        """RemoteOK job with bare 'Remote' location → worldwide → accepted."""
+        job = _make_job(
+            title="Backend Developer",
+            company="Startup Inc",
+            location="Remote",
+            source="remoteok",
+            is_remote=True,
+            url="https://remoteok.com/job/456",
+        )
+        results = _apply_filters([job])
+        assert len(results) == 1

@@ -1,11 +1,9 @@
-"""Tests for the new v1.2 sources: TechJobsForGood, EuroBrussels, Hours80k,
-GoodJobs, Devex, and the Playwright base utilities.
+"""Tests for sources: TechJobsForGood, EuroBrussels, Hours80k,
+GoodJobs, Devex, LinkedIn, Stepstone (Arbeitsagentur).
 
 Covers:
-  - Each new source: HTML parsing, NGO classification, edge-cases
-  - playwright_base constants and availability check
-  - Source registration in main.py (ALL_SOURCES, _PLAYWRIGHT_SOURCES)
-  - Playwright performance optimization (_run_playwright_sources)
+  - Each source: HTML/API parsing, NGO classification, edge-cases
+  - Source registration in main.py (ALL_SOURCES)
   - Filter pipeline integration with new sources
 """
 
@@ -520,8 +518,35 @@ class TestEuroBrusselsSource:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  80,000 Hours (mocked Playwright)
+#  80,000 Hours (Algolia API)
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Sample Algolia hit for testing
+_SAMPLE_ALGOLIA_HIT = {
+    "post_pk": 19121,
+    "title": "Software Engineer",
+    "description_short": "<ul><li>Build systems for good</li></ul>",
+    "url_external": "https://example.org/job/123?utm_source=80000hours",
+    "company_name": "GiveDirectly",
+    "card_locations": ["Remote, Global"],
+    "tags_country": ["Remote, Global"],
+    "tags_city": ["Remote, Global"],
+    "tags_area": ["AI safety & policy"],
+    "tags_skill": ["Python", "Django"],
+    "tags_role_type": ["Full-time"],
+    "posted_at": 1774004989,
+    "salary": None,
+    "objectID": "19121",
+}
+
+_SAMPLE_ALGOLIA_RESPONSE = {
+    "hits": [_SAMPLE_ALGOLIA_HIT],
+    "nbHits": 1,
+    "page": 0,
+    "nbPages": 1,
+    "hitsPerPage": 100,
+}
+
 
 class TestHours80kSource:
     def setup_method(self):
@@ -533,134 +558,151 @@ class TestHours80kSource:
     def test_source_name(self):
         assert self.source.name == "hours80k"
 
-    # ── Playwright unavailability ──────────────────────────────────────
+    # ── Algolia hit parsing ────────────────────────────────────────────
+
+    def test_parse_hit_basic(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert job is not None
+        assert job.title == "Software Engineer"
+        assert job.company == "GiveDirectly"
+        assert job.source == "hours80k"
+
+    def test_parse_hit_ngo(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert job.is_ngo is True
+
+    def test_parse_hit_url(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert "example.org/job/123" in job.url
+
+    def test_parse_hit_tags(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert "AI safety & policy" in job.tags
+        assert "Python" in job.tags
+
+    def test_parse_hit_tags_limited_to_ten(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["tags_area"] = [f"area-{i}" for i in range(8)]
+        hit["tags_skill"] = [f"skill-{i}" for i in range(8)]
+        job = self.source._parse_hit(hit)
+        assert len(job.tags) <= 10
+
+    def test_parse_hit_posted_at(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert job.posted_at is not None
+
+    def test_parse_hit_strips_html_description(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert job.description is not None
+        assert "<ul>" not in job.description
+        assert "Build systems" in job.description
+
+    def test_parse_hit_missing_title_returns_none(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["title"] = ""
+        assert self.source._parse_hit(hit) is None
+
+    def test_parse_hit_missing_url_returns_none(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["url_external"] = ""
+        assert self.source._parse_hit(hit) is None
+
+    def test_parse_hit_missing_company_defaults(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["company_name"] = None
+        job = self.source._parse_hit(hit)
+        assert job.company == "Unknown"
+
+    # ── Location inference ─────────────────────────────────────────────
+
+    def test_location_worldwide(self):
+        job = self.source._parse_hit(_SAMPLE_ALGOLIA_HIT)
+        assert job.remote_scope == "worldwide"
+
+    def test_location_germany(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["card_locations"] = ["Berlin"]
+        hit["tags_country"] = ["Germany"]
+        job = self.source._parse_hit(hit)
+        assert job.remote_scope == "germany"
+
+    def test_location_europe(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["card_locations"] = ["Brussels"]
+        hit["tags_country"] = ["Europe"]
+        job = self.source._parse_hit(hit)
+        assert job.remote_scope == "eu"
+
+    def test_location_unknown_defaults_worldwide(self):
+        hit = dict(_SAMPLE_ALGOLIA_HIT)
+        hit["card_locations"] = ["San Francisco Bay Area"]
+        hit["tags_country"] = ["USA"]
+        job = self.source._parse_hit(hit)
+        assert job.remote_scope == "worldwide"
+
+    def test_build_location_cities(self):
+        loc = self.source._build_location(["Berlin", "Munich"], ["Germany"])
+        assert "Berlin" in loc
+        assert "Munich" in loc
+
+    def test_build_location_no_cities(self):
+        loc = self.source._build_location([], ["Germany"])
+        assert "Germany" in loc
+
+    def test_build_location_empty(self):
+        loc = self.source._build_location([], [])
+        assert loc == "Remote"
+
+    # ── Fetch (mocked API) ─────────────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_fetch_returns_empty_when_playwright_unavailable(self):
-        with patch("sources.hours80k._check_playwright", return_value=False):
+    async def test_fetch_parses_algolia_response(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = _SAMPLE_ALGOLIA_RESPONSE
+
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+        assert len(jobs) == 1
+        assert jobs[0].title == "Software Engineer"
+
+    @pytest.mark.asyncio
+    async def test_fetch_deduplicates_by_url(self):
+        resp_data = {
+            "hits": [_SAMPLE_ALGOLIA_HIT, _SAMPLE_ALGOLIA_HIT],
+            "nbHits": 2,
+            "page": 0,
+            "nbPages": 1,
+            "hitsPerPage": 100,
+        }
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = resp_data
+
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+        assert len(jobs) == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_api_error(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_resp.json.return_value = {}
+
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
             jobs = await self.source.fetch()
         assert jobs == []
 
-    # ── Job model validation ───────────────────────────────────────────
-
     @pytest.mark.asyncio
-    async def test_all_jobs_are_ngo(self):
-        job = Job(
-            title="Software Engineer",
-            company="GiveDirectly",
-            location="Remote - Worldwide",
-            url="https://jobs.80000hours.org/job/123",
-            source="hours80k",
-            is_ngo=True,
-            remote_scope="worldwide",
-        )
-        assert job.is_ngo is True
-        assert job.remote_scope == "worldwide"
-
-    # ── HTML fallback parser ───────────────────────────────────────────
-
-    def test_html_fallback_parser(self):
-        html = """
-        <html><body>
-        <div>
-          <a href="/job/123-software-engineer">
-            <h3>Software Engineer at GiveDirectly</h3>
-          </a>
-          <span>GiveDirectly</span>
-          <span>Remote - Worldwide</span>
-        </div>
-        <div>
-          <a href="/job/124-data-scientist">
-            <h3>Data Scientist at EA Org</h3>
-          </a>
-          <span>EA Org</span>
-          <span>Europe</span>
-        </div>
-        </body></html>
-        """
-        jobs = self.source._parse_html_fallback(html)
-        assert len(jobs) == 2
-        assert "Software Engineer" in jobs[0].title
-        assert jobs[0].is_ngo is True
-        assert jobs[0].source == "hours80k"
-        assert "80000hours.org" in jobs[0].url
-
-    def test_html_fallback_worldwide_scope(self):
-        html = """<html><body>
-        <div><a href="/job/1-test"><h3>Test Engineer Job</h3></a></div>
-        </body></html>"""
-        jobs = self.source._parse_html_fallback(html)
-        if jobs:
-            assert jobs[0].remote_scope == "worldwide"
-
-    def test_html_fallback_deduplicates(self):
-        html = """
-        <html><body>
-        <a href="/job/123-test">Test Job Title</a>
-        <a href="/job/123-test">Test Job Title</a>
-        <a href="/job/124-other">Other Job Title</a>
-        </body></html>
-        """
-        jobs = self.source._parse_html_fallback(html)
-        urls = [j.url for j in jobs]
-        assert len(urls) == len(set(urls))
-
-    def test_html_fallback_skips_short_titles(self):
-        html = """
-        <html><body>
-        <a href="/job/123">Ab</a>
-        <a href="/job/124-good-title">Full Stack Developer Position</a>
-        </body></html>
-        """
-        jobs = self.source._parse_html_fallback(html)
-        assert len(jobs) == 1
-        assert "Full Stack Developer" in jobs[0].title
-
-    def test_html_fallback_empty_html(self):
-        jobs = self.source._parse_html_fallback("<html><body></body></html>")
+    async def test_fetch_handles_network_error(self):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, side_effect=Exception("network")):
+            jobs = await self.source.fetch()
         assert jobs == []
-
-    def test_html_fallback_no_job_links(self):
-        html = '<html><body><a href="/about">About</a></body></html>'
-        jobs = self.source._parse_html_fallback(html)
-        assert jobs == []
-
-    def test_html_fallback_uses_heading_for_title(self):
-        html = """<html><body>
-        <div><a href="/job/999-test"><h3>DevOps Engineer Position</h3></a></div>
-        </body></html>"""
-        jobs = self.source._parse_html_fallback(html)
-        assert len(jobs) == 1
-        assert "DevOps" in jobs[0].title
-
-    # ── Error handling ─────────────────────────────────────────────────
 
     @pytest.mark.asyncio
     async def test_safe_fetch_catches_exceptions(self):
-        with patch("sources.hours80k._check_playwright", return_value=True):
-            with patch.object(
-                self.source, "_fetch_with_playwright",
-                new_callable=AsyncMock,
-                side_effect=Exception("browser crash"),
-            ):
-                jobs = await self.source.safe_fetch()
-        assert jobs == []
-
-    @pytest.mark.asyncio
-    async def test_fetch_timeout_protection(self):
-        """Fetch should abort if it takes too long."""
-        async def slow_fetch():
-            await asyncio.sleep(100)
-            return []
-
-        with patch("sources.hours80k._check_playwright", return_value=True):
-            with patch.object(
-                self.source, "_fetch_with_playwright",
-                new_callable=AsyncMock,
-                side_effect=slow_fetch,
-            ):
-                with patch("sources.hours80k._SOURCE_TIMEOUT", 0.1):
-                    jobs = await self.source.fetch()
+        with patch.object(self.source, "_post", new_callable=AsyncMock, side_effect=Exception("boom")):
+            jobs = await self.source.safe_fetch()
         assert jobs == []
 
     # ── Remote scope defaults ──────────────────────────────────────────
@@ -677,23 +719,20 @@ class TestHours80kSource:
         )
         assert job.remote_scope == "worldwide"
 
-    # ── Shared browser ─────────────────────────────────────────────────
+    # ── Job model validation ───────────────────────────────────────────
 
-    def test_shared_browser_setter(self):
-        mock_browser = MagicMock()
-        self.source.set_shared_browser(mock_browser)
-        assert self.source._shared_browser is mock_browser
-
-    def test_shared_browser_clear(self):
-        mock_browser = MagicMock()
-        self.source.set_shared_browser(mock_browser)
-        self.source.set_shared_browser(None)
-        assert self.source._shared_browser is None
-
-    def test_shared_browser_initially_none(self):
-        from sources.hours80k import Hours80kSource
-        source = Hours80kSource()
-        assert source._shared_browser is None
+    def test_all_jobs_are_ngo(self):
+        job = Job(
+            title="Software Engineer",
+            company="GiveDirectly",
+            location="Remote - Worldwide",
+            url="https://jobs.80000hours.org/job/123",
+            source="hours80k",
+            is_ngo=True,
+            remote_scope="worldwide",
+        )
+        assert job.is_ngo is True
+        assert job.remote_scope == "worldwide"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1268,49 +1307,20 @@ class TestDevexSource:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Playwright base utility
+#  BaseSource._post (Algolia / JSON API support)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestPlaywrightBase:
-    def test_playwright_available_check(self):
-        from sources.playwright_base import _playwright_available
-        result = _playwright_available()
-        assert isinstance(result, bool)
+class TestBaseSourcePost:
+    """Verify that BaseSource has a _post method for JSON APIs."""
 
-    def test_user_agent_constant(self):
-        from sources.playwright_base import _USER_AGENT
-        assert "Mozilla" in _USER_AGENT
-        assert "Chrome" in _USER_AGENT
+    def test_post_method_exists(self):
+        from sources.base import BaseSource
+        assert hasattr(BaseSource, "_post")
 
-    def test_viewport_constant(self):
-        from sources.playwright_base import _VIEWPORT
-        assert _VIEWPORT["width"] == 1280
-        assert _VIEWPORT["height"] == 800
-
-    def test_locale_constant(self):
-        from sources.playwright_base import _LOCALE
-        assert _LOCALE == "en-US"
-
-    def test_timeout_constant(self):
-        from sources.playwright_base import _DEFAULT_TIMEOUT
-        assert _DEFAULT_TIMEOUT == 30_000
-
-    def test_blocked_resource_pattern(self):
-        from sources.playwright_base import _BLOCKED_RESOURCE_PATTERN
-        assert "png" in _BLOCKED_RESOURCE_PATTERN
-        assert "woff" in _BLOCKED_RESOURCE_PATTERN
-
-    def test_new_page_from_browser_importable(self):
-        from sources.playwright_base import new_page_from_browser
-        assert callable(new_page_from_browser)
-
-    def test_get_playwright_page_importable(self):
-        from sources.playwright_base import get_playwright_page
-        assert callable(get_playwright_page)
-
-    def test_shared_browser_context_importable(self):
-        from sources.playwright_base import shared_browser_context
-        assert callable(shared_browser_context)
+    def test_post_method_callable(self):
+        from sources.hours80k import Hours80kSource
+        source = Hours80kSource()
+        assert callable(source._post)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1324,28 +1334,21 @@ class TestSourceRegistration:
             "remotive", "arbeitnow", "remoteok", "weworkremotely",
             "idealist", "reliefweb",
             "techjobsforgood", "eurobrussels", "hours80k", "goodjobs", "devex",
+            "linkedin", "stepstone",
+            "nofluffjobs", "himalayas", "landingjobs", "themuse",
         }
         assert set(ALL_SOURCES.keys()) == expected
 
-    def test_source_count_is_eleven(self):
+    def test_source_count_is_seventeen(self):
         from main import ALL_SOURCES
-        assert len(ALL_SOURCES) == 11
+        assert len(ALL_SOURCES) == 17
 
-    def test_playwright_sources_contains_hours80k(self):
-        from main import _PLAYWRIGHT_SOURCES
-        assert "hours80k" in _PLAYWRIGHT_SOURCES
-
-    def test_playwright_sources_does_not_contain_httpx_sources(self):
-        from main import _PLAYWRIGHT_SOURCES
-        httpx_sources = {"remotive", "arbeitnow", "remoteok", "weworkremotely",
-                         "idealist", "reliefweb", "eurobrussels",
-                         "goodjobs", "devex"}
-        for name in httpx_sources:
-            assert name not in _PLAYWRIGHT_SOURCES
-
-    def test_playwright_sources_contains_techjobsforgood(self):
-        from main import _PLAYWRIGHT_SOURCES
-        assert "techjobsforgood" in _PLAYWRIGHT_SOURCES
+    def test_all_sources_are_httpx_based(self):
+        """After v1.5, all sources use httpx — no Playwright sources remain."""
+        from main import ALL_SOURCES
+        # Verify no _PLAYWRIGHT_SOURCES set exists
+        import main
+        assert not hasattr(main, "_PLAYWRIGHT_SOURCES")
 
     def test_all_sources_instantiable(self):
         from main import ALL_SOURCES
@@ -1368,7 +1371,7 @@ class TestSourceRegistration:
     def test_get_sources_all(self):
         from main import _get_sources
         sources = _get_sources(None)
-        assert len(sources) == 11
+        assert len(sources) == 17
 
     def test_get_sources_single(self):
         from main import _get_sources
@@ -1402,33 +1405,10 @@ class TestSourceRegistration:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Playwright performance optimization
+#  Filter pipeline defaults (unknown scope → worldwide)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestPlaywrightOptimization:
-    @pytest.mark.asyncio
-    async def test_run_playwright_sources_returns_list(self):
-        """_run_playwright_sources should always return a list."""
-        from main import _run_playwright_sources
-        from sources.hours80k import Hours80kSource
-
-        sources = [Hours80kSource()]
-        with patch("sources.hours80k._check_playwright", return_value=False):
-            jobs = await _run_playwright_sources(sources)
-        assert isinstance(jobs, list)
-
-    @pytest.mark.asyncio
-    async def test_run_playwright_sources_graceful_on_import_error(self):
-        """When shared_browser_context import fails, returns []."""
-        from main import _run_playwright_sources
-        from sources.hours80k import Hours80kSource
-
-        sources = [Hours80kSource()]
-        with patch("main._run_playwright_sources", new_callable=AsyncMock, return_value=[]):
-            from main import _run_playwright_sources as rps
-            result = await rps(sources)
-            assert result == []
-
+class TestUnknownScopeDefaults:
     @pytest.mark.asyncio
     async def test_hours80k_unknown_scope_defaults_worldwide(self):
         """In _apply_filters, hours80k jobs with unknown scope default to worldwide."""
@@ -1795,3 +1775,521 @@ class TestDiscordCompanyDisplay:
 
             await notifier._send_single_job(job)
             assert mock_instance.add_embed.called
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  WeWorkRemotely: multi-feed (v1.4 Step 6b)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestWeWorkRemotelyMultiFeed:
+    """Verify WeWorkRemotely fetches from 5 RSS feeds, not just 1."""
+
+    def test_rss_feeds_list_has_five_entries(self):
+        from sources.weworkremotely import _RSS_FEEDS
+        assert len(_RSS_FEEDS) == 5
+
+    def test_rss_feeds_include_all_categories(self):
+        from sources.weworkremotely import _RSS_FEEDS
+        feed_urls = " ".join(_RSS_FEEDS)
+        assert "full-stack" in feed_urls
+        assert "back-end" in feed_urls
+        assert "front-end" in feed_urls
+        assert "devops" in feed_urls
+        assert "programming-jobs" in feed_urls
+
+    @pytest.mark.asyncio
+    async def test_fetch_calls_all_feeds(self):
+        """fetch() should call _fetch_feed for each RSS feed."""
+        from sources.weworkremotely import WeWorkRemotelySource, _RSS_FEEDS
+        source = WeWorkRemotelySource()
+        with patch.object(source, "_fetch_feed", new_callable=AsyncMock, return_value=[]) as mock_fetch:
+            await source.fetch()
+            assert mock_fetch.call_count == len(_RSS_FEEDS)
+
+    @pytest.mark.asyncio
+    async def test_fetch_deduplicates_by_url(self):
+        """Jobs appearing in multiple feeds should be deduplicated."""
+        from sources.weworkremotely import WeWorkRemotelySource
+        source = WeWorkRemotelySource()
+
+        job1 = Job(
+            title="Fullstack Dev", company="Acme", location="Remote",
+            url="https://weworkremotely.com/jobs/1", source="weworkremotely", is_remote=True,
+        )
+        job2 = Job(
+            title="Backend Dev", company="Corp", location="Remote",
+            url="https://weworkremotely.com/jobs/2", source="weworkremotely", is_remote=True,
+        )
+        # Same URL as job1 — should be deduped
+        job1_dup = Job(
+            title="Fullstack Dev", company="Acme", location="Remote",
+            url="https://weworkremotely.com/jobs/1", source="weworkremotely", is_remote=True,
+        )
+
+        async def mock_fetch_feed(url):
+            if "full-stack" in url:
+                return [job1]
+            elif "back-end" in url:
+                return [job2, job1_dup]
+            return []
+
+        with patch.object(source, "_fetch_feed", side_effect=mock_fetch_feed):
+            jobs = await source.fetch()
+
+        assert len(jobs) == 2
+        urls = {j.url for j in jobs}
+        assert "https://weworkremotely.com/jobs/1" in urls
+        assert "https://weworkremotely.com/jobs/2" in urls
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Remotive: multi-category (v1.4 Step 6c)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRemotiveMultiCategory:
+    """Verify Remotive fetches from multiple API categories."""
+
+    def test_categories_list_has_multiple_entries(self):
+        from sources.remotive import _CATEGORIES
+        assert len(_CATEGORIES) >= 2
+        assert "software-dev" in _CATEGORIES
+
+    def test_categories_include_devops(self):
+        from sources.remotive import _CATEGORIES
+        assert "devops-sysadmin" in _CATEGORIES
+
+    @pytest.mark.asyncio
+    async def test_fetch_calls_all_categories(self):
+        """fetch() should call _fetch_category for each category."""
+        from sources.remotive import RemotiveSource, _CATEGORIES
+        source = RemotiveSource()
+        with patch.object(source, "_fetch_category", new_callable=AsyncMock, return_value=[]) as mock_fetch:
+            await source.fetch()
+            assert mock_fetch.call_count == len(_CATEGORIES)
+
+    @pytest.mark.asyncio
+    async def test_fetch_deduplicates_by_url(self):
+        """Jobs appearing in multiple categories should be deduplicated."""
+        from sources.remotive import RemotiveSource
+        source = RemotiveSource()
+
+        job1 = Job(
+            title="DevOps Engineer", company="Ops Co", location="Remote",
+            url="https://remotive.com/job/1", source="remotive", is_remote=True,
+        )
+        job2 = Job(
+            title="Software Dev", company="Dev Co", location="Remote",
+            url="https://remotive.com/job/2", source="remotive", is_remote=True,
+        )
+        job1_dup = Job(
+            title="DevOps Engineer", company="Ops Co", location="Remote",
+            url="https://remotive.com/job/1", source="remotive", is_remote=True,
+        )
+
+        async def mock_fetch_cat(category):
+            if category == "software-dev":
+                return [job2]
+            elif category == "devops-sysadmin":
+                return [job1, job1_dup]
+            return []
+
+        with patch.object(source, "_fetch_category", side_effect=mock_fetch_cat):
+            jobs = await source.fetch()
+
+        assert len(jobs) == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LinkedIn source (v1.4 Step 9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Sample HTML fragment that LinkedIn's guest API returns
+SAMPLE_LINKEDIN_HTML = """
+<li>
+  <div class="base-card relative w-full hover:no-underline focus:no-underline base-card--link base-search-card base-search-card--link job-search-card" data-entity-urn="urn:li:jobPosting:12345">
+    <a class="base-card__full-link absolute top-0 right-0 bottom-0 left-0 p-0 z-[2]" href="https://de.linkedin.com/jobs/view/software-engineer-at-acme-corp-12345" data-tracking-control-name="public_jobs_jserp-result_search-card">
+      <span class="sr-only">Software Engineer</span>
+    </a>
+    <div class="base-search-card__info">
+      <h3 class="base-search-card__title">Software Engineer</h3>
+      <h4 class="base-search-card__subtitle">
+        <a href="https://www.linkedin.com/company/acme-corp">Acme Corp</a>
+      </h4>
+      <div class="base-search-card__metadata">
+        <span class="job-search-card__location">Berlin, Germany</span>
+        <time class="job-search-card__listdate" datetime="2026-03-20T00:00:00.000Z">2 days ago</time>
+      </div>
+    </div>
+  </div>
+</li>
+<li>
+  <div class="base-card relative w-full hover:no-underline focus:no-underline base-card--link base-search-card base-search-card--link job-search-card" data-entity-urn="urn:li:jobPosting:67890">
+    <a class="base-card__full-link absolute top-0 right-0 bottom-0 left-0 p-0 z-[2]" href="https://de.linkedin.com/jobs/view/fullstack-dev-at-tech-gmbh-67890" data-tracking-control-name="public_jobs_jserp-result_search-card">
+      <span class="sr-only">Fullstack Developer</span>
+    </a>
+    <div class="base-search-card__info">
+      <h3 class="base-search-card__title">Fullstack Developer</h3>
+      <h4 class="base-search-card__subtitle">
+        <a href="https://www.linkedin.com/company/tech-gmbh">Tech GmbH</a>
+      </h4>
+      <div class="base-search-card__metadata">
+        <span class="job-search-card__location">Munich, Germany</span>
+        <time class="job-search-card__listdate" datetime="2026-03-19T00:00:00.000Z">3 days ago</time>
+      </div>
+    </div>
+  </div>
+</li>
+"""
+
+SAMPLE_LINKEDIN_EMPTY_HTML = """
+<div class="no-results">No results found</div>
+"""
+
+
+class TestLinkedInSource:
+    def setup_method(self):
+        from sources.linkedin import LinkedInSource
+        self.source = LinkedInSource()
+
+    # ── Basic parsing ──────────────────────────────────────────────────
+
+    def test_parse_html_extracts_jobs(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        assert len(jobs) == 2
+
+    def test_parse_html_title(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        assert jobs[0].title == "Software Engineer"
+        assert jobs[1].title == "Fullstack Developer"
+
+    def test_parse_html_company(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        assert jobs[0].company == "Acme Corp"
+        assert jobs[1].company == "Tech GmbH"
+
+    def test_parse_html_location(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        assert jobs[0].location == "Berlin, Germany"
+        assert jobs[1].location == "Munich, Germany"
+
+    def test_parse_html_url(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        # URL should have tracking params stripped
+        assert "12345" in jobs[0].url
+        assert "67890" in jobs[1].url
+        assert "?" not in jobs[0].url  # tracking params stripped
+
+    def test_parse_html_source_is_linkedin(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        for job in jobs:
+            assert job.source == "linkedin"
+
+    def test_parse_html_is_remote_true(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        for job in jobs:
+            assert job.is_remote is True
+
+    def test_parse_html_posted_at(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_HTML)
+        assert jobs[0].posted_at is not None
+        assert jobs[1].posted_at is not None
+
+    def test_parse_empty_html(self):
+        jobs = self.source._parse_html(SAMPLE_LINKEDIN_EMPTY_HTML)
+        assert len(jobs) == 0
+
+    def test_parse_html_no_crash_on_garbage(self):
+        jobs = self.source._parse_html("<html><body>garbage</body></html>")
+        assert len(jobs) == 0
+
+    # ── Multi-query fetch ──────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_fetch_calls_all_queries(self):
+        from sources.linkedin import _SEARCH_QUERIES
+        with patch.object(self.source, "_fetch_query", new_callable=AsyncMock, return_value=[]) as mock_fetch:
+            await self.source.fetch()
+            assert mock_fetch.call_count == len(_SEARCH_QUERIES)
+
+    @pytest.mark.asyncio
+    async def test_fetch_deduplicates_by_url(self):
+        job1 = Job(
+            title="Software Engineer", company="Acme", location="Berlin, Germany",
+            url="https://linkedin.com/jobs/view/123", source="linkedin", is_remote=True,
+        )
+        job2 = Job(
+            title="Fullstack Dev", company="Corp", location="Munich, Germany",
+            url="https://linkedin.com/jobs/view/456", source="linkedin", is_remote=True,
+        )
+        job1_dup = Job(
+            title="Software Engineer", company="Acme", location="Berlin, Germany",
+            url="https://linkedin.com/jobs/view/123", source="linkedin", is_remote=True,
+        )
+
+        async def mock_fetch_query(query):
+            if "software" in query["keywords"]:
+                return [job1]
+            elif "fullstack" in query["keywords"]:
+                return [job2, job1_dup]
+            return []
+
+        with patch.object(self.source, "_fetch_query", side_effect=mock_fetch_query):
+            jobs = await self.source.fetch()
+
+        assert len(jobs) == 2
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_rate_limit_gracefully(self):
+        """429 from LinkedIn should return empty, not crash."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 429
+        mock_resp.text = ""
+
+        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+            assert len(jobs) == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_login_redirect_gracefully(self):
+        """LinkedIn login redirect should return empty, not crash."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = '<html><head><title>Login</title></head><body>Please login to continue</body></html>'
+
+        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+            assert len(jobs) == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_exception_gracefully(self):
+        """Network error should return empty, not crash."""
+        with patch.object(self.source, "_get", new_callable=AsyncMock, side_effect=Exception("Connection refused")):
+            jobs = await self.source.fetch()
+            assert len(jobs) == 0
+
+    # ── Registration ───────────────────────────────────────────────────
+
+    def test_linkedin_registered_in_all_sources(self):
+        from main import ALL_SOURCES
+        assert "linkedin" in ALL_SOURCES
+
+    def test_linkedin_source_name(self):
+        assert self.source.name == "linkedin"
+
+    def test_linkedin_is_httpx_source(self):
+        """LinkedIn uses httpx (no Playwright)."""
+        assert hasattr(self.source, "fetch")
+        assert hasattr(self.source, "_get")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LinkedIn: _parse_relative_time helper
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestLinkedInParseRelativeTime:
+    def test_parse_days_ago(self):
+        from sources.linkedin import _parse_relative_time
+        result = _parse_relative_time("5 days ago")
+        assert result is not None
+        from datetime import datetime, timezone
+        delta = datetime.now(timezone.utc) - result
+        assert 4.9 < delta.total_seconds() / 86400 < 5.1
+
+    def test_parse_hours_ago(self):
+        from sources.linkedin import _parse_relative_time
+        result = _parse_relative_time("3 hours ago")
+        assert result is not None
+        from datetime import datetime, timezone
+        delta = datetime.now(timezone.utc) - result
+        assert 2.9 < delta.total_seconds() / 3600 < 3.1
+
+    def test_parse_week_ago(self):
+        from sources.linkedin import _parse_relative_time
+        result = _parse_relative_time("1 week ago")
+        assert result is not None
+        from datetime import datetime, timezone
+        delta = datetime.now(timezone.utc) - result
+        assert 6.9 < delta.total_seconds() / 86400 < 7.1
+
+    def test_parse_garbage_returns_none(self):
+        from sources.linkedin import _parse_relative_time
+        assert _parse_relative_time("recently posted") is None
+
+    def test_parse_empty_returns_none(self):
+        from sources.linkedin import _parse_relative_time
+        assert _parse_relative_time("") is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Stepstone / Arbeitsagentur source (v1.5 — replaces Playwright scraper)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Sample Arbeitsagentur API posting for testing
+_SAMPLE_POSTING = {
+    "titel": "Senior Software Entwickler (m/w/d)",
+    "beruf": "Software Entwickler",
+    "refnr": "10000-1234567890-S",
+    "arbeitgeber": "SAP SE",
+    "arbeitsort": {
+        "plz": "10115",
+        "ort": "Berlin",
+        "region": "Berlin",
+        "land": "Deutschland",
+    },
+    "aktuelleVeroeffentlichungsdatum": "2026-03-20",
+    "externeUrl": "https://www.stepstone.de/stellenangebote--Senior-Software-Entwickler--Berlin--12345",
+}
+
+_SAMPLE_POSTING_2 = {
+    "titel": "Fullstack Developer (Remote)",
+    "beruf": "Fullstack Developer",
+    "refnr": "10000-9876543210-S",
+    "arbeitgeber": "Zalando",
+    "arbeitsort": {
+        "ort": "Munich",
+        "region": "Bayern",
+        "land": "Deutschland",
+    },
+    "aktuelleVeroeffentlichungsdatum": "2026-03-19T12:00:00Z",
+    "externeUrl": "https://www.zalando.de/jobs/fullstack",
+}
+
+_SAMPLE_POSTING_NO_URL = {
+    "titel": "Backend Developer",
+    "refnr": "10000-1111111111-S",
+    "arbeitgeber": "Otto Group",
+    "arbeitsort": {"ort": "Hamburg"},
+    "aktuelleVeroeffentlichungsdatum": "2026-03-18",
+}
+
+
+class TestStepstoneSource:
+    def setup_method(self):
+        from sources.stepstone import StepstoneSource
+        self.source = StepstoneSource()
+
+    # ── Source name ────────────────────────────────────────────────────
+
+    def test_source_name(self):
+        assert self.source.name == "stepstone"
+
+    def test_stepstone_registered_in_all_sources(self):
+        from main import ALL_SOURCES
+        assert "stepstone" in ALL_SOURCES
+
+    # ── Posting parsing ────────────────────────────────────────────────
+
+    def test_parse_posting_basic(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert job is not None
+        assert "Software Entwickler" in job.title
+        assert job.company == "SAP SE"
+        assert job.source == "stepstone"
+
+    def test_parse_posting_url(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert "stepstone.de" in job.url
+
+    def test_parse_posting_location(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert "Berlin" in job.location
+
+    def test_parse_posting_scope_germany(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert job.remote_scope == "germany"
+
+    def test_parse_posting_is_remote(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert job.is_remote is True
+
+    def test_parse_posting_posted_at(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING)
+        assert job.posted_at is not None
+
+    def test_parse_posting_isoformat_date(self):
+        job = self.source._parse_posting(_SAMPLE_POSTING_2)
+        assert job.posted_at is not None
+
+    def test_parse_posting_fallback_url(self):
+        """Posting without externeUrl gets an arbeitsagentur URL."""
+        job = self.source._parse_posting(_SAMPLE_POSTING_NO_URL)
+        assert job is not None
+        assert "arbeitsagentur.de" in job.url
+
+    def test_parse_posting_empty_title_returns_none(self):
+        posting = {"titel": "", "refnr": "123", "arbeitgeber": "X", "arbeitsort": {}}
+        assert self.source._parse_posting(posting) is None
+
+    def test_parse_posting_no_url_no_refnr_returns_none(self):
+        posting = {"titel": "Dev", "refnr": "", "arbeitgeber": "X", "arbeitsort": {}}
+        assert self.source._parse_posting(posting) is None
+
+    def test_parse_posting_missing_company_defaults(self):
+        posting = dict(_SAMPLE_POSTING)
+        posting["arbeitgeber"] = None
+        job = self.source._parse_posting(posting)
+        assert job.company == "Unknown"
+
+    # ── Build location ─────────────────────────────────────────────────
+
+    def test_build_location_full(self):
+        loc = self.source._build_location(_SAMPLE_POSTING)
+        assert "Berlin" in loc
+
+    def test_build_location_empty(self):
+        loc = self.source._build_location({"arbeitsort": {}})
+        assert loc == "Germany (Remote)"
+
+    def test_build_location_no_arbeitsort(self):
+        loc = self.source._build_location({})
+        assert loc == "Germany (Remote)"
+
+    # ── Fetch (mocked API) ─────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_fetch_parses_api_response(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "stellenangebote": [_SAMPLE_POSTING, _SAMPLE_POSTING_2],
+            "maxErgebnisse": 2,
+        }
+
+        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+        assert len(jobs) == 2
+
+    @pytest.mark.asyncio
+    async def test_fetch_deduplicates_by_refnr(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "stellenangebote": [_SAMPLE_POSTING, _SAMPLE_POSTING],
+            "maxErgebnisse": 2,
+        }
+
+        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+        # Same refnr → deduplicated
+        assert len(jobs) == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_api_error(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+
+        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+            jobs = await self.source.fetch()
+        assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_handles_network_error(self):
+        with patch.object(self.source, "_get", new_callable=AsyncMock, side_effect=Exception("timeout")):
+            jobs = await self.source.fetch()
+        assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_safe_fetch_catches_exceptions(self):
+        with patch.object(self.source, "_get", new_callable=AsyncMock, side_effect=Exception("crash")):
+            jobs = await self.source.safe_fetch()
+        assert jobs == []
