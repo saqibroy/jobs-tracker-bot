@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] — 2026-03-23
+
+### Added
+
+- **Stack compatibility filter** (`filters/stack.py`):
+  - Rejects jobs with only incompatible tech stacks (Java, C#, .NET, Golang, Rust, etc.)
+  - Allows mixed-stack jobs through (e.g. "Full Stack Java + React")
+- **80,000 Hours pre-filter** (`sources/hours80k.py`):
+  - Filters out non-dev roles (RFPs, research grants, fellowships, policy roles) before pipeline
+  - Requires at least one dev signal in title (engineer, developer, etc.)
+- **Stepstone remote detection** (`sources/stepstone.py`):
+  - `_has_remote_signal()` checks title for remote/homeoffice/hybrid keywords
+  - Checks API `arbeitsort.remote` flag
+- **On-site Germany rejection** (`ACCEPT_ONSITE_GERMANY` env var, default `false`):
+  - Rejects Germany-scope jobs without remote/hybrid signal when disabled
+- **Minimum match score filter** (`MINIMUM_MATCH_SCORE` env var, default `0`):
+  - Hard-rejects jobs below the threshold (0 = accept all)
+
+### Changed
+
+- **Role filter** (`filters/role.py`): 40+ new reject patterns:
+  - Wrong stack: C++, Java, Spring Boot, C#, .NET, Golang, Rust, embedded, firmware
+  - Infra/DevOps: DevOps Engineer, SRE, Platform Engineer, Cloud Engineer/Architect, Kubernetes
+  - Research/science: Research Engineer, ML Engineer, Data Scientist, lab roles
+  - Security: Security Engineer, penetration tester, identity engineer
+  - QA: QA Engineer, Test Engineer, Quality Assurance
+  - Product/design: Product Owner, Product Operations, 3D Artist, Motion Designer
+  - Other: Linguist, RFP, Content Strategist, Growth Manager, Talent Team Lead
+  - Regex-based rejects for "data engineer" and "go developer" (word-boundary safe)
+  - Removed from accept list: platform engineer, solutions engineer, SRE, cloud engineer, kubernetes, devops
+- **Match score** (`filters/match.py`): complete weight recalibration:
+  - Tier 1 core stack: React (20), Next.js (18), TypeScript (16), Vue (15), FastAPI (16), Django (15)
+  - Negative weights: Java (-5), Spring Boot (-5), C++ (-8), C# (-5), .NET (-5)
+  - New normalization curve with 5 tiers (raw 50+ → 95-100%, down to raw <5 → 0-20%)
+  - Added synonym groups for Vue, Nuxt, PostgreSQL, Rails
+- **Filter pipeline** (`main.py`): added stack filter (step 3b), on-site Germany rejection (step 4b), minimum match score (step 6c)
+
+### Tests
+
+- Added `tests/test_v15_filters.py` — 170 new tests covering all v1.5 changes
+- Total test count: **905 tests passing**
+
 ## [1.3.0] — 2026-03-15
 
 ### Added

@@ -57,6 +57,15 @@ COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
 FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true", "1", "yes")
 MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
 
+# Minimum match score (0–100).  Jobs below this threshold are still
+# accepted but clearly marked as low match.  Set > 0 to hard-reject
+# very low-match jobs.
+MINIMUM_MATCH_SCORE: int = int(_get("MINIMUM_MATCH_SCORE", "0"))
+
+# Accept on-site Germany jobs (no remote/hybrid signal).
+# When false: reject Germany-scope jobs that lack remote/hybrid signals.
+ACCEPT_ONSITE_GERMANY: bool = _get("ACCEPT_ONSITE_GERMANY", "false").lower() in ("true", "1", "yes")
+
 # ── Concurrency ────────────────────────────────────────────────────────────
 MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "3"))
 

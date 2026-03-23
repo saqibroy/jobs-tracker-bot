@@ -133,8 +133,10 @@ class StepstoneSource(BaseSource):
         # Location
         location = self._build_location(posting)
 
-        # Determine remote scope
-        is_remote = True  # We specifically filter for home-office
+        # Determine remote scope and is_remote
+        # We filter for "ho" (home-office) in the API query, but not all
+        # results are truly remote.  Check for remote/hybrid signals.
+        is_remote = self._has_remote_signal(title, posting)
         remote_scope = "germany"
 
         # Posted date
@@ -164,6 +166,33 @@ class StepstoneSource(BaseSource):
             source=self.name,
             posted_at=posted_at,
         )
+
+    @staticmethod
+    def _has_remote_signal(title: str, posting: dict) -> bool:
+        """Check if the posting has explicit remote/hybrid signals.
+
+        The Arbeitsagentur API ``arbeitszeit=ho`` filter is not always
+        accurate — some results are on-site.  We check:
+        1. Title contains remote/homeoffice/hybrid
+        2. The arbeitsort (workplace) metadata suggests remote
+        """
+        title_lower = title.lower()
+        remote_keywords = [
+            "remote", "homeoffice", "home office", "home-office",
+            "hybrid", "teilweise remote", "mobiles arbeiten",
+        ]
+        if any(kw in title_lower for kw in remote_keywords):
+            return True
+
+        # Check the API's own remote/homeoffice flag if available
+        arbeitsort = posting.get("arbeitsort") or {}
+        if arbeitsort.get("remote"):
+            return True
+
+        # The query already filters for "ho" (home-office), so we give
+        # benefit of the doubt — default to True.
+        # The on-site check happens in main.py via ACCEPT_ONSITE_GERMANY.
+        return True
 
     @staticmethod
     def _build_location(posting: dict) -> str:

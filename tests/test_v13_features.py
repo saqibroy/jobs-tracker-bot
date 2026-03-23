@@ -176,6 +176,8 @@ class TestCompanyBlocklist:
             mock_config.MIN_SALARY_EUR = 0
             mock_config.MAX_JOB_AGE_DAYS = 14
             mock_config.SOURCE_MAX_AGE_DAYS = {}
+            mock_config.MINIMUM_MATCH_SCORE = 0
+            mock_config.ACCEPT_ONSITE_GERMANY = False
 
             jobs = [
                 _make_job(

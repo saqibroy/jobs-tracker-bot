@@ -90,7 +90,58 @@ class Hours80kSource(BaseSource):
                 break
 
         logger.info("[{}] Fetched {} jobs from Algolia ({} pages)", self.name, len(all_jobs), page + 1)
+
+        # Pre-filter: remove non-dev roles specific to 80k Hours board
+        pre_count = len(all_jobs)
+        all_jobs = [j for j in all_jobs if self._is_relevant_for_user(j)]
+        filtered_count = pre_count - len(all_jobs)
+        if filtered_count > 0:
+            logger.info("[{}] Pre-filtered {} non-dev roles", self.name, filtered_count)
+
         return all_jobs
+
+    # ------------------------------------------------------------------
+    # Pre-filter for 80k Hours (non-dev roles)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_relevant_for_user(job: Job) -> bool:
+        """Filter out non-dev roles specific to the 80k Hours board.
+
+        80k Hours lists research grants, policy roles, lab positions,
+        and funding calls alongside real engineering jobs.  This
+        pre-filter keeps only roles with a dev signal in the title.
+        """
+        title_lower = job.title.lower()
+
+        # Hard reject: these are not software engineering jobs
+        _REJECT_PATTERNS = [
+            "request for proposals", "rfp",
+            "research laboratory", "lab technician", "benchside",
+            "mathematical model", "quantitative",
+            "wet lab", "clinical",
+            "policy analyst", "policy researcher",
+            "programme officer", "program officer",
+            "operations lead", "operations manager",
+            "communications", "outreach",
+            "fellowship",
+            "internship",
+        ]
+
+        if any(p in title_lower for p in _REJECT_PATTERNS):
+            return False
+
+        # For 80k Hours, require at least one dev signal in title
+        _DEV_SIGNALS = [
+            "engineer", "developer", "architect", "devops",
+            "fullstack", "full stack", "full-stack",
+            "frontend", "front-end", "front end",
+            "backend", "back-end", "back end",
+            "software", "platform", "infrastructure", "sre",
+            "data engineer",
+        ]
+
+        return any(s in title_lower for s in _DEV_SIGNALS)
 
     # ------------------------------------------------------------------
     # Hit -> Job

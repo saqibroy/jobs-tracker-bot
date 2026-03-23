@@ -29,6 +29,7 @@ from filters.location import classify_remote_scope, passes_location_filter
 from filters.match import compute_match_score
 from filters.ngo import classify_ngo
 from filters.role import passes_role_filter
+from filters.stack import passes_stack_filter
 from models.job import Job
 from notifiers.discord_notifier import DiscordNotifier
 from notifiers.telegram_notifier import TelegramNotifier
@@ -273,9 +274,24 @@ def _apply_filters(
             _reject(job, f"role: no dev keyword in title '{job.title}'")
             continue
 
+        # 3b. Stack compatibility filter — reject pure incompatible-stack roles
+        if not passes_stack_filter(job):
+            _reject(job, f"stack: incompatible stack in '{job.title}'")
+            continue
+
         # 4. Language filter
         if not passes_language_filter(job):
             _reject(job, "language: non-English content detected")
+            continue
+
+        # 4b. On-site Germany rejection (when ACCEPT_ONSITE_GERMANY is false)
+        #     Reject Germany-scope jobs without remote/hybrid signal.
+        if (
+            not config.ACCEPT_ONSITE_GERMANY
+            and job.remote_scope == "germany"
+            and not job.is_remote
+        ):
+            _reject(job, f"on-site Germany: no remote/hybrid signal in '{job.title}'")
             continue
 
         # 4c. Senior-only filter (optional, off by default)
@@ -314,12 +330,17 @@ def _apply_filters(
         # 6. NGO classification (enrichment — never rejects)
         classify_ngo(job)
 
-        # 6b. Match score (enrichment — never rejects)
+        # 6b. Match score (enrichment — may reject if below MINIMUM_MATCH_SCORE)
         try:
             job.match_score = compute_match_score(job)
         except Exception as exc:
             logger.warning("Match scoring failed for '{}': {} — defaulting to 0", job.title, exc)
             job.match_score = 0
+
+        # 6c. Minimum match score filter (optional, default 0 = accept all)
+        if config.MINIMUM_MATCH_SCORE > 0 and job.match_score < config.MINIMUM_MATCH_SCORE:
+            _reject(job, f"match score: {job.match_score}% < minimum {config.MINIMUM_MATCH_SCORE}%")
+            continue
 
         # 7. Per-company cap
         company_key = job.company.lower().strip()

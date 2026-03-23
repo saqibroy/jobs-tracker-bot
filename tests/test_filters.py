@@ -600,9 +600,10 @@ class TestRoleFilter:
         )
         assert passes_role_filter(job) is True
 
-    def test_accept_kubernetes_in_tags(self):
+    def test_reject_kubernetes_specialist(self):
+        """Pure Kubernetes/cloud role without dev keywords → rejected."""
         job = _make_job(title="Cloud Specialist", tags=["kubernetes", "aws"])
-        assert passes_role_filter(job) is True
+        assert passes_role_filter(job) is False
 
     def test_accept_llm_ai_engineer(self):
         job = _make_job(title="AI Engineer - LLM Applications")
@@ -684,13 +685,15 @@ class TestRoleFilter:
         job = _make_job(title="API Developer")
         assert passes_role_filter(job) is True
 
-    def test_accept_platform_engineer(self):
+    def test_reject_platform_engineer(self):
+        """Pure 'Platform Engineer' is now rejected (infra/DevOps role)."""
         job = _make_job(title="Platform Engineer")
-        assert passes_role_filter(job) is True
+        assert passes_role_filter(job) is False
 
-    def test_accept_solutions_engineer(self):
-        job = _make_job(title="Solutions Engineer")
-        assert passes_role_filter(job) is True
+    def test_reject_solutions_architect(self):
+        """'Solutions Architect' is now rejected (pre-sales/infra)."""
+        job = _make_job(title="Solutions Architect")
+        assert passes_role_filter(job) is False
 
     def test_accept_integration_engineer(self):
         job = _make_job(title="Integration Engineer")
@@ -708,13 +711,15 @@ class TestRoleFilter:
         job = _make_job(title="Principal Engineer")
         assert passes_role_filter(job) is True
 
-    def test_accept_sre(self):
+    def test_reject_sre(self):
+        """Pure SRE role is now rejected (infra/DevOps)."""
         job = _make_job(title="Site Reliability Engineer")
-        assert passes_role_filter(job) is True
+        assert passes_role_filter(job) is False
 
-    def test_accept_cloud_engineer(self):
+    def test_reject_cloud_engineer(self):
+        """Pure Cloud Engineer is now rejected (infra/DevOps)."""
         job = _make_job(title="Cloud Engineer")
-        assert passes_role_filter(job) is True
+        assert passes_role_filter(job) is False
 
     def test_accept_application_developer(self):
         job = _make_job(title="Application Developer")
@@ -1006,7 +1011,7 @@ class TestMatchScore:
             description="Working with Django and PostgreSQL.",
         )
         score = compute_match_score(job)
-        assert 20 <= score <= 80
+        assert 50 <= score <= 95
 
     def test_no_match(self):
         """Job with no matching keywords → 0."""
@@ -1105,7 +1110,24 @@ class TestMatchScore:
         assert _normalize_score(0) == 0
 
     def test_normalize_high(self):
-        assert _normalize_score(60) == 95
+        """Raw 50 → 95 (start of top tier)."""
+        assert _normalize_score(50) == 95
+
+    def test_normalize_mid_high(self):
+        """Raw 40 → 90 (start of 90-95 tier)."""
+        assert _normalize_score(40) == 90
+
+    def test_normalize_mid(self):
+        """Raw 25 → 70 (start of 70-90 tier)."""
+        assert _normalize_score(25) == 70
+
+    def test_normalize_low_mid(self):
+        """Raw 15 → 50 (start of 50-70 tier)."""
+        assert _normalize_score(15) == 50
+
+    def test_normalize_low(self):
+        """Raw 5 → 20 (start of 20-50 tier)."""
+        assert _normalize_score(5) == 20
 
     def test_normalize_max(self):
         assert _normalize_score(100) == 100

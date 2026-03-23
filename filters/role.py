@@ -11,6 +11,8 @@ like "engineer".
 
 from __future__ import annotations
 
+import re
+
 from loguru import logger
 
 from models.job import Job
@@ -28,6 +30,7 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "marketing director",
     "marketing lead",
     "growth marketing",
+    "growth manager",
     "sales",
     "account executive",
     "account manager",
@@ -38,6 +41,7 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "recruiter",
     "recruiting",
     "talent acquisition",
+    "talent team lead",
     "human resources",
     " hr ",  # spaces to avoid matching "chrome", "share" etc.
     "hr manager",
@@ -48,6 +52,7 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "accountant",
     "bookkeeper",
     "content writer",
+    "content strategist",
     "copywriter",
     "social media",
     "graphic designer",
@@ -60,12 +65,75 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "go to market",
     "go-to-market",
     "gtm engineer",
+    "marketing",
+
     # Product roles (not engineering)
     "product manager",
     "senior product manager",
     "staff product manager",
     "principal product manager",
     "head of product",
+    "product owner",
+    "product operations",
+    "product capability",
+
+    # Wrong tech stack — pure roles in non-user stacks
+    "c++ developer", "c++ engineer", "c++ software",
+    "java developer", "java engineer", "java backend",
+    "spring boot", "java spring",
+    "c# developer", ".net developer", "dotnet developer",
+    "golang developer",
+    "rust developer", "rust engineer",
+    "embedded developer", "embedded engineer",
+    "firmware engineer",
+
+    # Infrastructure / DevOps (pure roles)
+    "devops engineer",
+    "sre",
+    "site reliability engineer",
+    "platform engineer",
+    "infrastructure engineer",
+    "systems administrator", "sysadmin", "linux administrator",
+    "network engineer",
+    "cloud engineer",
+    "cloud architect",
+    "kubernetes engineer", "kubernetes consultant",
+    "solutions architect",
+
+    # Research and science (not product engineering)
+    "research engineer",
+    "ml engineer",
+    "ai researcher", "ai research",
+    "machine learning researcher",
+    "data scientist",
+    "quantitative analyst", "quant analyst",
+    "mathematical modeller", "mathematical model",
+    "research laboratory", "lab technician",
+    "benchside", "wet lab",
+
+    # Security (unless application security)
+    "security engineer",
+    "penetration tester", "pen tester",
+    "security researcher",
+    "identity engineer",
+    "offensive security",
+
+    # QA / Testing (pure roles)
+    "qa engineer",
+    "quality engineer",
+    "test engineer",
+    "test specialist",
+    "quality assurance",
+
+    # Design / Art (not engineering)
+    "3d artist", "environment artist", "game artist",
+    "motion designer",
+
+    # Other non-dev
+    "linguist", "translator",
+    "request for proposals",
+    "rfp",
+
     # Web3/blockchain (not in user's stack)
     "smart contract",
     "blockchain engineer",
@@ -74,6 +142,7 @@ _TITLE_REJECT_PATTERNS: list[str] = [
     "defi engineer",
     "crypto engineer",
     "svm engineer",  # Solana Virtual Machine
+
     # Seniority/type we don't want
     "intern ",       # trailing space to avoid matching "internal" / "internet"
     "intern,",
@@ -114,31 +183,27 @@ _ROLE_KEYWORDS: list[str] = [
     "web developer", "web engineer",
     "web application developer",
     "api developer", "api engineer",
-    "platform developer", "platform engineer",
-    "solutions engineer",
+    "platform developer",
+    "internal tools engineer",
     "integration engineer",
     "technical lead",
     "staff engineer",
     "principal engineer",
-    "site reliability engineer", "sre",
-    "cloud engineer",
-    "systems engineer",
     "application developer",
     "application engineer",
 
-    # Languages & frameworks
+    # Languages & frameworks (user's stack)
     "react", "next.js", "nextjs", "vue", "vue.js", "nuxt",
     "typescript", "javascript", "node.js", "nodejs",
     "python", "django", "fastapi", "flask",
     "ruby on rails", "ruby", "rails", "php", "symfony", "laravel",
 
     # Infrastructure & tools
-    "docker", "kubernetes", "ci/cd", "gitlab ci", "github actions",
-    "devops", "site reliability",
+    "docker", "ci/cd", "gitlab ci", "github actions",
 
-    # Data & AI
+    # Data & AI (product-focused)
     "postgresql", "mysql", "graphql", "apollo graphql", "rest api",
-    "llm", "rag", "ai engineer", "machine learning engineer",
+    "llm", "rag", "ai engineer",
 
     # Other tech
     "tailwindcss", "tailwind",
@@ -161,6 +226,19 @@ def passes_role_filter(job: Job) -> bool:
         if pattern in title_lower:
             logger.debug("Role REJECT (title reject '{}'): {}", pattern, job.title)
             return False
+
+    # ── Stage 1b: regex-based rejects (word-boundary sensitive) ──────────
+    # "data engineer" — reject as a standalone role but not as part of
+    # broader titles like "Python Developer - Backend & Data Engineering"
+    if re.search(r"\bdata engineer\b", title_lower):
+        logger.debug("Role REJECT (data engineer): {}", job.title)
+        return False
+
+    # "go developer" / "go engineer" — reject pure Go roles but avoid
+    # matching "Django Developer" (substring "go" in "djan*go*")
+    if re.search(r"\bgo developer\b|\bgo engineer\b|\bgo backend\b", title_lower):
+        logger.debug("Role REJECT (go role): {}", job.title)
+        return False
 
     # Also catch titles that START with "Intern " or equal "Intern"
     title_stripped = title_lower.strip()

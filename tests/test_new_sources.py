@@ -1599,7 +1599,7 @@ class TestNewSourcesFilterIntegration:
             Job(title="Backend Developer", company="Org B",
                 location="Brussels, Belgium", url="https://eurobrussels.com/job_display/1/b",
                 source="eurobrussels", is_remote=False, is_ngo=True),
-            Job(title="DevOps Engineer", company="Org C",
+            Job(title="Full Stack Developer", company="Org C",
                 location="Remote - Worldwide", url="https://devex.com/jobs/c",
                 source="devex", is_remote=True, is_ngo=True),
         ]

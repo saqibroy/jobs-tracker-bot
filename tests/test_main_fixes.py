@@ -137,7 +137,7 @@ class TestPerCompanyCap:
                 posted_at=now - timedelta(days=2),
             ),
             _make_job(
-                title="DevOps Engineer",
+                title="React Developer",
                 company="SpamCorp",
                 location="Remote - Worldwide",
                 url="https://example.com/job/new",
@@ -147,7 +147,7 @@ class TestPerCompanyCap:
         results = _apply_filters(jobs)
         assert len(results) == 2
         result_titles = {r.title for r in results}
-        assert "DevOps Engineer" in result_titles
+        assert "React Developer" in result_titles
         assert "Frontend Developer" in result_titles
         assert "Backend Developer" not in result_titles
 
