@@ -108,6 +108,12 @@ class ReliefWebSource(BaseSource):
             ict_count, extra_kept, extra_total, len(jobs),
         )
 
+        if len(jobs) == 0 and ict_count == 0 and extra_total == 0:
+            logger.warning(
+                "[reliefweb] All 3 RSS feeds returned 0 entries — "
+                "possible network issue or ReliefWeb outage"
+            )
+
         return jobs
 
     @staticmethod
