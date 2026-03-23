@@ -628,26 +628,29 @@ def main():
     if config.COMPANY_BLOCKLIST:
         logger.info("Company blocklist active: {}", config.COMPANY_BLOCKLIST)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    asyncio.run(_async_main(sources))
 
-    # Initialize DB before scheduling
-    loop.run_until_complete(init_db())
 
-    # ── Start health HTTP server ────────────────────────────────────────
+# ── Async entry point — single event loop for everything ────────────────
+
+async def _async_main(sources: list) -> None:
+    """Run scheduler, Discord bot, health server all in one event loop."""
+    # Initialize DB
+    await init_db()
+
+    # Start health HTTP server
     health_runner = None
     try:
         from health import start_health_server, set_jobs_tracked
-        health_runner = loop.run_until_complete(start_health_server())
-        # Set initial jobs count
-        total = loop.run_until_complete(get_total_count())
+        health_runner = await start_health_server()
+        total = await get_total_count()
         set_jobs_tracked(total)
     except Exception:
         logger.exception("Failed to start health server — continuing without it")
 
-    scheduler = AsyncIOScheduler(event_loop=loop)
+    # Set up APScheduler (no event_loop param — uses running loop automatically)
+    scheduler = AsyncIOScheduler()
 
-    # 1. Main job scan — every N minutes
     scheduler.add_job(
         _scheduled_scan,
         "interval",
@@ -657,7 +660,6 @@ def main():
         next_run_time=datetime.now(timezone.utc),  # run immediately on start
     )
 
-    # 2. Digest summary — every N hours
     scheduler.add_job(
         _scheduled_digest,
         "interval",
@@ -666,7 +668,6 @@ def main():
         name="Digest Summary",
     )
 
-    # 3. Health check — every hour
     scheduler.add_job(
         _scheduled_health_check,
         "interval",
@@ -676,18 +677,20 @@ def main():
     )
 
     scheduler.start()
-    logger.info("Scheduler started — press Ctrl+C to stop")
+    logger.info("Scheduler started — {} sources registered", len(sources))
 
-    # ── Send startup notification ──────────────────────────────────────
-    loop.run_until_complete(_send_startup_notification(len(sources)))
+    # Send startup notification
+    await _send_startup_notification(len(sources))
 
-    # ── Discord bot (optional — runs if DISCORD_BOT_TOKEN is set) ──────
+    # Build list of long-running coroutines to gather
+    tasks: list[asyncio.Task] = []
+
+    # ── Discord bot (optional) ─────────────────────────────────────────
     discord_bot = None
     if config.DISCORD_BOT_TOKEN and config.DISCORD_COMMAND_CHANNEL_ID:
         from discord_bot import JobTrackerBot
 
         async def _manual_scan_callback():
-            """Callback for the Discord bot's scan command."""
             sources_list = _get_sources(None)
             return await run_scan(sources_list, dry_run=False)
 
@@ -697,21 +700,19 @@ def main():
             scan_callback=_manual_scan_callback,
         )
 
-        # Update scan timing info for the stats command
         scan_job = scheduler.get_job("scan")
         if scan_job:
-            discord_bot.set_scan_times(
-                last_scan=None,
-                next_scan=scan_job.next_run_time,
-            )
+            discord_bot.set_scan_times(last_scan=None, next_scan=scan_job.next_run_time)
 
-        # Run Discord bot in the same event loop
-        loop.create_task(discord_bot.start(config.DISCORD_BOT_TOKEN))
+        tasks.append(asyncio.create_task(
+            discord_bot.start(config.DISCORD_BOT_TOKEN),
+            name="discord-bot",
+        ))
         logger.info("Discord bot starting (channel: {})", config.DISCORD_COMMAND_CHANNEL_ID)
     else:
         logger.info("Discord bot not configured (set DISCORD_BOT_TOKEN and DISCORD_COMMAND_CHANNEL_ID)")
 
-    # ── Telegram bot commands (optional — runs if TELEGRAM_BOT_TOKEN is set) ──
+    # ── Telegram bot (optional) ────────────────────────────────────────
     telegram_app = None
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         try:
@@ -721,12 +722,10 @@ def main():
             tg_notifier = TelegramNotifier()
 
             async def _tg_scan_callback():
-                """Callback for Telegram /scan command."""
                 sources_list = _get_sources(None)
                 return await run_scan(sources_list, dry_run=False)
 
             async def _tg_stats_callback():
-                """Callback for Telegram /stats command."""
                 await init_db()
                 return await _tg_get_stats()
 
@@ -735,13 +734,10 @@ def main():
                 stats_callback=_tg_stats_callback,
             )
 
-            # Register /commands with BotFather
-            loop.run_until_complete(tg_notifier.register_commands())
-
-            # Start polling in the background (non-blocking)
-            loop.create_task(telegram_app.initialize())
-            loop.create_task(telegram_app.updater.start_polling(drop_pending_updates=True))
-            loop.create_task(telegram_app.start())
+            await tg_notifier.register_commands()
+            await telegram_app.initialize()
+            await telegram_app.updater.start_polling(drop_pending_updates=True)
+            await telegram_app.start()
             logger.info("Telegram bot started with /commands support")
         except Exception:
             logger.exception("Failed to start Telegram bot — continuing without it")
@@ -749,50 +745,64 @@ def main():
     else:
         logger.info("Telegram bot not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
 
-    # Graceful shutdown on SIGINT / SIGTERM
-    def _shutdown(sig, frame):
-        logger.info("Received signal {} — shutting down...", sig)
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
-        if discord_bot:
-            loop.create_task(discord_bot.close())
-        if telegram_app:
-            loop.create_task(telegram_app.updater.stop())
-            loop.create_task(telegram_app.stop())
-            loop.create_task(telegram_app.shutdown())
-        if health_runner:
-            loop.run_until_complete(health_runner.cleanup())
-        loop.stop()
+    # ── Keep alive: wait forever (scheduler runs in background) ────────
+    stop_event = asyncio.Event()
 
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
+    loop = asyncio.get_running_loop()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    # Wait for stop signal
+    tasks.append(asyncio.create_task(stop_event.wait(), name="keepalive"))
 
     try:
-        loop.run_forever()
+        # asyncio.gather: if any task raises, others keep running
+        # We wait until the stop_event task completes (signal received)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+        # Check if stop_event was set or if something crashed
+        for task in done:
+            if task.get_name() != "keepalive" and task.exception():
+                logger.error("Task {} crashed: {}", task.get_name(), task.exception())
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as exc:
-        # Unhandled crash — send notification before exiting
         logger.exception("Unhandled exception — bot is crashing")
         try:
-            loop.run_until_complete(_send_crash_notification(exc))
+            await _send_crash_notification(exc)
         except Exception:
             logger.exception("Failed to send crash notification")
     finally:
+        # ── Graceful shutdown ──────────────────────────────────────────
+        logger.info("Shutting down...")
+
         if scheduler.running:
             scheduler.shutdown(wait=False)
+
+        # Cancel pending tasks
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
         if discord_bot and not discord_bot.is_closed():
-            loop.run_until_complete(discord_bot.close())
+            await discord_bot.close()
+
         if telegram_app:
             try:
-                loop.run_until_complete(telegram_app.updater.stop())
-                loop.run_until_complete(telegram_app.stop())
-                loop.run_until_complete(telegram_app.shutdown())
+                await telegram_app.updater.stop()
+                await telegram_app.stop()
+                await telegram_app.shutdown()
             except Exception:
                 pass
+
         if health_runner:
-            loop.run_until_complete(health_runner.cleanup())
-        loop.close()
+            await health_runner.cleanup()
+
         logger.info("Job Tracker Bot stopped")
 
 
