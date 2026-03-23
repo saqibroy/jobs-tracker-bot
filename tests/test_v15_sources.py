@@ -271,7 +271,7 @@ class TestNoFluffJobsSource:
     async def test_fetch_filters_by_category_and_remote(self):
         """Only remote + wanted-category postings should pass."""
         mock_resp = _mock_response(json_data=SAMPLE_NOFLUFF_RESPONSE)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
             jobs = await self.source.fetch()
         # 4 postings: 2 remote+wanted category, 1 not remote, 1 wrong category
         assert len(jobs) == 2
@@ -289,27 +289,27 @@ class TestNoFluffJobsSource:
             "totalCount": 2,
         }
         mock_resp = _mock_response(json_data=dup_response)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
             jobs = await self.source.fetch()
         assert len(jobs) == 1
 
     @pytest.mark.asyncio
     async def test_fetch_handles_api_error(self):
         mock_resp = _mock_response(status_code=500)
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
             jobs = await self.source.fetch()
         assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_handles_network_error(self):
-        with patch.object(self.source, "_get", new_callable=AsyncMock, side_effect=Exception("timeout")):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, side_effect=Exception("timeout")):
             jobs = await self.source.fetch()
         assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_empty_postings(self):
         mock_resp = _mock_response(json_data={"postings": [], "totalCount": 0})
-        with patch.object(self.source, "_get", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(self.source, "_post", new_callable=AsyncMock, return_value=mock_resp):
             jobs = await self.source.fetch()
         assert jobs == []
 

@@ -389,32 +389,29 @@ async def run_scan(
 ) -> list[Job]:
     """Fetch from all sources, filter, deduplicate, and optionally persist.
 
-    Respects MAX_CONCURRENT_SOURCES to limit peak memory usage.
+    Sources are fetched in small batches (MAX_CONCURRENT_SOURCES at a time).
+    Each batch is fetched, then its raw jobs are merged and the batch
+    results are freed before the next batch starts.  This keeps peak
+    memory well within Docker's 512 MB cgroup limit.
     """
 
     all_jobs: list[Job] = []
+    batch_size = config.MAX_CONCURRENT_SOURCES
+    total_raw = 0
 
-    # Fetch from all sources with concurrency limit
-    max_concurrent = config.MAX_CONCURRENT_SOURCES
-    if max_concurrent >= len(sources):
-        # All at once
-        fetch_tasks = [src.safe_fetch() for src in sources]
-        results = await asyncio.gather(*fetch_tasks)
+    for i in range(0, len(sources), batch_size):
+        batch_sources = sources[i : i + batch_size]
+        results = await asyncio.gather(*[s.safe_fetch() for s in batch_sources])
         for batch in results:
+            total_raw += len(batch)
             all_jobs.extend(batch)
-    else:
-        # Run in batches
-        for i in range(0, len(sources), max_concurrent):
-            batch_sources = sources[i : i + max_concurrent]
-            fetch_tasks = [src.safe_fetch() for src in batch_sources]
-            results = await asyncio.gather(*fetch_tasks)
-            for batch in results:
-                all_jobs.extend(batch)
+        del results  # free HTTP response data eagerly
 
-    logger.info("Total raw jobs fetched: {}", len(all_jobs))
+    logger.info("Total raw jobs fetched: {}", total_raw)
 
     # Apply filters
     filtered = _apply_filters(all_jobs, max_age_days=max_age_days, verbose=verbose)
+    del all_jobs  # free unfiltered list
 
     if dry_run:
         # Print results and exit — don't touch DB or send notifications
@@ -424,6 +421,7 @@ async def run_scan(
     # Deduplicate against DB
     await init_db()
     new_jobs = await filter_unseen(filtered)
+    del filtered  # free pre-dedup list
 
     if new_jobs:
         await save_jobs(new_jobs)
@@ -683,7 +681,7 @@ async def _async_main(sources: list) -> None:
     await _send_startup_notification(len(sources))
 
     # Build list of long-running coroutines to gather
-    tasks: list[asyncio.Task] = []
+    background_tasks: list[asyncio.Task] = []
 
     # ── Discord bot (optional) ─────────────────────────────────────────
     discord_bot = None
@@ -704,8 +702,22 @@ async def _async_main(sources: list) -> None:
         if scan_job:
             discord_bot.set_scan_times(last_scan=None, next_scan=scan_job.next_run_time)
 
-        tasks.append(asyncio.create_task(
-            discord_bot.start(config.DISCORD_BOT_TOKEN),
+        async def _run_discord_forever():
+            """Keep the Discord bot running, reconnect on failure."""
+            while True:
+                try:
+                    await discord_bot.start(config.DISCORD_BOT_TOKEN)
+                except Exception as exc:
+                    logger.error("Discord bot disconnected: {} — reconnecting in 30s", exc)
+                    if not discord_bot.is_closed():
+                        try:
+                            await discord_bot.close()
+                        except Exception:
+                            pass
+                    await asyncio.sleep(30)
+
+        background_tasks.append(asyncio.create_task(
+            _run_discord_forever(),
             name="discord-bot",
         ))
         logger.info("Discord bot starting (channel: {})", config.DISCORD_COMMAND_CHANNEL_ID)
@@ -745,7 +757,7 @@ async def _async_main(sources: list) -> None:
     else:
         logger.info("Telegram bot not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
 
-    # ── Keep alive: wait forever (scheduler runs in background) ────────
+    # ── Keep alive: wait for shutdown signal ──────────────────────────
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -757,18 +769,11 @@ async def _async_main(sources: list) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
-    # Wait for stop signal
-    tasks.append(asyncio.create_task(stop_event.wait(), name="keepalive"))
-
     try:
-        # asyncio.gather: if any task raises, others keep running
-        # We wait until the stop_event task completes (signal received)
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
-        # Check if stop_event was set or if something crashed
-        for task in done:
-            if task.get_name() != "keepalive" and task.exception():
-                logger.error("Task {} crashed: {}", task.get_name(), task.exception())
+        # Block here until a signal is received.
+        # Scheduler runs jobs in the background via the event loop.
+        # Discord bot runs as a background task.
+        await stop_event.wait()
     except (KeyboardInterrupt, SystemExit):
         pass
     except Exception as exc:
@@ -784,13 +789,16 @@ async def _async_main(sources: list) -> None:
         if scheduler.running:
             scheduler.shutdown(wait=False)
 
-        # Cancel pending tasks
-        for task in tasks:
+        # Cancel background tasks (discord bot, etc.)
+        for task in background_tasks:
             if not task.done():
                 task.cancel()
 
         if discord_bot and not discord_bot.is_closed():
-            await discord_bot.close()
+            try:
+                await discord_bot.close()
+            except Exception:
+                pass
 
         if telegram_app:
             try:

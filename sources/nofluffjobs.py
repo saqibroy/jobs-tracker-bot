@@ -2,17 +2,13 @@
 
 URL: https://nofluffjobs.com/
 
-NoFluffJobs is one of the largest tech job boards in Central Europe,
-focused on Poland but with listings across the EU.  Their public API
-returns **all** postings in a single call (~20k+), so we filter
-client-side by category and remote status.
+Uses the **paginated search API** (POST /api/search/posting) instead of
+the bulk listing endpoint, which returns a 150 MB+ JSON blob that blows
+past Docker's memory limit.
 
-API endpoint:
-    GET https://nofluffjobs.com/api/posting
-    No authentication required.
-
-Categories we care about: backend, fullstack, devops, data, mobile,
-architecture, security, artificialIntelligence.
+Each page returns ~300 postings (~2 MB).  We fetch up to
+``_MAX_PAGES`` pages and apply client-side filters for remote status
+and recency.
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ from pydantic import ValidationError
 from models.job import Job
 from sources.base import BaseSource
 
-_API_URL = "https://nofluffjobs.com/api/posting"
+_SEARCH_URL = "https://nofluffjobs.com/api/search/posting"
 
 # Categories relevant to software/data engineering
 _WANTED_CATEGORIES: set[str] = {
@@ -36,7 +32,7 @@ _WANTED_CATEGORIES: set[str] = {
     "mobile",
     "architecture",
     "security",
-    "artificialIntelligence",
+    "artificialintelligence",
     "frontend",
     "embedded",
 }
@@ -44,73 +40,136 @@ _WANTED_CATEGORIES: set[str] = {
 # Only consider jobs posted within the last 14 days
 _MAX_AGE_MS = 14 * 24 * 3600 * 1000
 
+# How many search pages to fetch (each page ≈ 300 postings, ~2 MB)
+_MAX_PAGES = 2
+
 
 class NoFluffJobsSource(BaseSource):
-    """NoFluffJobs — Central European tech board with public JSON API."""
+    """NoFluffJobs — Central European tech board with paginated search API."""
 
     name = "nofluffjobs"
 
     async def fetch(self) -> list[Job]:
-        try:
-            resp = await self._get(
-                _API_URL,
-                headers={"Accept": "application/json"},
-            )
-        except Exception as exc:
-            logger.error("[{}] API request failed: {}", self.name, exc)
-            return []
-
-        if resp.status_code != 200:
-            logger.warning("[{}] API returned {}", self.name, resp.status_code)
-            return []
-
-        data = resp.json()
-        postings = data.get("postings") or []
-        if not postings:
-            logger.warning("[{}] No postings in API response", self.name)
-            return []
-
         all_jobs: list[Job] = []
         seen_ids: set[str] = set()
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        total_scanned = 0
 
-        for posting in postings:
-            # Client-side filtering: category + remote
-            category = (posting.get("category") or "").lower()
-            if category not in _WANTED_CATEGORIES:
-                continue
+        for page in range(1, _MAX_PAGES + 1):
+            postings = await self._fetch_page(page)
+            if not postings:
+                break
 
-            # Must be fully remote
-            is_remote = posting.get("fullyRemote", False)
-            if not is_remote:
-                location_data = posting.get("location") or {}
-                is_remote = location_data.get("fullyRemote", False)
-            if not is_remote:
-                continue
+            total_scanned += len(postings)
+            new_this_page = 0
 
-            # Skip old postings (>14 days)
-            posted_ts = posting.get("posted") or 0
-            if posted_ts and (now_ms - posted_ts) > _MAX_AGE_MS:
-                continue
-
-            # Dedup by posting ID
-            posting_id = posting.get("id", "")
-            if posting_id in seen_ids:
-                continue
-            seen_ids.add(posting_id)
-
-            try:
-                job = self._parse_posting(posting)
+            for posting in postings:
+                job = self._process_posting(posting, seen_ids, now_ms)
                 if job:
                     all_jobs.append(job)
-            except (ValidationError, KeyError, TypeError) as exc:
-                logger.debug("[{}] Skipping posting: {}", self.name, exc)
+                    new_this_page += 1
+
+            # If most results on this page are too old, stop paging
+            if new_this_page == 0:
+                break
 
         logger.info(
-            "[{}] Fetched {} remote tech jobs (from {} total postings)",
-            self.name, len(all_jobs), len(postings),
+            "[{}] Fetched {} remote tech jobs (from {} scanned across {} page(s))",
+            self.name, len(all_jobs), total_scanned, min(page, _MAX_PAGES),
         )
         return all_jobs
+
+    # ------------------------------------------------------------------
+    # HTTP
+    # ------------------------------------------------------------------
+
+    async def _fetch_page(self, page: int) -> list[dict]:
+        """Fetch one page from the search endpoint."""
+        try:
+            resp = await self._post(
+                _SEARCH_URL,
+                json_body={
+                    "criteriaSearch": {
+                        "category": list(_WANTED_CATEGORIES),
+                    },
+                    "page": page,
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                params={
+                    "salaryCurrency": "EUR",
+                    "salaryPeriod": "month",
+                },
+            )
+        except Exception as exc:
+            logger.error("[{}] Search page {} failed: {}", self.name, page, exc)
+            return []
+
+        if resp.status_code != 200:
+            logger.warning("[{}] Search page {} returned {}", self.name, page, resp.status_code)
+            return []
+
+        data = resp.json()
+        return data.get("postings") or []
+
+    # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
+
+    def _process_posting(
+        self, posting: dict, seen_ids: set[str], now_ms: int
+    ) -> Job | None:
+        """Apply client-side filters and parse one posting."""
+        # Category filter
+        category = (posting.get("category") or "").lower()
+        if category not in _WANTED_CATEGORIES:
+            return None
+
+        # Remote: either fullyRemote flag or "Remote" city in places
+        if not self._is_remote(posting):
+            return None
+
+        # Recency
+        posted_ts = posting.get("posted") or 0
+        if posted_ts and (now_ms - posted_ts) > _MAX_AGE_MS:
+            return None
+
+        # Dedup
+        posting_id = posting.get("id", "")
+        if posting_id in seen_ids:
+            return None
+        seen_ids.add(posting_id)
+
+        try:
+            return self._parse_posting(posting)
+        except (ValidationError, KeyError, TypeError) as exc:
+            logger.debug("[{}] Skipping posting: {}", self.name, exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Remote detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_remote(posting: dict) -> bool:
+        """Check whether the posting is fully remote."""
+        if posting.get("fullyRemote", False):
+            return True
+
+        location_data = posting.get("location") or {}
+        if location_data.get("fullyRemote", False):
+            return True
+
+        # Search API marks some remote jobs with city="Remote"
+        places = location_data.get("places") or []
+        for place in places:
+            city = (place.get("city") or "").strip().lower()
+            if city == "remote":
+                return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Posting -> Job

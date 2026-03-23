@@ -79,13 +79,14 @@ class BaseSource(ABC):
         *,
         json_body: dict | None = None,
         headers: dict | None = None,
+        params: dict | None = None,
     ) -> httpx.Response:
         """POST with retries + exponential backoff (for JSON APIs like Algolia)."""
         last_exc: Exception | None = None
         for attempt in range(1, config.HTTP_MAX_RETRIES + 1):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    resp = await client.post(url, json=json_body, headers=headers)
+                    resp = await client.post(url, json=json_body, headers=headers, params=params)
 
                     if resp.status_code == 429:
                         logger.warning(

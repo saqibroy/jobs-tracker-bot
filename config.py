@@ -58,7 +58,7 @@ FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true
 MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
 
 # ── Concurrency ────────────────────────────────────────────────────────────
-MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "6"))
+MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "3"))
 
 # ── Health endpoint ────────────────────────────────────────────────────────
 HEALTH_PORT: int = int(_get("HEALTH_PORT", "8080"))
