@@ -1,11 +1,13 @@
-"""Tests for the weekly NGO digest feature and techjobsforgood Cloudflare handling.
+"""Tests for the weekly NGO digest feature, techjobsforgood Cloudflare handling,
+and match_score backfill.
 
 Covers:
   - Weekly digest: DB queries, Discord embed, empty state, CLI flag
   - TechJobsForGood: Cloudflare WAF detection, fallback URL, enhanced headers
   - Config: WEEKLY_DIGEST_ENABLED, WEEKLY_DIGEST_DAY, WEEKLY_DIGEST_HOUR
   - Scheduler: CronTrigger job registration
-  - match_score: DB schema migration, persistence
+  - match_score: DB schema migration, persistence, backfill
+  - Backfill: --backfill-scores CLI flag, score computation, edge cases
 """
 
 from __future__ import annotations
@@ -612,3 +614,259 @@ class TestMatchScoreMigration:
         # Second init should not crash
         await init_db()
         await init_db()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Backfill match scores
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestBackfillMatchScores:
+    """Test backfill_match_scores() recomputes scores for existing jobs."""
+
+    @pytest.mark.asyncio
+    async def test_backfills_zero_score_jobs(self, tmp_db):
+        """Jobs with match_score=0 get re-scored when they have matching keywords."""
+        from storage.database import save_jobs, backfill_match_scores
+        import aiosqlite
+
+        # Save a job with tags that should score > 0, but force score=0
+        job = _make_job(
+            title="React TypeScript Developer",
+            company="Good NGO",
+            tags=["react", "typescript", "next.js"],
+            is_ngo=True,
+            match_score=0,
+        )
+        await save_jobs([job])
+
+        # Verify it's 0 before backfill
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            row = await cur.fetchone()
+            assert row[0] == 0
+
+        # Run backfill
+        updated = await backfill_match_scores()
+        assert updated >= 1
+
+        # Verify it's > 0 after backfill
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            row = await cur.fetchone()
+            assert row[0] > 0
+
+    @pytest.mark.asyncio
+    async def test_skips_already_scored(self, tmp_db):
+        """Jobs that already have match_score > 0 are not re-processed."""
+        from storage.database import save_jobs, backfill_match_scores
+        import aiosqlite
+
+        job = _make_job(
+            title="React Developer",
+            company="Corp",
+            tags=["react"],
+            match_score=75,
+        )
+        await save_jobs([job])
+
+        updated = await backfill_match_scores()
+        assert updated == 0
+
+        # Score should remain 75
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            row = await cur.fetchone()
+            assert row[0] == 75
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_when_no_keywords_match(self, tmp_db):
+        """Jobs with no matching keywords stay at 0 (not updated)."""
+        from storage.database import save_jobs, backfill_match_scores
+
+        job = _make_job(
+            title="Office Manager",
+            company="Random Corp",
+            tags=["admin", "office"],
+            match_score=0,
+        )
+        await save_jobs([job])
+
+        updated = await backfill_match_scores()
+        assert updated == 0
+
+    @pytest.mark.asyncio
+    async def test_returns_count_of_updated(self, tmp_db):
+        """Return value is the number of jobs actually updated."""
+        from storage.database import save_jobs, backfill_match_scores
+
+        jobs = [
+            _make_job(title="React Dev", url="https://a.com/1", tags=["react"], match_score=0),
+            _make_job(title="Python Dev", url="https://b.com/2", tags=["python", "django"], match_score=0),
+            _make_job(title="Office Admin", url="https://c.com/3", tags=["admin"], match_score=0),
+        ]
+        await save_jobs(jobs)
+
+        updated = await backfill_match_scores()
+        # React and Python should score > 0, Office Admin should not
+        assert updated == 2
+
+    @pytest.mark.asyncio
+    async def test_handles_empty_db(self, tmp_db):
+        """Returns 0 when no jobs exist."""
+        from storage.database import backfill_match_scores
+
+        updated = await backfill_match_scores()
+        assert updated == 0
+
+    @pytest.mark.asyncio
+    async def test_handles_null_tags(self, tmp_db):
+        """Jobs with NULL tags don't crash the backfill."""
+        from storage.database import backfill_match_scores
+        import aiosqlite
+
+        # Insert directly with NULL tags to test robustness
+        async with aiosqlite.connect(tmp_db) as db:
+            await db.execute(
+                """
+                INSERT INTO jobs
+                    (id, title, company, url, source, fetched_at, match_score, tags)
+                VALUES (?, ?, ?, ?, ?, ?, 0, NULL)
+                """,
+                ("test-null", "Generic Dev", "Corp", "https://x.com/1",
+                 "remotive", "2026-03-23T00:00:00+00:00"),
+            )
+            await db.commit()
+
+        # Should not crash
+        updated = await backfill_match_scores()
+        assert isinstance(updated, int)
+
+    @pytest.mark.asyncio
+    async def test_handles_null_description(self, tmp_db):
+        """Jobs with NULL description are scored from title+tags."""
+        from storage.database import save_jobs, backfill_match_scores
+        import aiosqlite
+
+        job = _make_job(
+            title="Senior React Developer",
+            company="Startup",
+            tags=["react", "typescript"],
+            description=None,
+            match_score=0,
+        )
+        await save_jobs([job])
+
+        updated = await backfill_match_scores()
+        assert updated >= 1
+
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            row = await cur.fetchone()
+            assert row[0] > 0
+
+    @pytest.mark.asyncio
+    async def test_ngo_bonus_applied(self, tmp_db):
+        """NGO jobs get the NGO bonus during backfill."""
+        from storage.database import save_jobs, backfill_match_scores
+        import aiosqlite
+
+        ngo_job = _make_job(
+            title="Web Developer",
+            company="UNICEF",
+            url="https://ngo.com/1",
+            is_ngo=True,
+            tags=["javascript"],
+            match_score=0,
+        )
+        gen_job = _make_job(
+            title="Web Developer",
+            company="Corp",
+            url="https://gen.com/2",
+            is_ngo=False,
+            tags=["javascript"],
+            match_score=0,
+        )
+        await save_jobs([ngo_job, gen_job])
+        await backfill_match_scores()
+
+        async with aiosqlite.connect(tmp_db) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT is_ngo, match_score FROM jobs ORDER BY is_ngo DESC")
+            rows = await cur.fetchall()
+            ngo_score = rows[0]["match_score"]
+            gen_score = rows[1]["match_score"]
+            # NGO should score higher due to the NGO bonus
+            assert ngo_score > gen_score
+
+    @pytest.mark.asyncio
+    async def test_idempotent(self, tmp_db):
+        """Running backfill twice produces the same scores."""
+        from storage.database import save_jobs, backfill_match_scores
+        import aiosqlite
+
+        job = _make_job(title="React Developer", tags=["react", "next.js"], match_score=0)
+        await save_jobs([job])
+
+        await backfill_match_scores()
+
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            score_after_first = (await cur.fetchone())[0]
+
+        # Reset to 0 and run again
+        async with aiosqlite.connect(tmp_db) as db:
+            await db.execute("UPDATE jobs SET match_score = 0")
+            await db.commit()
+
+        await backfill_match_scores()
+
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT match_score FROM jobs")
+            score_after_second = (await cur.fetchone())[0]
+
+        assert score_after_first == score_after_second
+
+
+class TestBackfillCli:
+    """Test --backfill-scores CLI argument."""
+
+    def test_backfill_scores_arg_in_parser(self):
+        """The --backfill-scores flag is registered in argparse."""
+        import argparse
+        from main import main as main_func
+
+        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
+            mock_parse.return_value = argparse.Namespace(
+                dry_run=False, source=None, max_age=None, verbose=False,
+                stats=False, weekly_digest=False, backfill_scores=True,
+            )
+            with patch("main.asyncio.run") as mock_run:
+                with patch("main.logger"):
+                    try:
+                        main_func()
+                    except SystemExit:
+                        pass
+
+            # asyncio.run should have been called (for _run_backfill_cli)
+            mock_run.assert_called_once()
+
+    def test_run_backfill_cli_calls_backfill(self):
+        """_run_backfill_cli initialises DB and runs backfill."""
+        import asyncio
+        from main import _run_backfill_cli
+
+        with patch("main.init_db", new_callable=AsyncMock) as mock_init:
+            with patch("main.backfill_match_scores", new_callable=AsyncMock, return_value=42) as mock_backfill:
+                asyncio.get_event_loop().run_until_complete(_run_backfill_cli())
+                mock_init.assert_called_once()
+                mock_backfill.assert_called_once()
+
+    def test_run_backfill_cli_is_importable(self):
+        """The CLI wrapper is importable from main."""
+        from main import _run_backfill_cli
+        assert callable(_run_backfill_cli)
+
+    def test_backfill_match_scores_is_importable(self):
+        """The backfill function is importable from storage.database."""
+        from storage.database import backfill_match_scores
+        assert callable(backfill_match_scores)

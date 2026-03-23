@@ -288,3 +288,62 @@ async def get_weekly_general_count(days: int = 7) -> int:
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+async def backfill_match_scores() -> int:
+    """Re-compute match_score for all jobs that have score = 0 or NULL.
+
+    Reconstructs a minimal Job object from each DB row, runs
+    ``compute_match_score()``, and writes the result back.
+
+    Returns the number of rows updated.
+    """
+    from filters.match import compute_match_score
+
+    path = await _db_path()
+    updated = 0
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT id, title, company, location, is_remote, remote_scope,
+                   url, description, salary, tags, source, is_ngo
+            FROM jobs
+            WHERE match_score IS NULL OR match_score = 0
+            """
+        )
+        rows = await cursor.fetchall()
+
+        for row in rows:
+            tags_str = row["tags"] or ""
+            tags_list = [t.strip() for t in tags_str.split(",") if t.strip()]
+            try:
+                job = Job(
+                    title=row["title"],
+                    company=row["company"],
+                    location=row["location"] or "Remote",
+                    is_remote=bool(row["is_remote"]),
+                    remote_scope=row["remote_scope"],
+                    url=row["url"],
+                    description=row["description"],
+                    salary=row["salary"],
+                    tags=tags_list,
+                    source=row["source"] or "unknown",
+                    is_ngo=bool(row["is_ngo"]),
+                )
+            except Exception as exc:
+                logger.debug("Backfill: skip row {}: {}", row["id"], exc)
+                continue
+
+            score = compute_match_score(job)
+            if score > 0:
+                await db.execute(
+                    "UPDATE jobs SET match_score = ? WHERE id = ?",
+                    (score, row["id"]),
+                )
+                updated += 1
+
+        await db.commit()
+
+    logger.info("Backfill: updated {} / {} jobs with match scores", updated, len(rows))
+    return updated

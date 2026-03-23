@@ -6,6 +6,7 @@ Supports:
   python main.py --dry-run --verbose    # show rejected jobs with reasons
   python main.py --stats                # show database statistics
   python main.py --weekly-digest        # send the weekly NGO digest now
+  python main.py --backfill-scores      # re-score all jobs with match_score=0
   python main.py                        # full scheduler mode (APScheduler)
 """
 
@@ -53,6 +54,7 @@ from sources.techjobsforgood import TechJobsForGoodSource
 from sources.themuse import TheMuseSource
 from sources.weworkremotely import WeWorkRemotelySource
 from storage.database import (
+    backfill_match_scores,
     filter_unseen,
     get_recent_unnotified,
     get_stats,
@@ -625,6 +627,11 @@ def main():
         action="store_true",
         help="Send the weekly NGO digest immediately and exit.",
     )
+    parser.add_argument(
+        "--backfill-scores",
+        action="store_true",
+        help="Re-compute match scores for all jobs with score=0 and exit.",
+    )
     args = parser.parse_args()
 
     # ── Stats mode — query DB and print summary ───────────────────────
@@ -636,6 +643,12 @@ def main():
     if args.weekly_digest:
         logger.info("Sending weekly NGO digest (manual trigger)...")
         asyncio.run(_run_weekly_digest_cli())
+        return
+
+    # ── Backfill match scores ─────────────────────────────────────────
+    if args.backfill_scores:
+        logger.info("Backfilling match scores for existing jobs...")
+        asyncio.run(_run_backfill_cli())
         return
 
     sources = _get_sources(args.source)
@@ -1125,6 +1138,13 @@ async def _run_weekly_digest_cli() -> None:
     """CLI wrapper: init DB, send digest, exit."""
     await init_db()
     await send_weekly_ngo_digest()
+
+
+async def _run_backfill_cli() -> None:
+    """CLI wrapper: init DB, backfill match scores, print results."""
+    await init_db()
+    updated = await backfill_match_scores()
+    print(f"\n✅ Backfill complete: {updated} jobs scored")
 
 
 # ── Startup / crash notifications ──────────────────────────────────────────
