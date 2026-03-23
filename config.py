@@ -33,6 +33,11 @@ TELEGRAM_CHAT_ID: str = _get("TELEGRAM_CHAT_ID")
 SCAN_INTERVAL_MINUTES: int = int(_get("SCAN_INTERVAL_MINUTES", "45"))
 DIGEST_INTERVAL_HOURS: int = int(_get("DIGEST_INTERVAL_HOURS", "6"))
 
+# Weekly NGO digest (Monday morning summary)
+WEEKLY_DIGEST_ENABLED: bool = _get("WEEKLY_DIGEST_ENABLED", "true").lower() in ("true", "1", "yes")
+WEEKLY_DIGEST_DAY: str = _get("WEEKLY_DIGEST_DAY", "mon")  # mon, tue, wed, ...
+WEEKLY_DIGEST_HOUR: int = int(_get("WEEKLY_DIGEST_HOUR", "8"))  # UTC hour
+
 # ── Filters ────────────────────────────────────────────────────────────────
 LOCATION_ALLOWLIST: list[str] = _get_list(
     "LOCATION_ALLOWLIST", "worldwide,eu,europe,germany,berlin,remote"

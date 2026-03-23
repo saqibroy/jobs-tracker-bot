@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     tags        TEXT,
     source      TEXT,
     is_ngo      INTEGER DEFAULT 0,
+    match_score INTEGER DEFAULT 0,
     posted_at   TEXT,
     fetched_at  TEXT NOT NULL,
     notified    INTEGER DEFAULT 0
@@ -38,6 +39,11 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 _CREATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_content_hash ON jobs(content_hash);
+"""
+
+# Migration: add match_score column for existing databases
+_ADD_MATCH_SCORE_COL = """
+ALTER TABLE jobs ADD COLUMN match_score INTEGER DEFAULT 0;
 """
 
 
@@ -49,11 +55,17 @@ async def _db_path() -> str:
 
 
 async def init_db() -> None:
-    """Create the jobs table if it doesn't exist."""
+    """Create the jobs table if it doesn't exist, and run migrations."""
     path = await _db_path()
     async with aiosqlite.connect(path) as db:
         await db.execute(_CREATE_TABLE)
         await db.execute(_CREATE_INDEX)
+        # Migration: add match_score column if it doesn't exist
+        try:
+            await db.execute(_ADD_MATCH_SCORE_COL)
+            logger.debug("Migration: added match_score column")
+        except Exception:
+            pass  # column already exists
         await db.commit()
     logger.info("Database initialized at {}", path)
 
@@ -105,8 +117,8 @@ async def save_jobs(jobs: list[Job]) -> None:
                 INSERT OR IGNORE INTO jobs
                     (id, content_hash, title, company, location, is_remote,
                      remote_scope, url, description, salary, tags, source,
-                     is_ngo, posted_at, fetched_at, notified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                     is_ngo, match_score, posted_at, fetched_at, notified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     job.id,
@@ -122,6 +134,7 @@ async def save_jobs(jobs: list[Job]) -> None:
                     ",".join(job.tags),
                     job.source,
                     int(job.is_ngo),
+                    job.match_score,
                     job.posted_at.isoformat() if job.posted_at else None,
                     job.fetched_at.isoformat(),
                 ),
@@ -234,3 +247,44 @@ async def get_stats() -> dict:
             "top_companies": top_companies,
             "last_fetched_at": last_fetched_at,
         }
+
+
+async def get_weekly_ngo_jobs(days: int = 7, limit: int = 20) -> list[dict]:
+    """Get NGO jobs from the last N days, sorted by match_score descending.
+
+    Returns a list of dicts (one per job) with all DB columns.
+    Used by the weekly NGO digest.
+    """
+    path = await _db_path()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT * FROM jobs
+            WHERE is_ngo = 1
+              AND fetched_at > datetime(?, '-' || ? || ' days')
+            ORDER BY match_score DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            (now_iso, days, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_weekly_general_count(days: int = 7) -> int:
+    """Count non-NGO jobs tracked in the last N days."""
+    path = await _db_path()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*) FROM jobs
+            WHERE is_ngo = 0
+              AND fetched_at > datetime(?, '-' || ? || ' days')
+            """,
+            (now_iso, days),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0

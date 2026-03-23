@@ -11,9 +11,15 @@ Location note: Tech Jobs for Good is US-heavy but has worldwide/EU
 remote roles.  We set ``is_ngo=True`` and let the standard location
 filter handle EU/worldwide acceptance.
 
-Note: This site uses Cloudflare.  From datacenter IPs (cloud servers)
-the request may be blocked.  From residential IPs or with a proxy it
-works fine.  We detect the block and log a warning.
+Note: This site uses Cloudflare WAF with aggressive IP-reputation
+blocking.  As of March 2026 it blocks ALL automated traffic including
+headless Chrome, curl-cffi (TLS fingerprint impersonation), nodriver,
+and cloudscraper.  The 403 is not a JS challenge — it's a WAF rule.
+
+Current status: DISABLED (Cloudflare WAF hard block).
+The source gracefully returns [] and logs a warning once per scan.
+To re-enable: check if Cloudflare rules have changed, or if the site
+has added an RSS feed or public API.
 """
 
 from __future__ import annotations
@@ -30,14 +36,25 @@ from sources.base import BaseSource
 _BASE_URL = "https://www.techjobsforgood.com"
 _LISTING_URL = f"{_BASE_URL}/jobs/?q=&job_type=full-time&remote=on"
 
-# User-Agent to reduce Cloudflare challenges
+# Full browser-like header set to maximise chance of bypassing Cloudflare
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;"
+        "q=0.9,image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.techjobsforgood.com/",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
@@ -50,11 +67,17 @@ class TechJobsForGoodSource(BaseSource):
             logger.warning("[{}] Empty or very short response — possibly blocked", self.name)
             return []
 
-        # Detect hard Cloudflare block (IP-based, not solvable)
-        if "you have been blocked" in html.lower() or "cf-error-details" in html:
+        # Detect hard Cloudflare block (WAF rule, not solvable)
+        if (
+            "you have been blocked" in html.lower()
+            or "cf-error-details" in html
+            or "attention required" in html.lower()
+            or "cloudflare ray id" in html.lower()
+        ):
             logger.warning(
-                "[{}] Cloudflare hard block — site blocks cloud/DC IPs. "
-                "This source only works from residential IPs or with a proxy.",
+                "[{}] Cloudflare WAF block — site blocks all automated traffic. "
+                "This source is currently disabled until the site changes its "
+                "Cloudflare rules or adds an RSS feed / public API.",
                 self.name,
             )
             return []
@@ -93,16 +116,31 @@ class TechJobsForGoodSource(BaseSource):
         return jobs
 
     async def _fetch_html(self) -> str:
-        """Fetch HTML via httpx."""
-        try:
-            resp = await self._get(_LISTING_URL, headers=_HEADERS)
-            if resp.status_code == 429:
-                logger.warning("[{}] Rate-limited (429)", self.name)
-                return ""
-            return resp.text
-        except Exception as exc:
-            logger.error("[{}] httpx fetch failed: {}", self.name, exc)
-            return ""
+        """Fetch HTML via httpx.
+
+        Tries the full listing URL first, then falls back to the
+        bare /jobs/ path (some WAF rules are per-query-string).
+        """
+        urls_to_try = [
+            _LISTING_URL,
+            f"{_BASE_URL}/jobs/",
+        ]
+        for url in urls_to_try:
+            try:
+                resp = await self._get(url, headers=_HEADERS)
+                if resp.status_code == 429:
+                    logger.warning("[{}] Rate-limited (429)", self.name)
+                    return ""
+                if resp.status_code == 403:
+                    logger.debug("[{}] 403 on {}", self.name, url)
+                    continue  # try next URL
+                return resp.text
+            except Exception as exc:
+                logger.debug("[{}] Failed on {}: {}", self.name, url, exc)
+                continue
+
+        logger.error("[{}] All URL attempts returned 403/error", self.name)
+        return ""
 
     def _parse_card(self, card) -> Job | None:
         """Parse a single job card element into a Job."""

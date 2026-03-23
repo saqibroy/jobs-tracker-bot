@@ -5,6 +5,7 @@ Supports:
   python main.py --dry-run --source remotive   # test a single source
   python main.py --dry-run --verbose    # show rejected jobs with reasons
   python main.py --stats                # show database statistics
+  python main.py --weekly-digest        # send the weekly NGO digest now
   python main.py                        # full scheduler mode (APScheduler)
 """
 
@@ -21,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
 import config
@@ -55,6 +57,8 @@ from storage.database import (
     get_recent_unnotified,
     get_stats,
     get_total_count,
+    get_weekly_general_count,
+    get_weekly_ngo_jobs,
     init_db,
     mark_notified,
     save_jobs,
@@ -616,11 +620,22 @@ def main():
         action="store_true",
         help="Show database statistics and exit.",
     )
+    parser.add_argument(
+        "--weekly-digest",
+        action="store_true",
+        help="Send the weekly NGO digest immediately and exit.",
+    )
     args = parser.parse_args()
 
     # ── Stats mode — query DB and print summary ───────────────────────
     if args.stats:
         asyncio.run(_show_stats())
+        return
+
+    # ── Weekly digest mode — send immediately ─────────────────────────
+    if args.weekly_digest:
+        logger.info("Sending weekly NGO digest (manual trigger)...")
+        asyncio.run(_run_weekly_digest_cli())
         return
 
     sources = _get_sources(args.source)
@@ -694,6 +709,23 @@ async def _async_main(sources: list) -> None:
         id="health",
         name="Health Check",
     )
+
+    # Weekly NGO digest — default: Monday 08:00 UTC
+    if config.WEEKLY_DIGEST_ENABLED:
+        scheduler.add_job(
+            send_weekly_ngo_digest,
+            CronTrigger(
+                day_of_week=config.WEEKLY_DIGEST_DAY,
+                hour=config.WEEKLY_DIGEST_HOUR,
+                minute=0,
+            ),
+            id="weekly_ngo_digest",
+            name="Weekly NGO Digest",
+        )
+        logger.info(
+            "Weekly NGO digest scheduled: {}s at {:02d}:00 UTC",
+            config.WEEKLY_DIGEST_DAY.upper(), config.WEEKLY_DIGEST_HOUR,
+        )
 
     scheduler.start()
     logger.info("Scheduler started — {} sources registered", len(sources))
@@ -974,6 +1006,125 @@ async def _scheduled_health_check() -> None:
             pass
     except Exception:
         logger.exception("Health check failed")
+
+
+# ── Weekly NGO digest ──────────────────────────────────────────────────────
+
+async def send_weekly_ngo_digest() -> None:
+    """Build and send a weekly digest of top NGO jobs to Discord.
+
+    Queries the DB for NGO jobs from the last 7 days, sorted by match_score,
+    and sends a rich embed to the NGO webhook (or main webhook).
+    """
+    try:
+        ngo_jobs = await get_weekly_ngo_jobs(days=7, limit=20)
+        general_count = await get_weekly_general_count(days=7)
+
+        logger.info(
+            "📬 Weekly digest: {} NGO jobs, {} general jobs this week",
+            len(ngo_jobs), general_count,
+        )
+
+        webhook_url = config.DISCORD_WEBHOOK_URL_NGO or config.DISCORD_WEBHOOK_URL
+        if not webhook_url:
+            logger.warning("No Discord webhook configured — skipping weekly digest")
+            return
+
+        from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
+        from filters.match import match_score_bar
+        from notifiers.discord_notifier import _SOURCE_ICONS, _format_relative_time
+
+        today = datetime.now(timezone.utc)
+        week_start = today - timedelta(days=7)
+        subtitle = f"Week of {week_start.strftime('%b %d')} – {today.strftime('%b %d, %Y')}"
+
+        if ngo_jobs:
+            # Build job lines (up to 10 in the embed)
+            job_lines: list[str] = []
+            for job in ngo_jobs[:10]:
+                source_icon = _SOURCE_ICONS.get(job.get("source", ""), "🌐")
+                score = job.get("match_score", 0)
+                bar = match_score_bar(score) if score > 0 else ""
+                score_str = f"  📊 {bar} {score}%" if score > 0 else ""
+
+                scope = job.get("remote_scope", "")
+                scope_str = f"  🌍 {scope}" if scope else ""
+
+                # Parse fetched_at for relative time
+                fetched = job.get("fetched_at", "")
+                if fetched:
+                    try:
+                        dt = datetime.fromisoformat(fetched)
+                        time_str = _format_relative_time(dt)
+                    except (ValueError, TypeError):
+                        time_str = ""
+                else:
+                    time_str = ""
+
+                url = job.get("url", "")
+                title = job.get("title", "Unknown")
+                company = job.get("company", "Unknown")
+                source = job.get("source", "unknown")
+
+                line = (
+                    f"{source_icon} **[{title}]({url})**\n"
+                    f"> 🏢 {company}  ·  `{source}`{scope_str}{score_str}\n"
+                    f"> 🕐 {time_str}" if time_str else
+                    f"{source_icon} **[{title}]({url})**\n"
+                    f"> 🏢 {company}  ·  `{source}`{scope_str}{score_str}"
+                )
+                job_lines.append(line)
+
+            description = "\n\n".join(job_lines)
+            if len(ngo_jobs) > 10:
+                description += f"\n\n*…and {len(ngo_jobs) - 10} more NGO jobs this week*"
+
+            webhook = AsyncDiscordWebhook(url=webhook_url, content="")
+            embed = DiscordEmbed(
+                title="🗓️  Weekly NGO Jobs Digest",
+                description=description,
+                color=0x2ECC71,  # green
+            )
+            embed.add_embed_field(
+                name="📊 This Week",
+                value=(
+                    f"🟢 **{len(ngo_jobs)}** NGO jobs\n"
+                    f"🔵 **{general_count}** general jobs"
+                ),
+                inline=True,
+            )
+            embed.set_footer(text=f"Job Tracker Bot · {subtitle}")
+            embed.set_timestamp(today.isoformat())
+            webhook.add_embed(embed)
+            await webhook.execute()
+            logger.info("📬 Weekly NGO digest sent ({} jobs)", len(ngo_jobs))
+        else:
+            # Empty state — short informational embed
+            webhook = AsyncDiscordWebhook(url=webhook_url, content="")
+            embed = DiscordEmbed(
+                title="🗓️  Weekly NGO Jobs Digest",
+                description=(
+                    "No NGO/nonprofit jobs matched your filters this week.\n\n"
+                    f"🔵 **{general_count}** general jobs were tracked.\n\n"
+                    "💡 *Tip: NGO sources include ReliefWeb, Idealist, "
+                    "80,000 Hours, DevEx, and EuroBrussels.*"
+                ),
+                color=0x95A5A6,  # grey
+            )
+            embed.set_footer(text=f"Job Tracker Bot · {subtitle}")
+            embed.set_timestamp(today.isoformat())
+            webhook.add_embed(embed)
+            await webhook.execute()
+            logger.info("📬 Weekly NGO digest sent (empty — no jobs this week)")
+
+    except Exception:
+        logger.exception("Weekly NGO digest failed")
+
+
+async def _run_weekly_digest_cli() -> None:
+    """CLI wrapper: init DB, send digest, exit."""
+    await init_db()
+    await send_weekly_ngo_digest()
 
 
 # ── Startup / crash notifications ──────────────────────────────────────────
