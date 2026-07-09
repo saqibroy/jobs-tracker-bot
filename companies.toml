@@ -326,3 +326,111 @@ enabled = true
 # slug = "example"
 # url = "https://example.join.com/jobs"
 # enabled = false
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-09 20:18:19 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "8returns"
+provider = "ashby"
+slug = "8returns"
+url = "https://jobs.ashbyhq.com/8returns"
+enabled = true
+
+[[companies]]
+company = "Almedia"
+provider = "ashby"
+slug = "almedia"
+url = "https://jobs.ashbyhq.com/almedia"
+enabled = true
+
+[[companies]]
+company = "Enpal"
+provider = "ashby"
+slug = "enpal"
+url = "https://jobs.ashbyhq.com/enpal"
+enabled = true
+
+[[companies]]
+company = "Jimdo"
+provider = "ashby"
+slug = "jimdo.com"
+url = "https://jobs.ashbyhq.com/jimdo.com"
+enabled = true
+
+[[companies]]
+company = "Kombo"
+provider = "ashby"
+slug = "Kombo"
+url = "https://jobs.ashbyhq.com/Kombo"
+enabled = true
+
+[[companies]]
+company = "Kyanhealth"
+provider = "ashby"
+slug = "kyanhealth"
+url = "https://jobs.ashbyhq.com/kyanhealth"
+enabled = true
+
+[[companies]]
+company = "N8n"
+provider = "ashby"
+slug = "n8n"
+url = "https://jobs.ashbyhq.com/n8n"
+enabled = true
+
+[[companies]]
+company = "Nelly"
+provider = "ashby"
+slug = "nelly"
+url = "https://jobs.ashbyhq.com/nelly"
+enabled = true
+
+[[companies]]
+company = "Netbird"
+provider = "ashby"
+slug = "netbird"
+url = "https://jobs.ashbyhq.com/netbird"
+enabled = true
+
+[[companies]]
+company = "Peec"
+provider = "ashby"
+slug = "peec"
+url = "https://jobs.ashbyhq.com/peec"
+enabled = true
+
+[[companies]]
+company = "Rootglobal"
+provider = "ashby"
+slug = "rootglobal"
+url = "https://jobs.ashbyhq.com/rootglobal"
+enabled = true
+
+[[companies]]
+company = "Taxfix"
+provider = "ashby"
+slug = "taxfix.com"
+url = "https://jobs.ashbyhq.com/taxfix.com"
+enabled = true
+
+[[companies]]
+company = "Wayflyer"
+provider = "ashby"
+slug = "wayflyer"
+url = "https://jobs.ashbyhq.com/wayflyer"
+enabled = true
+
+[[companies]]
+company = "Zenjob"
+provider = "ashby"
+slug = "zenjob"
+url = "https://jobs.ashbyhq.com/zenjob"
+enabled = true
+
+[[companies]]
+company = "Topi"
+provider = "personio"
+slug = "topi"
+url = "https://topi.jobs.personio.de"
+enabled = true
