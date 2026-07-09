@@ -7,7 +7,9 @@ __pycache__/
 .env.example
 .git/
 .github/
-tests/
+tests/*
+!tests/v2/
+!tests/v2/**
 *.md
 .pytest_cache/
 docker-compose.dev.yml
