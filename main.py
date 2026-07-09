@@ -28,7 +28,7 @@ from loguru import logger
 
 import config
 from filters.language import passes_language_filter
-from filters.location import classify_remote_scope, passes_location_filter
+from filters.location import passes_location_filter
 from filters.match import compute_match_score
 from filters.ngo import classify_ngo
 from filters.role import passes_role_filter
@@ -42,13 +42,16 @@ from sources.bamboohr import BambooHRSource
 from sources.devex import DevexSource
 from sources.eurobrussels import EuroBrusselsSource
 from sources.goodjobs import GoodJobsSource
+from sources.greenhouse import GreenhouseSource
 from sources.himalayas import HimalayasSource
 from sources.hours80k import Hours80kSource
 from sources.idealist import IdealistSource
 from sources.landingjobs import LandingJobsSource
 from sources.linkedin import LinkedInSource
+from sources.lever import LeverSource
 from sources.nofluffjobs import NoFluffJobsSource
 from sources.personio import PersonioSource
+from sources.jsonld import JsonLdCareerSource
 from sources.reliefweb import ReliefWebSource
 from sources.remoteok import RemoteOKSource
 from sources.remotive import RemotiveSource
@@ -56,6 +59,7 @@ from sources.stepstone import StepstoneSource
 from sources.techjobsforgood import TechJobsForGoodSource
 from sources.themuse import TheMuseSource
 from sources.weworkremotely import WeWorkRemotelySource
+from sources.workable import WorkableSource
 from storage.database import (
     backfill_match_scores,
     filter_unseen,
@@ -81,8 +85,20 @@ _MAX_JOBS_PER_COMPANY = 2
 
 # ── Source registry ────────────────────────────────────────────────────────
 ALL_SOURCES = {
+    # Direct employer boards (default)
+    "greenhouse": GreenhouseSource,
+    "ashby": AshbySource,
+    "personio": PersonioSource,
+    "lever": LeverSource,
+    "workable": WorkableSource,
+    "jsonld": JsonLdCareerSource,
+    # Curated secondary sources with useful candidate-location data (default)
     "remotive": RemotiveSource,
     "arbeitnow": ArbeitnowSource,
+    "stepstone": StepstoneSource,
+    "himalayas": HimalayasSource,
+    # Optional/noisy sources remain addressable via --source but are not part
+    # of scheduled scans until their eligibility contracts are trustworthy.
     "remoteok": RemoteOKSource,
     "weworkremotely": WeWorkRemotelySource,
     "idealist": IdealistSource,
@@ -93,15 +109,16 @@ ALL_SOURCES = {
     "goodjobs": GoodJobsSource,
     "devex": DevexSource,
     "linkedin": LinkedInSource,
-    "stepstone": StepstoneSource,
     "nofluffjobs": NoFluffJobsSource,
-    "himalayas": HimalayasSource,
     "landingjobs": LandingJobsSource,
     "themuse": TheMuseSource,
-    "ashby": AshbySource,
-    "personio": PersonioSource,
     "bamboohr": BambooHRSource,
 }
+
+DEFAULT_SOURCE_NAMES = (
+    "greenhouse", "ashby", "personio", "lever", "workable", "jsonld",
+    "arbeitnow", "stepstone", "remotive", "himalayas",
+)
 
 # ── Senior-only title keywords ────────────────────────────────────────────
 _SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
@@ -120,7 +137,7 @@ def _get_sources(source_name: str | None) -> list:
             sys.exit(1)
         return [cls()]
 
-    return [cls() for cls in ALL_SOURCES.values()]
+    return [ALL_SOURCES[name]() for name in DEFAULT_SOURCE_NAMES]
 
 
 def _passes_company_blocklist(job: Job) -> bool:
@@ -232,53 +249,16 @@ def _apply_filters(
             _reject(job, "dedup (content hash)")
             continue
 
-        # 1. Classify remote scope (enrichment, not a filter)
-        #    If the source already set a meaningful scope (e.g. Idealist
-        #    pre-classifies from Algolia's remoteZone, RemoteOK pre-parses
-        #    location), keep it.
-        if job.remote_scope not in ("worldwide", "eu", "germany", "restricted"):
-            job.remote_scope = classify_remote_scope(job)
-
-        # 1b. Arbeitnow default: unknown scope → "germany"
-        #     Arbeitnow is a Germany-focused board, safe assumption.
-        if job.source == "arbeitnow" and job.remote_scope == "unknown":
-            job.remote_scope = "germany"
-
-        # 1c. Remote-only board default: unknown scope → "worldwide"
-        #     For WeWorkRemotely and Remotive, if scope is still unknown
-        #     after classification, they're remote-only boards so benefit
-        #     of the doubt → worldwide.
-        if job.source in ("weworkremotely", "remotive") and job.remote_scope == "unknown":
-            job.remote_scope = "worldwide"
-
-        # 1d. Impact boards default: unknown scope → "worldwide"
-        #     80,000 Hours and Idealist are impact boards with often
-        #     worldwide-remote or EU-accessible jobs.
-        if job.source in ("hours80k", "idealist") and job.remote_scope == "unknown":
-            job.remote_scope = "worldwide"
-
-        # 1e. RemoteOK: unknown scope → "worldwide"
-        #     RemoteOK is a remote-only board — if scope is unknown,
-        #     default to worldwide (benefit of the doubt).
-        if job.source == "remoteok" and job.remote_scope == "unknown":
-            job.remote_scope = "worldwide"
-
-        # 1f. Arbeitnow on-site rejection: if the API says is_remote=False
-        #     and the scope is "germany", the job is on-site only — reject.
-        if job.source == "arbeitnow" and not job.is_remote and job.remote_scope == "germany":
-            logger.debug("Location REJECT (arbeitnow on-site): {}", job.title)
-            _reject(job, "location: arbeitnow on-site (germany, not remote)")
-            continue
-
-        # 1g. Company blocklist — checked BEFORE all other filters
+        # 1. Company blocklist — checked before eligibility evaluation.
         if not _passes_company_blocklist(job):
             logger.info("[{}] Rejected: {} at {} (company blocklist)", job.source, job.title, job.company)
             _reject(job, f"company blocklist: '{job.company}'")
             continue
 
-        # 2. Location filter
+        # 2. Hard Germany/Berlin eligibility. Source-provided legacy scopes
+        # never bypass this evaluator.
         if not passes_location_filter(job):
-            _reject(job, f"location: scope={job.remote_scope}, loc='{job.location}'")
+            _reject(job, f"eligibility: {'; '.join(job.eligibility_reasons)}")
             continue
 
         # 3. Role filter
@@ -296,22 +276,13 @@ def _apply_filters(
             _reject(job, "language: non-English content detected")
             continue
 
-        # 4b. On-site Germany rejection (when ACCEPT_ONSITE_GERMANY is false)
-        #     Reject Germany-scope jobs without remote/hybrid signal.
-        if (
-            not config.ACCEPT_ONSITE_GERMANY
-            and job.remote_scope == "germany"
-            and not job.is_remote
-        ):
-            _reject(job, f"on-site Germany: no remote/hybrid signal in '{job.title}'")
-            continue
-
-        # 4c. Senior-only filter (optional, off by default)
+        # 4b. Senior-only compatibility filter (the profile gate already
+        # rejects junior/entry-level roles).
         if not _passes_senior_filter(job):
             _reject(job, f"senior filter: title '{job.title}' has junior/mid-level")
             continue
 
-        # 4d. Salary filter (optional, off by default)
+        # 4c. Salary filter (optional, off by default)
         if not _passes_salary_filter(job):
             _reject(job, f"salary filter: '{job.salary}' below min {config.MIN_SALARY_EUR}")
             continue
@@ -354,28 +325,27 @@ def _apply_filters(
             _reject(job, f"match score: {job.match_score}% < minimum {config.MINIMUM_MATCH_SCORE}%")
             continue
 
-        # 7. Per-company cap
-        company_key = job.company.lower().strip()
-        if company_counts[company_key] >= _MAX_JOBS_PER_COMPANY:
-            logger.warning(
-                "Company cap ({}) reached for '{}' — skipping: {}",
-                _MAX_JOBS_PER_COMPANY, job.company, job.title,
-            )
-            _reject(job, f"company cap: already {_MAX_JOBS_PER_COMPANY} from '{job.company}'")
-            continue
-
-        company_counts[company_key] += 1
         seen_content_hashes.add(job.content_hash)
         accepted.append(job)
 
+    # Sort before applying the company cap so the strongest roles win instead
+    # of whichever two happened to be newest in an ATS feed.
+    accepted.sort(key=lambda j: j.match_score, reverse=True)
+    capped: list[Job] = []
+    for job in accepted:
+        company_key = job.company.lower().strip()
+        if company_counts[company_key] >= _MAX_JOBS_PER_COMPANY:
+            if verbose:
+                rejected.append((job, f"company cap: stronger {_MAX_JOBS_PER_COMPANY} roles kept"))
+            continue
+        company_counts[company_key] += 1
+        capped.append(job)
+    accepted = capped
     logger.info("Filters: {} in → {} accepted", len(jobs), len(accepted))
     logger.debug(
         "[match] {} jobs accepted, {} with match_score set",
         len(accepted), sum(1 for j in accepted if j.match_score is not None),
     )
-
-    # Sort by match_score DESC so highest-match jobs appear first
-    accepted.sort(key=lambda j: j.match_score, reverse=True)
 
     # Print verbose rejection table when requested
     if verbose and rejected:
@@ -431,19 +401,34 @@ async def run_scan(
     all_jobs: list[Job] = []
     batch_size = config.MAX_CONCURRENT_SOURCES
     total_raw = 0
+    source_counts: dict[str, int] = {}
 
     for i in range(0, len(sources), batch_size):
         batch_sources = sources[i : i + batch_size]
         results = await asyncio.gather(*[s.safe_fetch() for s in batch_sources])
-        for batch in results:
+        for source, batch in zip(batch_sources, results):
             total_raw += len(batch)
             all_jobs.extend(batch)
+            source_counts[source.name] = len(batch)
         del results  # free HTTP response data eagerly
 
     logger.info("Total raw jobs fetched: {}", total_raw)
 
     # Apply filters
     filtered = _apply_filters(all_jobs, max_age_days=max_age_days, verbose=verbose)
+    try:
+        from health import set_scan_summary
+        set_scan_summary({
+            "raw": total_raw,
+            "eligible_role_matches": len(filtered),
+            "rejected": total_raw - len(filtered),
+            "immediate": sum(job.notification_tier == "immediate" for job in filtered),
+            "digest": sum(job.notification_tier == "digest" for job in filtered),
+            "diagnostic": sum(job.notification_tier == "none" for job in filtered),
+            "sources": source_counts,
+        })
+    except Exception:
+        pass
     del all_jobs  # free unfiltered list
 
     if dry_run:
@@ -460,7 +445,9 @@ async def run_scan(
         await save_jobs(new_jobs)
         logger.info("{} new jobs saved to database", len(new_jobs))
 
-        # Send Discord notifications
+        # Only strong matches alert immediately. Borderline matches stay
+        # unnotified until the scheduled digest; low matches remain as
+        # diagnostics and never notify.
         await _send_notifications(new_jobs)
     else:
         logger.info("No new jobs this cycle")
@@ -470,19 +457,30 @@ async def run_scan(
 
 async def _send_notifications(jobs: list[Job]) -> None:
     """Send notifications for new jobs via all configured channels."""
+    immediate_jobs = [job for job in jobs if job.notification_tier == "immediate"]
+    if not immediate_jobs:
+        logger.info(
+            "Notification routing: 0 immediate, {} digest, {} diagnostic",
+            sum(job.notification_tier == "digest" for job in jobs),
+            sum(job.notification_tier == "none" for job in jobs),
+        )
+        return
+
     # Discord
     if config.DISCORD_WEBHOOK_URL:
         notifier = DiscordNotifier()
-        await notifier.send_jobs(jobs)
+        await notifier.send_jobs(immediate_jobs)
     else:
         logger.warning("Discord webhook URL not configured — skipping notifications")
 
     # Telegram
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         notifier = TelegramNotifier()
-        await notifier.send_jobs(jobs)
+        await notifier.send_jobs(immediate_jobs)
     else:
         logger.debug("Telegram not configured — skipping")
+
+    await mark_notified([job.id for job in immediate_jobs])
 
 
 def _format_age(posted_at: datetime | None) -> str:
@@ -526,10 +524,15 @@ def _print_jobs(jobs: list[Job]) -> None:
         print(f"  {icon} [{i}] {job.title}")
         print(f"      🏢  {job.company}")
         print(f"      📍  {job.location} ({job.remote_scope or 'unknown'})")
+        print(f"      🧭  {job.workplace_type} · {job.notification_tier}")
+        if job.eligibility_reasons:
+            print(f"      ✅  {'; '.join(job.eligibility_reasons)}")
         if job.match_score > 0:
             from filters.match import match_score_bar
             bar = match_score_bar(job.match_score)
             print(f"      📊  {bar}  {job.match_score}% match")
+            if job.match_reasons:
+                print(f"      🎯  {'; '.join(job.match_reasons)}")
         if job.salary:
             print(f"      💰  {job.salary}")
         if job.tags:
@@ -548,6 +551,7 @@ async def _show_stats() -> None:
     ngo_count = stats["ngo_count"]
     new_24h = stats["new_24h"]
     sources = stats["sources"]
+    notification_tiers = stats.get("notification_tiers", {})
     top_companies = stats["top_companies"]
     last_fetched = stats["last_fetched_at"]
 
@@ -580,6 +584,12 @@ async def _show_stats() -> None:
     print(f"  NGO / nonprofit:     {ngo_count}")
     print(f"  General:             {total - ngo_count}")
     print(f"  Last scan:           {last_scan_str}")
+    print(
+        "  Routing:             "
+        f"{notification_tiers.get('immediate', 0)} immediate · "
+        f"{notification_tiers.get('digest', 0)} digest · "
+        f"{notification_tiers.get('none', 0)} diagnostic"
+    )
 
     if sources:
         print(f"\n  {'─'*50}")
@@ -624,6 +634,16 @@ def main():
         help="Show rejected jobs with reasons during --dry-run (debug mode).",
     )
     parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Alias for --verbose: show eligibility and role rejection reasons.",
+    )
+    parser.add_argument(
+        "--validate-sources",
+        action="store_true",
+        help="Validate every configured direct employer board and exit.",
+    )
+    parser.add_argument(
         "--stats",
         action="store_true",
         help="Show database statistics and exit.",
@@ -639,6 +659,12 @@ def main():
         help="Re-compute match scores for all jobs with score=0 and exit.",
     )
     args = parser.parse_args()
+    args.verbose = args.verbose or getattr(args, "explain", False)
+
+    if getattr(args, "validate_sources", False):
+        from sources.validate import validate_sources
+        failures = asyncio.run(validate_sources())
+        raise SystemExit(1 if failures else 0)
 
     # ── Stats mode — query DB and print summary ───────────────────────
     if args.stats:
@@ -951,9 +977,12 @@ async def _scheduled_digest() -> None:
                         "reliefweb": "🔵", "hours80k": "⚫", "goodjobs": "🟢",
                         "devex": "🔴", "eurobrussels": "🔵",
                     }.get(r.get("source", ""), "🌐")
+                    score = r.get("match_score", 0)
+                    workplace = r.get("workplace_type", "unknown")
                     job_lines.append(
-                        f"{source_icon} **{r['title']}**\n"
-                        f"> 🏢 {r['company']}  ·  `{r['source']}`"
+                        f"{source_icon} **[{r['title']}]({r['url']})**\n"
+                        f"> 🏢 {r['company']}  ·  `{r['source']}`  ·  "
+                        f"📊 {score}%  ·  🧭 {workplace}"
                     )
 
                 description = "\n\n".join(job_lines)

@@ -158,6 +158,8 @@ class StepstoneSource(BaseSource):
             company=company,
             location=location,
             is_remote=is_remote,
+            workplace_type="remote" if is_remote else "unknown",
+            eligible_countries=["de"],
             remote_scope=remote_scope,
             url=url,
             description=None,
@@ -189,9 +191,9 @@ class StepstoneSource(BaseSource):
         if arbeitsort.get("remote"):
             return True
 
-        # The query already filters for "ho" (home-office), so we give
-        # benefit of the doubt — default to True.
-        # The on-site check happens in main.py via ACCEPT_ONSITE_GERMANY.
+        # The query already filters for "ho" (home-office), so the adapter
+        # records remote. The shared eligibility evaluator still requires
+        # Germany and does not trust this as worldwide evidence.
         return True
 
     @staticmethod

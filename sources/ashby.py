@@ -18,6 +18,8 @@ from loguru import logger
 import config
 from models.job import Job
 from sources.base import BaseSource
+from sources.ats_common import country_codes_from_text, infer_workplace, regions_from_text
+from sources.registry import CompanyBoard, boards_for
 
 _API_URL = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
 
@@ -25,7 +27,10 @@ _API_URL = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
 class AshbySource(BaseSource):
     name = "ashby"
 
-    async def _fetch_company(self, slug: str) -> list[Job]:
+    async def _fetch_company(self, board: CompanyBoard | str) -> list[Job]:
+        if isinstance(board, str):
+            board = CompanyBoard(company=board, provider=self.name, slug=board)
+        slug = board.slug
         try:
             resp = await self._get(
                 _API_URL.format(slug=slug), params={"includeCompensation": "false"}
@@ -63,17 +68,22 @@ class AshbySource(BaseSource):
                         location_parts.append(loc_name)
                 location = ", ".join(p for p in location_parts if p) or "Unspecified"
 
-                is_remote = bool(item.get("isRemote")) or (
-                    (item.get("workplaceType") or "").lower() in ("remote", "hybrid")
+                workplace_type = infer_workplace(
+                    f"{location} {item.get('workplaceType') or ''}",
+                    bool(item.get("isRemote")),
                 )
+                is_remote = workplace_type in ("remote", "hybrid")
 
                 tags = [t for t in [item.get("department"), item.get("team")] if t]
 
                 job = Job(
                     title=item.get("title", ""),
-                    company=slug,
+                    company=board.company,
                     location=location,
                     is_remote=is_remote,
+                    workplace_type=workplace_type,
+                    eligible_countries=country_codes_from_text(location),
+                    eligible_regions=regions_from_text(location),
                     url=item.get("jobUrl") or item.get("applyUrl") or "",
                     description=item.get("descriptionPlain") or "",
                     tags=tags,
@@ -88,22 +98,22 @@ class AshbySource(BaseSource):
         return jobs
 
     async def fetch(self) -> list[Job]:
-        if not config.ASHBY_COMPANIES:
-            logger.debug("[{}] No ASHBY_COMPANIES configured — skipping", self.name)
+        boards = boards_for(self.name)
+        if not boards:
+            logger.debug("[{}] No enabled company boards — skipping", self.name)
             return []
 
-        tasks = [self._fetch_company(slug) for slug in config.ASHBY_COMPANIES]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await self._map_bounded(boards, self._fetch_company)
 
         all_jobs: list[Job] = []
-        for slug, result in zip(config.ASHBY_COMPANIES, results):
+        for board, result in zip(boards, results):
             if isinstance(result, Exception):
-                logger.warning("[{}] Board '{}' failed: {}", self.name, slug, result)
+                logger.warning("[{}] Board '{}' failed: {}", self.name, board.slug, result)
                 continue
             all_jobs.extend(result)
 
         logger.info(
             "[{}] Fetched {} jobs from {} companies",
-            self.name, len(all_jobs), len(config.ASHBY_COMPANIES),
+            self.name, len(all_jobs), len(boards),
         )
         return all_jobs

@@ -23,6 +23,8 @@ from loguru import logger
 
 from models.job import Job
 from sources.base import BaseSource
+from sources.ats_common import country_codes_from_text, infer_workplace, regions_from_text
+from sources.registry import CompanyBoard, boards_for
 
 _XML_URL = "https://{slug}.jobs.personio.de/xml"
 
@@ -32,7 +34,10 @@ _REMOTE_HINT_TOKENS = ("remote", "home office", "hybrid", "homeoffice")
 class PersonioSource(BaseSource):
     name = "personio"
 
-    async def _fetch_company(self, slug: str) -> list[Job]:
+    async def _fetch_company(self, board: CompanyBoard | str) -> list[Job]:
+        if isinstance(board, str):
+            board = CompanyBoard(company=board, provider=self.name, slug=board)
+        slug = board.slug
         try:
             resp = await self._get(_XML_URL.format(slug=slug), params={"language": "en"})
         except Exception as exc:
@@ -72,7 +77,8 @@ class PersonioSource(BaseSource):
                 description = "\n\n".join(desc_parts)
 
                 signal_text = f"{office} {schedule} {keywords} {description[:500]}".lower()
-                is_remote = any(tok in signal_text for tok in _REMOTE_HINT_TOKENS)
+                workplace_type = infer_workplace(signal_text)
+                is_remote = workplace_type in ("remote", "hybrid")
 
                 created = position.findtext("createdAt")
                 posted_at = None
@@ -89,9 +95,12 @@ class PersonioSource(BaseSource):
 
                 job = Job(
                     title=title,
-                    company=slug,
+                    company=board.company,
                     location=office or "Unspecified",
                     is_remote=is_remote,
+                    workplace_type=workplace_type,
+                    eligible_countries=country_codes_from_text(office),
+                    eligible_regions=regions_from_text(office),
                     url=url,
                     description=description,
                     tags=[t for t in [department] if t],
@@ -106,24 +115,22 @@ class PersonioSource(BaseSource):
         return jobs
 
     async def fetch(self) -> list[Job]:
-        import config
-
-        if not config.PERSONIO_COMPANIES:
-            logger.debug("[{}] No PERSONIO_COMPANIES configured — skipping", self.name)
+        boards = boards_for(self.name)
+        if not boards:
+            logger.debug("[{}] No enabled company boards — skipping", self.name)
             return []
 
-        tasks = [self._fetch_company(slug) for slug in config.PERSONIO_COMPANIES]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await self._map_bounded(boards, self._fetch_company)
 
         all_jobs: list[Job] = []
-        for slug, result in zip(config.PERSONIO_COMPANIES, results):
+        for board, result in zip(boards, results):
             if isinstance(result, Exception):
-                logger.warning("[{}] Feed '{}' failed: {}", self.name, slug, result)
+                logger.warning("[{}] Feed '{}' failed: {}", self.name, board.slug, result)
                 continue
             all_jobs.extend(result)
 
         logger.info(
             "[{}] Fetched {} jobs from {} companies",
-            self.name, len(all_jobs), len(config.PERSONIO_COMPANIES),
+            self.name, len(all_jobs), len(boards),
         )
         return all_jobs

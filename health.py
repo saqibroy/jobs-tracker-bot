@@ -21,6 +21,7 @@ _last_scan_time: datetime | None = None
 _next_scan_seconds: int = config.SCAN_INTERVAL_MINUTES * 60
 _jobs_tracked: int = 0
 _paused: bool = False
+_scan_summary: dict = {}
 
 
 def set_last_scan(dt: datetime) -> None:
@@ -52,6 +53,12 @@ def is_paused() -> bool:
     return _paused
 
 
+def set_scan_summary(summary: dict) -> None:
+    """Publish non-sensitive counts from the most recent completed scan."""
+    global _scan_summary
+    _scan_summary = summary
+
+
 async def _health_handler(request: web.Request) -> web.Response:
     """Handle GET /health requests."""
     uptime = time.monotonic() - _start_time
@@ -62,6 +69,7 @@ async def _health_handler(request: web.Request) -> web.Response:
         "last_scan": _last_scan_time.isoformat() if _last_scan_time else None,
         "jobs_tracked": _jobs_tracked,
         "next_scan_in_seconds": _next_scan_seconds,
+        "last_scan_summary": _scan_summary,
     }
     return web.json_response(data)
 

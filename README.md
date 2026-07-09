@@ -1,6 +1,33 @@
 # 🔍 Job Tracker Bot
 
-A fully async Python bot that monitors **11 remote job boards**, filters for full-stack developer positions accessible from the EU/Germany, classifies NGO/nonprofit roles, and sends modern rich notifications to Discord and Telegram.
+> The current pipeline is **ATS-first and precision-first**. It separates hard
+> Germany/Berlin work eligibility from CV fit, and only sends strong matches
+> immediately.
+
+A fully async Python bot that monitors direct employer ATS feeds plus a small
+set of curated job APIs, filters for full-stack/frontend positions that are
+actually available to someone living in Germany, and sends explainable Discord
+and Telegram alerts.
+
+## Eligibility and routing
+
+- Remote: Germany, Europe/EEA/EMEA, or worldwide must be stated explicitly.
+- Hybrid/on-site: the workplace must be Berlin.
+- Country-only remote roles outside Germany are rejected.
+- Unknown eligibility is rejected rather than guessed.
+- Scores 70–100 alert immediately, 45–69 enter the six-hour digest, and lower
+  scores are retained only for diagnostics.
+
+The sanitized search profile lives in `profile.toml`. Employer boards live in
+`companies.toml`; notification credentials remain in `.env`.
+
+Greenhouse, Ashby, Personio, Lever, and Workable have native adapters. JOIN or
+Teamtailor companies can be added with `provider = "jsonld"` and their public
+career-page URL; employer-account API tokens are neither required nor stored.
+
+The CI gate runs `tests/v2`, which expresses the rebuilt contract. Older test
+modules remain in `tests/` as historical documentation and can be run
+explicitly while their reusable cases are migrated.
 
 Built for a specific use case: finding remote tech roles at NGOs and impact-driven organizations, while also catching good general remote positions.
 
@@ -98,6 +125,12 @@ python main.py --dry-run --source remotive
 
 # See why jobs were rejected
 python main.py --dry-run --source reliefweb --verbose
+
+# Explain every rejection made by the rebuilt pipeline
+python main.py --dry-run --explain
+
+# Check every enabled direct employer board
+python main.py --validate-sources
 
 # Check database stats
 python main.py --stats

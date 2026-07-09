@@ -27,6 +27,19 @@ class BaseSource(ABC):
     def __init__(self) -> None:
         self._timeout = httpx.Timeout(config.HTTP_TIMEOUT)
 
+    async def _map_bounded(self, items: list, worker) -> list:
+        """Run per-board requests with the configured concurrency ceiling."""
+        semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_SOURCES))
+
+        async def run(item):
+            async with semaphore:
+                return await worker(item)
+
+        return await asyncio.gather(
+            *(run(item) for item in items),
+            return_exceptions=True,
+        )
+
     # ── Retry-enabled HTTP GET ──────────────────────────────────────────
     async def _get(
         self,
@@ -52,12 +65,36 @@ class BaseSource(ABC):
                         )
                         return resp  # caller should check status
 
+                    # Redirects usually mean a stale board slug or a provider
+                    # migration. They are permanent for this scan and must not
+                    # be followed into an unrelated marketing page.
+                    if 300 <= resp.status_code < 400:
+                        raise httpx.HTTPStatusError(
+                            f"unexpected redirect to {resp.headers.get('location', '')}",
+                            request=resp.request,
+                            response=resp,
+                        )
                     resp.raise_for_status()
                     return resp
 
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                wait = 2 ** attempt  # 2, 4, 8 seconds
+                status = exc.response.status_code
+                if status < 500 and status != 429:
+                    logger.warning(
+                        "[{}] Permanent HTTP {} for {} — not retrying",
+                        self.name, status, exc.request.url,
+                    )
+                    raise
+                wait = min(2 ** attempt, 8)
+                logger.warning(
+                    "[{}] Attempt {}/{} failed: {} — retrying in {}s",
+                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
+                )
+                await asyncio.sleep(wait)
+            except httpx.RequestError as exc:
+                last_exc = exc
+                wait = min(2 ** attempt, 8)
                 logger.warning(
                     "[{}] Attempt {}/{} failed: {} — retrying in {}s",
                     self.name,
@@ -94,12 +131,33 @@ class BaseSource(ABC):
                         )
                         return resp
 
+                    if 300 <= resp.status_code < 400:
+                        raise httpx.HTTPStatusError(
+                            f"unexpected redirect to {resp.headers.get('location', '')}",
+                            request=resp.request,
+                            response=resp,
+                        )
                     resp.raise_for_status()
                     return resp
 
-            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                wait = 2 ** attempt
+                status = exc.response.status_code
+                if status < 500 and status != 429:
+                    logger.warning(
+                        "[{}] Permanent HTTP {} for {} — not retrying",
+                        self.name, status, exc.request.url,
+                    )
+                    raise
+                wait = min(2 ** attempt, 8)
+                logger.warning(
+                    "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
+                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
+                )
+                await asyncio.sleep(wait)
+            except httpx.RequestError as exc:
+                last_exc = exc
+                wait = min(2 ** attempt, 8)
                 logger.warning(
                     "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
                     self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,

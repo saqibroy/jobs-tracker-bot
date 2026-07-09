@@ -33,12 +33,22 @@ if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
     echo "ℹ️  Already up to date. Rebuilding anyway..."
 fi
 
-# 4. Rebuild and restart
+# 4. Build without replacing the healthy running container
 echo "🔨 Rebuilding Docker image..."
-sudo docker compose up -d --build
+sudo docker compose build
 echo ""
 
-# 5. Wait for health check
+# 5. Validate direct boards and run the full pipeline without writes
+echo "🔎 Validating direct employer boards..."
+sudo docker compose run --rm --no-deps job-bot python main.py --validate-sources
+echo "🧪 Running no-write acceptance scan..."
+sudo docker compose run --rm --no-deps job-bot python main.py --dry-run --max-age 14
+echo ""
+
+# 6. Replace the service only after validation succeeds
+sudo docker compose up -d
+
+# 7. Wait for health check
 echo "⏳ Waiting for health check..."
 HEALTHY=false
 for i in $(seq 1 12); do
@@ -63,7 +73,7 @@ else
     exit 1
 fi
 
-# 6. Show status
+# 8. Show status
 echo ""
 sudo docker compose ps
 echo ""
