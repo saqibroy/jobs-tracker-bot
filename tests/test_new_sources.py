@@ -1336,12 +1336,13 @@ class TestSourceRegistration:
             "techjobsforgood", "eurobrussels", "hours80k", "goodjobs", "devex",
             "linkedin", "stepstone",
             "nofluffjobs", "himalayas", "landingjobs", "themuse",
+            "ashby", "personio", "bamboohr",
         }
         assert set(ALL_SOURCES.keys()) == expected
 
-    def test_source_count_is_seventeen(self):
+    def test_source_count_is_twenty(self):
         from main import ALL_SOURCES
-        assert len(ALL_SOURCES) == 17
+        assert len(ALL_SOURCES) == 20
 
     def test_all_sources_are_httpx_based(self):
         """After v1.5, all sources use httpx — no Playwright sources remain."""
@@ -1371,7 +1372,7 @@ class TestSourceRegistration:
     def test_get_sources_all(self):
         from main import _get_sources
         sources = _get_sources(None)
-        assert len(sources) == 17
+        assert len(sources) == 20
 
     def test_get_sources_single(self):
         from main import _get_sources
@@ -1481,7 +1482,9 @@ class TestNewSourcesFilterIntegration:
         results = _apply_filters([job])
         assert len(results) == 1
 
-    def test_eurobrussels_eu_location_accepted(self):
+    def test_eurobrussels_onsite_brussels_rejected(self):
+        """Pure on-site Brussels (Belgium, not Germany, no remote signal)
+        is not usable for someone who must be based in Germany — reject."""
         from main import _apply_filters
 
         job = Job(
@@ -1494,7 +1497,7 @@ class TestNewSourcesFilterIntegration:
             is_ngo=True,
         )
         results = _apply_filters([job])
-        assert len(results) == 1
+        assert len(results) == 0
 
     def test_eurobrussels_berlin_accepted(self):
         from main import _apply_filters
@@ -1604,7 +1607,10 @@ class TestNewSourcesFilterIntegration:
                 source="devex", is_remote=True, is_ngo=True),
         ]
         results = _apply_filters(jobs)
-        assert len(results) == 3
+        # Brussels on-site (Org B) is correctly rejected: Belgium, not
+        # Germany, and no remote/hybrid signal.
+        assert len(results) == 2
+        assert {j.company for j in results} == {"Org A", "Org C"}
 
     def test_company_cap_applies_to_new_sources(self):
         """Per-company cap of 2 should apply to new source jobs too."""

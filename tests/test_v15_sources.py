@@ -1032,7 +1032,7 @@ class TestSourceRegistrationV15:
 
     def test_total_source_count(self):
         import main
-        assert len(main.ALL_SOURCES) == 17
+        assert len(main.ALL_SOURCES) == 20
 
     def test_nofluffjobs_registered(self):
         import main

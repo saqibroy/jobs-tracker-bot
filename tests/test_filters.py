@@ -88,37 +88,39 @@ class TestLocationFilter:
         assert passes_location_filter(job) is True
 
     # ── EU country expansion (issue #1) ────────────────────────────────
-    def test_accept_remote_spain(self):
+    def test_reject_remote_spain(self):
+        """Spain-only remote (no Germany option) → not usable, reject."""
         job = _make_job(location="Remote - Spain")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_remote_portugal(self):
+    def test_reject_remote_portugal(self):
         job = _make_job(location="Remote (Portugal)")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_remote_netherlands(self):
+    def test_reject_remote_netherlands(self):
         job = _make_job(location="Remote, Netherlands")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_remote_france(self):
+    def test_reject_remote_france(self):
         job = _make_job(location="France (Remote)")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_remote_poland(self):
+    def test_reject_remote_poland(self):
         job = _make_job(location="Remote - Poland")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
     def test_accept_remote_dach(self):
         job = _make_job(location="Remote - DACH region")
         assert passes_location_filter(job) is True
 
-    def test_accept_remote_benelux(self):
+    def test_reject_remote_benelux(self):
+        """Benelux (Belgium/NL/Luxembourg) has no Germany option → reject."""
         job = _make_job(location="Benelux, Remote")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_remote_estonia(self):
+    def test_reject_remote_estonia(self):
         job = _make_job(location="Estonia (Remote)")
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
     # ── Multi-country remote (issue #2) ────────────────────────────────
     def test_accept_multi_country_eu(self):
@@ -164,19 +166,19 @@ class TestLocationFilter:
         )
         assert passes_location_filter(job) is True
 
-    def test_accept_eligible_to_work_in_netherlands(self):
+    def test_reject_eligible_to_work_in_netherlands(self):
         job = _make_job(
             location="Remote",
             description="Must be eligible to work in the Netherlands.",
         )
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
-    def test_accept_based_in_spain(self):
+    def test_reject_based_in_spain(self):
         job = _make_job(
             location="Remote",
             description="Candidates must be based in Spain or Portugal.",
         )
-        assert passes_location_filter(job) is True
+        assert passes_location_filter(job) is False
 
     def test_reject_must_reside_in_us(self):
         """Residency requirement in non-EU country — scope unknown → REJECT."""
@@ -409,26 +411,28 @@ class TestRemoteScopeClassification:
     # ── EU country scope tests ─────────────────────────────────────────
     def test_spain_scope(self):
         job = _make_job(location="Remote - Spain")
-        assert classify_remote_scope(job) == "eu"
+        assert classify_remote_scope(job) == "eu_other"
 
     def test_portugal_scope(self):
         job = _make_job(location="Remote (Portugal)")
-        assert classify_remote_scope(job) == "eu"
+        assert classify_remote_scope(job) == "eu_other"
 
     def test_multi_country_scope(self):
         job = _make_job(location="Remote from Germany, Spain, or Portugal")
         assert classify_remote_scope(job) == "germany"  # Germany takes priority
 
     def test_dach_scope(self):
+        """DACH conventionally includes Germany, so it's Germany-eligible."""
         job = _make_job(location="DACH region, Remote")
-        assert classify_remote_scope(job) == "eu"
+        assert classify_remote_scope(job) == "germany"
 
     def test_residency_eu_scope(self):
+        """Residency limited to France or Spain, no Germany → eu_other."""
         job = _make_job(
             location="Remote",
             description="Must be located in France or Spain.",
         )
-        assert classify_remote_scope(job) == "eu"
+        assert classify_remote_scope(job) == "eu_other"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -37,6 +37,8 @@ from models.job import Job
 from notifiers.discord_notifier import DiscordNotifier
 from notifiers.telegram_notifier import TelegramNotifier
 from sources.arbeitnow import ArbeitnowSource
+from sources.ashby import AshbySource
+from sources.bamboohr import BambooHRSource
 from sources.devex import DevexSource
 from sources.eurobrussels import EuroBrusselsSource
 from sources.goodjobs import GoodJobsSource
@@ -46,6 +48,7 @@ from sources.idealist import IdealistSource
 from sources.landingjobs import LandingJobsSource
 from sources.linkedin import LinkedInSource
 from sources.nofluffjobs import NoFluffJobsSource
+from sources.personio import PersonioSource
 from sources.reliefweb import ReliefWebSource
 from sources.remoteok import RemoteOKSource
 from sources.remotive import RemotiveSource
@@ -95,6 +98,9 @@ ALL_SOURCES = {
     "himalayas": HimalayasSource,
     "landingjobs": LandingJobsSource,
     "themuse": TheMuseSource,
+    "ashby": AshbySource,
+    "personio": PersonioSource,
+    "bamboohr": BambooHRSource,
 }
 
 # ── Senior-only title keywords ────────────────────────────────────────────

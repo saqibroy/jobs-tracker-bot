@@ -1,0 +1,1009 @@
+diff --git a/config.py b/config.py
+index 5c41b71..05f6b19 100644
+--- a/config.py
++++ b/config.py
+@@ -58,6 +58,21 @@ SOURCE_MAX_AGE_DAYS: dict[str, int] = {
+ # Comma-separated company names to always skip (case-insensitive).
+ COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
+ 
++# ── ATS-specific company boards ─────────────────────────────────────────────
++# These ATS platforms don't have a global "browse all companies" endpoint —
++# you fetch one company's board at a time by its slug/subdomain. Add the
++# slugs of companies you want to track (comma-separated, case-sensitive
++# where noted).
++#
++# Ashby: the slug is the last path segment of https://jobs.ashbyhq.com/<slug>
++ASHBY_COMPANIES: list[str] = [
++    s.strip() for s in _get("ASHBY_COMPANIES", "").split(",") if s.strip()
++]
++# Personio: the subdomain of https://<slug>.jobs.personio.de
++PERSONIO_COMPANIES: list[str] = _get_list("PERSONIO_COMPANIES")
++# BambooHR: the subdomain of https://<slug>.bamboohr.com
++BAMBOOHR_COMPANIES: list[str] = _get_list("BAMBOOHR_COMPANIES")
++
+ # ── Optional quality filters ──────────────────────────────────────────────
+ FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true", "1", "yes")
+ MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
+diff --git a/filters/location.py b/filters/location.py
+index 001c8c7..5b3d5ee 100644
+--- a/filters/location.py
++++ b/filters/location.py
+@@ -53,6 +53,24 @@ _GERMAN_CITIES: list[str] = [
+     "hannover", "nuremberg", "nürnberg", "dortmund", "essen", "bremen",
+ ]
+ 
++# Tokens that signal Germany is an eligible base. "dach" is included because
++# DACH-region postings are conventionally open to Germany-based candidates.
++_GERMANY_TOKENS: list[str] = ["germany", "deutschland", "dach", *_GERMAN_CITIES]
++
++# EU/EEA countries OTHER than Germany. If one of these is named as the
++# specific location/residency requirement and Germany is NOT also named,
++# the role requires living outside Germany and is not a match for someone
++# based in Germany — even if Germany is mentioned elsewhere (e.g. company
++# HQ address) in the tags/description.
++_NON_GERMANY_EU_COUNTRIES: list[str] = [
++    "austria", "österreich", "switzerland", "schweiz",
++    "france", "spain", "portugal", "italy", "netherlands", "belgium",
++    "luxembourg", "ireland", "sweden", "denmark", "norway", "finland",
++    "iceland", "poland", "czech republic", "czechia", "romania", "hungary",
++    "slovakia", "slovenia", "croatia", "bulgaria", "estonia", "latvia",
++    "lithuania", "greece", "cyprus", "malta", "benelux",
++]
++
+ # ── Blocklist patterns (lowercase) ─────────────────────────────────────────
+ _BLOCK_PATTERNS: list[str] = [
+     "uk only",
+@@ -200,10 +218,15 @@ def _mentions_eu_country(text: str) -> bool:
+ 
+ 
+ def _mentions_germany(text: str) -> bool:
+-    """Return True if the text mentions Germany or a German city."""
+-    if "germany" in text or "deutschland" in text:
+-        return True
+-    return any(city in text for city in _GERMAN_CITIES)
++    """Return True if the text mentions Germany, DACH, or a German city."""
++    return any(tok in text for tok in _GERMANY_TOKENS)
++
++
++def _mentions_non_germany_eu_country(text: str) -> bool:
++    """Return True if the text names a specific EU/EEA country other than
++    Germany (Austria/Switzerland included, since "DACH" is handled
++    separately as Germany-equivalent)."""
++    return any(country in text for country in _NON_GERMANY_EU_COUNTRIES)
+ 
+ 
+ def _mentions_non_eu_location(loc: str) -> bool:
+@@ -282,32 +305,60 @@ def _has_worldwide_override(loc: str) -> bool:
+ def classify_remote_scope(job: Job) -> str:
+     """Determine the remote scope from location + tags.
+ 
+-    Priority: Germany > EU country > EU region > Worldwide (corroborated) >
+-              Country blocklist > Non-EU pattern > generic remote.
++    Saqib needs to be based in Germany (remote) or Berlin (hybrid/onsite).
++    A role that is remote-eligible only from another specific EU country
++    (Spain, Poland, Portugal, etc.) is NOT usable for him even though it's
++    "EU remote" in a general sense — so those are classified "eu_other"
++    and rejected, distinct from generic "remote across Europe" postings
++    (scope "eu") which don't name an excluding country and presumably
++    include Germany.
++
++    Priority: Germany > specific non-Germany EU country (location field) >
++              specific non-Germany EU country (residency phrase) >
++              generic EU/worldwide region > country blocklist >
++              non-EU pattern > generic remote.
+     """
+     loc = _lower(job.location)
+     tags_text = _lower(" ".join(job.tags))
+     loc_and_tags = f"{loc} {tags_text}"
+     desc_snippet = _lower((job.description or "")[:500])
++    combined = f"{loc_and_tags} {desc_snippet}"
+ 
+-    # 1. Germany — highest specificity
++    # 1. Germany (or DACH / a German city) named anywhere in location/tags
++    #    — Germany is an eligible base, even if other countries are also
++    #    listed (e.g. "Germany, Spain, or Portugal").
+     if _mentions_germany(loc_and_tags):
+         return "germany"
+ 
+-    # 2. Specific EU country in location/tags
+-    if _mentions_eu_country(loc_and_tags):
+-        return "eu"
++    # 2. Residency phrase explicitly names Germany in the description.
++    if _has_residency_with_eu_country(combined) and _mentions_germany(combined):
++        return "germany"
+ 
+-    # 3. EU region keywords (location + tags + description)
+-    combined = f"{loc_and_tags} {desc_snippet}"
+-    if _has_any(combined, _EU_REGION_KEYWORDS):
+-        return "eu"
++    # 3. The *location* field (most authoritative, structured) names a
++    #    specific non-Germany EU country and gives no worldwide/EU-region
++    #    override → this role isn't open to Germany-based candidates.
++    if _mentions_non_germany_eu_country(loc):
++        if not _has_any(loc, _WORLDWIDE_KEYWORDS) and not _has_any(loc, _EU_REGION_KEYWORDS):
++            return "eu_other"
+ 
+-    # 4. Residency requirement in EU country (description)
++    # 4. A "must be located in / based in X" residency phrase names a
++    #    specific non-Germany EU country (and Germany isn't also named).
+     if _has_residency_with_eu_country(combined):
++        return "eu_other"
++
++    # 5. Generic EU/EEA region keywords (no specific excluding country) —
++    #    e.g. "Remote - Europe", "EMEA". Broad enough to presumably
++    #    include Germany.
++    if _has_any(combined, _EU_REGION_KEYWORDS):
+         return "eu"
+ 
+-    # 5. Worldwide — only trust if corroborated:
++    # 6. A non-Germany EU country named only in tags/description (not the
++    #    location field) without any Germany mention → treat conservatively
++    #    as not usable.
++    if _mentions_non_germany_eu_country(loc_and_tags):
++        return "eu_other"
++
++    # 7. Worldwide — only trust if corroborated:
+     #    - Source is a remote-only board (remoteok, weworkremotely, remotive)
+     #    - Location explicitly says "Worldwide", "Work from anywhere", etc.
+     #    For arbeitnow: "Worldwide" without other signal → treat as germany.
+@@ -327,20 +378,20 @@ def classify_remote_scope(job: Job) -> str:
+             return "worldwide"
+         return "worldwide"
+ 
+-    # 6. Country blocklist check — if location matches a blocked country
++    # 8. Country blocklist check — if location matches a blocked country
+     #    and does NOT have an EU/worldwide override, mark as restricted.
+     if _matches_country_blocklist(loc):
+         if not _has_worldwide_override(loc):
+             return "restricted"
+ 
+-    # 7. Non-EU country/city in location field → restricted
++    # 9. Non-EU country/city in location field → restricted
+     #    Only check the *location* string (not tags/description) to avoid
+     #    false positives from tag lists like "python, aws, us team ok".
+     if _mentions_non_eu_location(loc):
+         return "restricted"
+ 
+-    # 8. Generic remote — now returns "unknown" which will be REJECTED
+-    #    by the location filter (unknown = we don't know = don't notify)
++    # 10. Generic remote — now returns "unknown" which will be REJECTED
++    #     by the location filter (unknown = we don't know = don't notify)
+     if _has_remote_signal(combined):
+         return "unknown"
+ 
+@@ -370,6 +421,13 @@ def passes_location_filter(job: Job) -> bool:
+         logger.debug("Location REJECT (restricted scope): {}", job.title)
+         return False
+ 
++    # ── eu_other: EU-remote but tied to a specific non-Germany country ──
++    # (e.g. "Remote - Spain", "must be based in Poland"). Not usable for
++    # someone who needs to be based in Germany.
++    if job.remote_scope == "eu_other":
++        logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
++        return False
++
+     # ── Unknown scope: DEFAULT TO REJECT ────────────────────────────────
+     # Unknown scope = we don't know where it's accessible from = don't notify.
+     if job.remote_scope == "unknown":
+@@ -396,6 +454,12 @@ def passes_location_filter(job: Job) -> bool:
+             logger.debug("Location REJECT (country blocklist): {}", job.title)
+             return False
+ 
++    # ── Reject: specific non-Germany EU country in location, no override ─
++    if _mentions_non_germany_eu_country(loc) and not _mentions_germany(loc):
++        if not _has_any(loc, _WORLDWIDE_KEYWORDS) and not _has_any(loc, _EU_REGION_KEYWORDS):
++            logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
++            return False
++
+     # ── Accept: worldwide remote ────────────────────────────────────────
+     if _has_any(combined, _WORLDWIDE_KEYWORDS):
+         logger.debug("Location ACCEPT (worldwide): {}", job.title)
+@@ -419,19 +483,15 @@ def passes_location_filter(job: Job) -> bool:
+         logger.debug("Location REJECT (Germany, no remote/hybrid signal): {}", job.title)
+         return False
+ 
+-    # ── Accept: specific EU country + remote signal ─────────────────────
+-    if _mentions_eu_country(combined) and _has_remote_signal(combined):
+-        logger.debug("Location ACCEPT (EU country + remote): {}", job.title)
+-        return True
+-
+-    # ── Accept: EU country explicitly in location field ─────────────────
+-    if _mentions_eu_country(loc):
+-        logger.debug("Location ACCEPT (EU country in location): {}", job.title)
+-        return True
++    # ── Reject: specific non-Germany EU country + remote signal ─────────
++    # (previously accepted — now rejected since Saqib needs Germany)
++    if _mentions_non_germany_eu_country(combined):
++        logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
++        return False
+ 
+-    # ── Accept: residency requirement in EU country ─────────────────────
+-    if _has_residency_with_eu_country(combined):
+-        logger.debug("Location ACCEPT (residency in EU country): {}", job.title)
++    # ── Accept: residency requirement in Germany specifically ───────────
++    if _has_residency_with_eu_country(combined) and _mentions_germany(combined):
++        logger.debug("Location ACCEPT (residency in Germany): {}", job.title)
+         return True
+ 
+     # ── No known eligible scope — reject ────────────────────────────────
+diff --git a/main.py b/main.py
+index 7d1df23..6b604ee 100644
+--- a/main.py
++++ b/main.py
+@@ -37,6 +37,8 @@ from models.job import Job
+ from notifiers.discord_notifier import DiscordNotifier
+ from notifiers.telegram_notifier import TelegramNotifier
+ from sources.arbeitnow import ArbeitnowSource
++from sources.ashby import AshbySource
++from sources.bamboohr import BambooHRSource
+ from sources.devex import DevexSource
+ from sources.eurobrussels import EuroBrusselsSource
+ from sources.goodjobs import GoodJobsSource
+@@ -46,6 +48,7 @@ from sources.idealist import IdealistSource
+ from sources.landingjobs import LandingJobsSource
+ from sources.linkedin import LinkedInSource
+ from sources.nofluffjobs import NoFluffJobsSource
++from sources.personio import PersonioSource
+ from sources.reliefweb import ReliefWebSource
+ from sources.remoteok import RemoteOKSource
+ from sources.remotive import RemotiveSource
+@@ -95,6 +98,9 @@ ALL_SOURCES = {
+     "himalayas": HimalayasSource,
+     "landingjobs": LandingJobsSource,
+     "themuse": TheMuseSource,
++    "ashby": AshbySource,
++    "personio": PersonioSource,
++    "bamboohr": BambooHRSource,
+ }
+ 
+ # ── Senior-only title keywords ────────────────────────────────────────────
+diff --git a/sources/ashby.py b/sources/ashby.py
+new file mode 100644
+index 0000000..2866217
+--- /dev/null
++++ b/sources/ashby.py
+@@ -0,0 +1,109 @@
++"""Ashby ATS source — public, unauthenticated job-board API.
++
++Ashby doesn't have a "browse all companies" endpoint — each employer's
++board is fetched individually by its slug (the last path segment of
++https://jobs.ashbyhq.com/<slug>). Add slugs to ASHBY_COMPANIES in .env.
++
++Endpoint (no auth required):
++  GET https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true
++"""
++
++from __future__ import annotations
++
++import asyncio
++from datetime import datetime
++
++from loguru import logger
++
++import config
++from models.job import Job
++from sources.base import BaseSource
++
++_API_URL = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
++
++
++class AshbySource(BaseSource):
++    name = "ashby"
++
++    async def _fetch_company(self, slug: str) -> list[Job]:
++        try:
++            resp = await self._get(
++                _API_URL.format(slug=slug), params={"includeCompensation": "false"}
++            )
++        except Exception as exc:
++            logger.warning("[{}] Failed to fetch board '{}': {}", self.name, slug, exc)
++            return []
++
++        if resp.status_code == 429:
++            return []
++        if resp.status_code == 404:
++            logger.warning("[{}] No such board: '{}' (check ASHBY_COMPANIES)", self.name, slug)
++            return []
++
++        data = resp.json()
++        jobs: list[Job] = []
++
++        for item in data.get("jobs", []):
++            try:
++                posted_at = None
++                pub_date = item.get("publishedAt")
++                if pub_date:
++                    try:
++                        posted_at = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
++                    except (ValueError, TypeError):
++                        pass
++
++                # Build a location string from the primary + secondary
++                # locations so downstream location filtering sees every
++                # country the role is open to.
++                location_parts = [item.get("location", "")]
++                for sec in item.get("secondaryLocations", []) or []:
++                    loc_name = sec.get("location") if isinstance(sec, dict) else None
++                    if loc_name:
++                        location_parts.append(loc_name)
++                location = ", ".join(p for p in location_parts if p) or "Unspecified"
++
++                is_remote = bool(item.get("isRemote")) or (
++                    (item.get("workplaceType") or "").lower() in ("remote", "hybrid")
++                )
++
++                tags = [t for t in [item.get("department"), item.get("team")] if t]
++
++                job = Job(
++                    title=item.get("title", ""),
++                    company=slug,
++                    location=location,
++                    is_remote=is_remote,
++                    url=item.get("jobUrl") or item.get("applyUrl") or "",
++                    description=item.get("descriptionPlain") or "",
++                    tags=tags,
++                    source=self.name,
++                    posted_at=posted_at,
++                )
++                jobs.append(job)
++            except (KeyError, TypeError) as exc:
++                logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
++                continue
++
++        return jobs
++
++    async def fetch(self) -> list[Job]:
++        if not config.ASHBY_COMPANIES:
++            logger.debug("[{}] No ASHBY_COMPANIES configured — skipping", self.name)
++            return []
++
++        tasks = [self._fetch_company(slug) for slug in config.ASHBY_COMPANIES]
++        results = await asyncio.gather(*tasks, return_exceptions=True)
++
++        all_jobs: list[Job] = []
++        for slug, result in zip(config.ASHBY_COMPANIES, results):
++            if isinstance(result, Exception):
++                logger.warning("[{}] Board '{}' failed: {}", self.name, slug, result)
++                continue
++            all_jobs.extend(result)
++
++        logger.info(
++            "[{}] Fetched {} jobs from {} companies",
++            self.name, len(all_jobs), len(config.ASHBY_COMPANIES),
++        )
++        return all_jobs
+diff --git a/sources/bamboohr.py b/sources/bamboohr.py
+new file mode 100644
+index 0000000..9e40ca2
+--- /dev/null
++++ b/sources/bamboohr.py
+@@ -0,0 +1,116 @@
++"""BambooHR source — public careers-widget JSON (UNOFFICIAL).
++
++BambooHR's documented API requires a per-customer API key and is meant
++for HRIS data, not for third parties browsing job postings. The only
++public, no-auth surface is the JSON that powers the embeddable careers
++widget every BambooHR customer can put on their own site:
++
++  GET https://{slug}.bamboohr.com/careers/list
++
++This is NOT a documented/stable contract — BambooHR can change the shape
++or host of this endpoint without notice. Treat this source as best-effort
++and keep an eye on the logs; if it starts returning 0 jobs for a company
++that has open roles, the endpoint has likely changed.
++
++BambooHR doesn't have a "browse all companies" endpoint — add company
++subdomains to BAMBOOHR_COMPANIES in .env.
++"""
++
++from __future__ import annotations
++
++import asyncio
++
++from loguru import logger
++
++from models.job import Job
++from sources.base import BaseSource
++
++_LIST_URL = "https://{slug}.bamboohr.com/careers/list"
++
++
++class BambooHRSource(BaseSource):
++    name = "bamboohr"
++
++    async def _fetch_company(self, slug: str) -> list[Job]:
++        try:
++            resp = await self._get(_LIST_URL.format(slug=slug))
++        except Exception as exc:
++            logger.warning("[{}] Failed to fetch board '{}': {}", self.name, slug, exc)
++            return []
++
++        if resp.status_code == 429:
++            return []
++        if resp.status_code == 404:
++            logger.warning("[{}] No such board: '{}' (check BAMBOOHR_COMPANIES)", self.name, slug)
++            return []
++
++        try:
++            data = resp.json()
++        except ValueError:
++            logger.warning(
++                "[{}] Non-JSON response for '{}' — endpoint may have changed", self.name, slug
++            )
++            return []
++
++        # The widget response has historically been either a bare list or
++        # {"result": [...]}. Handle both defensively.
++        raw_jobs = data if isinstance(data, list) else data.get("result", [])
++
++        jobs: list[Job] = []
++        for item in raw_jobs:
++            try:
++                title = item.get("jobOpeningName") or item.get("title") or ""
++                location_obj = item.get("location") or {}
++                if isinstance(location_obj, dict):
++                    location = ", ".join(
++                        v for v in [location_obj.get("city"), location_obj.get("country")] if v
++                    ) or "Unspecified"
++                else:
++                    location = str(location_obj) or "Unspecified"
++
++                is_remote = bool(item.get("isRemote")) or "remote" in str(
++                    item.get("locationLabel", "")
++                ).lower()
++
++                job_id = item.get("id") or item.get("jobOpeningId") or ""
++                url = f"https://{slug}.bamboohr.com/careers/{job_id}" if job_id else f"https://{slug}.bamboohr.com/careers"
++
++                job = Job(
++                    title=title,
++                    company=slug,
++                    location=location,
++                    is_remote=is_remote,
++                    url=url,
++                    description=item.get("description", "") or "",
++                    tags=[t for t in [item.get("department")] if t],
++                    source=self.name,
++                )
++                jobs.append(job)
++            except (AttributeError, TypeError) as exc:
++                logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
++                continue
++
++        return jobs
++
++    async def fetch(self) -> list[Job]:
++        import config
++
++        if not config.BAMBOOHR_COMPANIES:
++            logger.debug("[{}] No BAMBOOHR_COMPANIES configured — skipping", self.name)
++            return []
++
++        tasks = [self._fetch_company(slug) for slug in config.BAMBOOHR_COMPANIES]
++        results = await asyncio.gather(*tasks, return_exceptions=True)
++
++        all_jobs: list[Job] = []
++        for slug, result in zip(config.BAMBOOHR_COMPANIES, results):
++            if isinstance(result, Exception):
++                logger.warning("[{}] Board '{}' failed: {}", self.name, slug, result)
++                continue
++            all_jobs.extend(result)
++
++        logger.info(
++            "[{}] Fetched {} jobs from {} companies",
++            self.name, len(all_jobs), len(config.BAMBOOHR_COMPANIES),
++        )
++        return all_jobs
+diff --git a/sources/personio.py b/sources/personio.py
+new file mode 100644
+index 0000000..c3864f4
+--- /dev/null
++++ b/sources/personio.py
+@@ -0,0 +1,129 @@
++"""Personio ATS source — public, unauthenticated XML job feed.
++
++Personio doesn't have a "browse all companies" endpoint — each employer's
++career site exposes its own XML feed. Add company subdomains to
++PERSONIO_COMPANIES in .env (the part before ".jobs.personio.de").
++
++Endpoint (no auth required):
++  GET https://{slug}.jobs.personio.de/xml?language=en
++
++Feed schema (workzag-jobs / position):
++  id, office, department, recruitingCategory, name, employmentType,
++  seniority, schedule, yearsOfExperience, keywords, occupation,
++  occupationCategory, createdAt, jobDescriptions/jobDescription[]
++"""
++
++from __future__ import annotations
++
++import asyncio
++import xml.etree.ElementTree as ET
++from datetime import datetime
++
++from loguru import logger
++
++from models.job import Job
++from sources.base import BaseSource
++
++_XML_URL = "https://{slug}.jobs.personio.de/xml"
++
++_REMOTE_HINT_TOKENS = ("remote", "home office", "hybrid", "homeoffice")
++
++
++class PersonioSource(BaseSource):
++    name = "personio"
++
++    async def _fetch_company(self, slug: str) -> list[Job]:
++        try:
++            resp = await self._get(_XML_URL.format(slug=slug), params={"language": "en"})
++        except Exception as exc:
++            logger.warning("[{}] Failed to fetch feed '{}': {}", self.name, slug, exc)
++            return []
++
++        if resp.status_code == 429:
++            return []
++        if resp.status_code == 404:
++            logger.warning("[{}] No such feed: '{}' (check PERSONIO_COMPANIES)", self.name, slug)
++            return []
++
++        try:
++            root = ET.fromstring(resp.text)
++        except ET.ParseError as exc:
++            logger.warning("[{}] Malformed XML for '{}': {}", self.name, slug, exc)
++            return []
++
++        jobs: list[Job] = []
++        for position in root.findall("position"):
++            try:
++                pid = (position.findtext("id") or "").strip()
++                title = (position.findtext("name") or "").strip()
++                office = (position.findtext("office") or "").strip()
++                department = (position.findtext("department") or "").strip()
++                schedule = (position.findtext("schedule") or "").strip()
++                keywords = (position.findtext("keywords") or "").strip()
++
++                # Concatenate all jobDescription blocks (Personio splits
++                # the posting into sections like "Responsibilities",
++                # "Requirements", "Benefits").
++                desc_parts: list[str] = []
++                for jd in position.findall("./jobDescriptions/jobDescription"):
++                    value = jd.findtext("value") or ""
++                    if value.strip():
++                        desc_parts.append(value.strip())
++                description = "\n\n".join(desc_parts)
++
++                signal_text = f"{office} {schedule} {keywords} {description[:500]}".lower()
++                is_remote = any(tok in signal_text for tok in _REMOTE_HINT_TOKENS)
++
++                created = position.findtext("createdAt")
++                posted_at = None
++                if created:
++                    try:
++                        posted_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
++                    except (ValueError, TypeError):
++                        pass
++
++                url = (
++                    f"https://{slug}.jobs.personio.de/job/{pid}"
++                    if pid else f"https://{slug}.jobs.personio.de"
++                )
++
++                job = Job(
++                    title=title,
++                    company=slug,
++                    location=office or "Unspecified",
++                    is_remote=is_remote,
++                    url=url,
++                    description=description,
++                    tags=[t for t in [department] if t],
++                    source=self.name,
++                    posted_at=posted_at,
++                )
++                jobs.append(job)
++            except (AttributeError, TypeError) as exc:
++                logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
++                continue
++
++        return jobs
++
++    async def fetch(self) -> list[Job]:
++        import config
++
++        if not config.PERSONIO_COMPANIES:
++            logger.debug("[{}] No PERSONIO_COMPANIES configured — skipping", self.name)
++            return []
++
++        tasks = [self._fetch_company(slug) for slug in config.PERSONIO_COMPANIES]
++        results = await asyncio.gather(*tasks, return_exceptions=True)
++
++        all_jobs: list[Job] = []
++        for slug, result in zip(config.PERSONIO_COMPANIES, results):
++            if isinstance(result, Exception):
++                logger.warning("[{}] Feed '{}' failed: {}", self.name, slug, result)
++                continue
++            all_jobs.extend(result)
++
++        logger.info(
++            "[{}] Fetched {} jobs from {} companies",
++            self.name, len(all_jobs), len(config.PERSONIO_COMPANIES),
++        )
++        return all_jobs
+diff --git a/tests/test_ats_sources.py b/tests/test_ats_sources.py
+new file mode 100644
+index 0000000..c2621ae
+--- /dev/null
++++ b/tests/test_ats_sources.py
+@@ -0,0 +1,183 @@
++"""Tests for the Ashby, Personio, and BambooHR ATS source modules."""
++
++from __future__ import annotations
++
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import pytest
++
++import config
++from sources.ashby import AshbySource
++from sources.bamboohr import BambooHRSource
++from sources.personio import PersonioSource
++
++
++def _mock_response(status_code=200, json_data=None, text_data=""):
++    resp = MagicMock()
++    resp.status_code = status_code
++    resp.json = MagicMock(return_value=json_data)
++    resp.text = text_data
++    return resp
++
++
++# ── Ashby ────────────────────────────────────────────────────────────────
++class TestAshbySource:
++    @pytest.mark.asyncio
++    async def test_no_companies_configured_returns_empty(self, monkeypatch):
++        monkeypatch.setattr(config, "ASHBY_COMPANIES", [])
++        source = AshbySource()
++        assert await source.fetch() == []
++
++    @pytest.mark.asyncio
++    async def test_parses_jobs_and_builds_location_from_secondary(self, monkeypatch):
++        monkeypatch.setattr(config, "ASHBY_COMPANIES", ["acme"])
++        payload = {
++            "jobs": [
++                {
++                    "title": "Senior Backend Engineer",
++                    "location": "Berlin, Germany",
++                    "secondaryLocations": [{"location": "Remote - EU"}],
++                    "department": "Engineering",
++                    "team": "Platform",
++                    "isListed": True,
++                    "isRemote": True,
++                    "workplaceType": "Remote",
++                    "descriptionPlain": "Join our backend team.",
++                    "publishedAt": "2026-06-01T10:00:00.000+00:00",
++                    "jobUrl": "https://jobs.ashbyhq.com/acme/123",
++                }
++            ]
++        }
++        source = AshbySource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(json_data=payload))):
++            jobs = await source.fetch()
++
++        assert len(jobs) == 1
++        job = jobs[0]
++        assert job.title == "Senior Backend Engineer"
++        assert job.company == "acme"
++        assert "Berlin, Germany" in job.location
++        assert "Remote - EU" in job.location
++        assert job.is_remote is True
++        assert job.source == "ashby"
++
++    @pytest.mark.asyncio
++    async def test_404_board_returns_empty_without_crashing(self, monkeypatch):
++        monkeypatch.setattr(config, "ASHBY_COMPANIES", ["doesnotexist"])
++        source = AshbySource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(status_code=404))):
++            jobs = await source.fetch()
++        assert jobs == []
++
++
++# ── Personio ─────────────────────────────────────────────────────────────
++_PERSONIO_XML = """<?xml version="1.0" encoding="UTF-8"?>
++<workzag-jobs>
++  <position>
++    <id>4103</id>
++    <office>Berlin (Remote)</office>
++    <department>Engineering</department>
++    <recruitingCategory>Various</recruitingCategory>
++    <name>Full Stack Developer</name>
++    <employmentType>full-time</employmentType>
++    <schedule>Remote</schedule>
++    <keywords>python, react, remote</keywords>
++    <jobDescriptions>
++      <jobDescription>
++        <name>About the role</name>
++        <value><![CDATA[We are hiring a full stack developer, remote friendly.]]></value>
++      </jobDescription>
++    </jobDescriptions>
++  </position>
++  <position>
++    <id>4104</id>
++    <office>Warsaw</office>
++    <department>Sales</department>
++    <name>Sales Manager</name>
++    <schedule>On-site</schedule>
++    <keywords>sales</keywords>
++    <jobDescriptions>
++      <jobDescription>
++        <name>About the role</name>
++        <value><![CDATA[On-site role based in our Warsaw office.]]></value>
++      </jobDescription>
++    </jobDescriptions>
++  </position>
++</workzag-jobs>
++"""
++
++
++class TestPersonioSource:
++    @pytest.mark.asyncio
++    async def test_no_companies_configured_returns_empty(self, monkeypatch):
++        monkeypatch.setattr(config, "PERSONIO_COMPANIES", [])
++        source = PersonioSource()
++        assert await source.fetch() == []
++
++    @pytest.mark.asyncio
++    async def test_parses_xml_feed(self, monkeypatch):
++        monkeypatch.setattr(config, "PERSONIO_COMPANIES", ["acme"])
++        source = PersonioSource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(text_data=_PERSONIO_XML))):
++            jobs = await source.fetch()
++
++        assert len(jobs) == 2
++        remote_job = next(j for j in jobs if j.title == "Full Stack Developer")
++        assert remote_job.location == "Berlin (Remote)"
++        assert remote_job.is_remote is True
++        assert "full stack developer" in remote_job.description.lower()
++        assert remote_job.url == "https://acme.jobs.personio.de/job/4103"
++
++        onsite_job = next(j for j in jobs if j.title == "Sales Manager")
++        assert onsite_job.is_remote is False
++
++    @pytest.mark.asyncio
++    async def test_malformed_xml_returns_empty_without_crashing(self, monkeypatch):
++        monkeypatch.setattr(config, "PERSONIO_COMPANIES", ["acme"])
++        source = PersonioSource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(text_data="not xml <<<"))):
++            jobs = await source.fetch()
++        assert jobs == []
++
++
++# ── BambooHR ─────────────────────────────────────────────────────────────
++class TestBambooHRSource:
++    @pytest.mark.asyncio
++    async def test_no_companies_configured_returns_empty(self, monkeypatch):
++        monkeypatch.setattr(config, "BAMBOOHR_COMPANIES", [])
++        source = BambooHRSource()
++        assert await source.fetch() == []
++
++    @pytest.mark.asyncio
++    async def test_parses_list_response(self, monkeypatch):
++        monkeypatch.setattr(config, "BAMBOOHR_COMPANIES", ["acme"])
++        payload = [
++            {
++                "id": 55,
++                "jobOpeningName": "Platform Engineer",
++                "location": {"city": "Berlin", "country": "Germany"},
++                "locationLabel": "Berlin, Germany (Remote)",
++                "department": "Engineering",
++                "description": "Build our platform.",
++            }
++        ]
++        source = BambooHRSource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(json_data=payload))):
++            jobs = await source.fetch()
++
++        assert len(jobs) == 1
++        job = jobs[0]
++        assert job.title == "Platform Engineer"
++        assert job.location == "Berlin, Germany"
++        assert job.is_remote is True
++        assert job.url == "https://acme.bamboohr.com/careers/55"
++
++    @pytest.mark.asyncio
++    async def test_non_json_response_returns_empty_without_crashing(self, monkeypatch):
++        monkeypatch.setattr(config, "BAMBOOHR_COMPANIES", ["acme"])
++        resp = _mock_response()
++        resp.json = MagicMock(side_effect=ValueError("no json"))
++        source = BambooHRSource()
++        with patch.object(source, "_get", new=AsyncMock(return_value=resp)):
++            jobs = await source.fetch()
++        assert jobs == []
+diff --git a/tests/test_filters.py b/tests/test_filters.py
+index 64cff75..31d8c8e 100644
+--- a/tests/test_filters.py
++++ b/tests/test_filters.py
+@@ -88,37 +88,39 @@ class TestLocationFilter:
+         assert passes_location_filter(job) is True
+ 
+     # ── EU country expansion (issue #1) ────────────────────────────────
+-    def test_accept_remote_spain(self):
++    def test_reject_remote_spain(self):
++        """Spain-only remote (no Germany option) → not usable, reject."""
+         job = _make_job(location="Remote - Spain")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_remote_portugal(self):
++    def test_reject_remote_portugal(self):
+         job = _make_job(location="Remote (Portugal)")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_remote_netherlands(self):
++    def test_reject_remote_netherlands(self):
+         job = _make_job(location="Remote, Netherlands")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_remote_france(self):
++    def test_reject_remote_france(self):
+         job = _make_job(location="France (Remote)")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_remote_poland(self):
++    def test_reject_remote_poland(self):
+         job = _make_job(location="Remote - Poland")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+     def test_accept_remote_dach(self):
+         job = _make_job(location="Remote - DACH region")
+         assert passes_location_filter(job) is True
+ 
+-    def test_accept_remote_benelux(self):
++    def test_reject_remote_benelux(self):
++        """Benelux (Belgium/NL/Luxembourg) has no Germany option → reject."""
+         job = _make_job(location="Benelux, Remote")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_remote_estonia(self):
++    def test_reject_remote_estonia(self):
+         job = _make_job(location="Estonia (Remote)")
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+     # ── Multi-country remote (issue #2) ────────────────────────────────
+     def test_accept_multi_country_eu(self):
+@@ -164,19 +166,19 @@ class TestLocationFilter:
+         )
+         assert passes_location_filter(job) is True
+ 
+-    def test_accept_eligible_to_work_in_netherlands(self):
++    def test_reject_eligible_to_work_in_netherlands(self):
+         job = _make_job(
+             location="Remote",
+             description="Must be eligible to work in the Netherlands.",
+         )
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+-    def test_accept_based_in_spain(self):
++    def test_reject_based_in_spain(self):
+         job = _make_job(
+             location="Remote",
+             description="Candidates must be based in Spain or Portugal.",
+         )
+-        assert passes_location_filter(job) is True
++        assert passes_location_filter(job) is False
+ 
+     def test_reject_must_reside_in_us(self):
+         """Residency requirement in non-EU country — scope unknown → REJECT."""
+@@ -409,26 +411,28 @@ class TestRemoteScopeClassification:
+     # ── EU country scope tests ─────────────────────────────────────────
+     def test_spain_scope(self):
+         job = _make_job(location="Remote - Spain")
+-        assert classify_remote_scope(job) == "eu"
++        assert classify_remote_scope(job) == "eu_other"
+ 
+     def test_portugal_scope(self):
+         job = _make_job(location="Remote (Portugal)")
+-        assert classify_remote_scope(job) == "eu"
++        assert classify_remote_scope(job) == "eu_other"
+ 
+     def test_multi_country_scope(self):
+         job = _make_job(location="Remote from Germany, Spain, or Portugal")
+         assert classify_remote_scope(job) == "germany"  # Germany takes priority
+ 
+     def test_dach_scope(self):
++        """DACH conventionally includes Germany, so it's Germany-eligible."""
+         job = _make_job(location="DACH region, Remote")
+-        assert classify_remote_scope(job) == "eu"
++        assert classify_remote_scope(job) == "germany"
+ 
+     def test_residency_eu_scope(self):
++        """Residency limited to France or Spain, no Germany → eu_other."""
+         job = _make_job(
+             location="Remote",
+             description="Must be located in France or Spain.",
+         )
+-        assert classify_remote_scope(job) == "eu"
++        assert classify_remote_scope(job) == "eu_other"
+ 
+ 
+ # ═══════════════════════════════════════════════════════════════════════════
+diff --git a/tests/test_new_sources.py b/tests/test_new_sources.py
+index 7f04e5c..e4bb08a 100644
+--- a/tests/test_new_sources.py
++++ b/tests/test_new_sources.py
+@@ -1336,12 +1336,13 @@ class TestSourceRegistration:
+             "techjobsforgood", "eurobrussels", "hours80k", "goodjobs", "devex",
+             "linkedin", "stepstone",
+             "nofluffjobs", "himalayas", "landingjobs", "themuse",
++            "ashby", "personio", "bamboohr",
+         }
+         assert set(ALL_SOURCES.keys()) == expected
+ 
+-    def test_source_count_is_seventeen(self):
++    def test_source_count_is_twenty(self):
+         from main import ALL_SOURCES
+-        assert len(ALL_SOURCES) == 17
++        assert len(ALL_SOURCES) == 20
+ 
+     def test_all_sources_are_httpx_based(self):
+         """After v1.5, all sources use httpx — no Playwright sources remain."""
+@@ -1371,7 +1372,7 @@ class TestSourceRegistration:
+     def test_get_sources_all(self):
+         from main import _get_sources
+         sources = _get_sources(None)
+-        assert len(sources) == 17
++        assert len(sources) == 20
+ 
+     def test_get_sources_single(self):
+         from main import _get_sources
+@@ -1481,7 +1482,9 @@ class TestNewSourcesFilterIntegration:
+         results = _apply_filters([job])
+         assert len(results) == 1
+ 
+-    def test_eurobrussels_eu_location_accepted(self):
++    def test_eurobrussels_onsite_brussels_rejected(self):
++        """Pure on-site Brussels (Belgium, not Germany, no remote signal)
++        is not usable for someone who must be based in Germany — reject."""
+         from main import _apply_filters
+ 
+         job = Job(
+@@ -1494,7 +1497,7 @@ class TestNewSourcesFilterIntegration:
+             is_ngo=True,
+         )
+         results = _apply_filters([job])
+-        assert len(results) == 1
++        assert len(results) == 0
+ 
+     def test_eurobrussels_berlin_accepted(self):
+         from main import _apply_filters
+@@ -1604,7 +1607,10 @@ class TestNewSourcesFilterIntegration:
+                 source="devex", is_remote=True, is_ngo=True),
+         ]
+         results = _apply_filters(jobs)
+-        assert len(results) == 3
++        # Brussels on-site (Org B) is correctly rejected: Belgium, not
++        # Germany, and no remote/hybrid signal.
++        assert len(results) == 2
++        assert {j.company for j in results} == {"Org A", "Org C"}
+ 
+     def test_company_cap_applies_to_new_sources(self):
+         """Per-company cap of 2 should apply to new source jobs too."""
+diff --git a/tests/test_v15_sources.py b/tests/test_v15_sources.py
+index c2d906f..ca11943 100644
+--- a/tests/test_v15_sources.py
++++ b/tests/test_v15_sources.py
+@@ -1032,7 +1032,7 @@ class TestSourceRegistrationV15:
+ 
+     def test_total_source_count(self):
+         import main
+-        assert len(main.ALL_SOURCES) == 17
++        assert len(main.ALL_SOURCES) == 20
+ 
+     def test_nofluffjobs_registered(self):
+         import main
