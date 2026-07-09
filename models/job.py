@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -18,6 +18,9 @@ class Job(BaseModel):
     company: str
     location: str  # raw location string from the source
     is_remote: bool = True
+    workplace_type: Literal["remote", "hybrid", "onsite", "unknown"] = "unknown"
+    eligible_countries: list[str] = Field(default_factory=list)
+    eligible_regions: list[str] = Field(default_factory=list)
     remote_scope: Optional[str] = None  # "worldwide", "eu", "germany", "unknown"
     url: str
     description: Optional[str] = None
@@ -26,6 +29,11 @@ class Job(BaseModel):
     source: str  # which source fetched this (e.g. "remotive")
     is_ngo: bool = False  # classified by the NGO filter
     match_score: int = 0  # 0–100% match score from filters/match.py
+    match_breakdown: dict[str, int] = Field(default_factory=dict)
+    match_reasons: list[str] = Field(default_factory=list)
+    eligibility_status: Literal["unknown", "eligible", "ineligible"] = "unknown"
+    eligibility_reasons: list[str] = Field(default_factory=list)
+    notification_tier: Literal["none", "digest", "immediate"] = "none"
     company_city: Optional[str] = None
     company_postal_code: Optional[str] = None
     company_country: Optional[str] = None
@@ -58,6 +66,15 @@ class Job(BaseModel):
         if isinstance(v, str):
             return [t.strip() for t in v.split(",") if t.strip()]
         return v
+
+    @field_validator("eligible_countries", "eligible_regions", mode="before")
+    @classmethod
+    def ensure_normalized_list(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = v.split(",")
+        return [str(item).strip().lower() for item in v if str(item).strip()]
 
     def __hash__(self) -> int:
         return hash(self.id)

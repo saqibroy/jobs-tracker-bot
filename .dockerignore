@@ -14,3 +14,5 @@ docker-compose.dev.yml
 scripts/dev.sh
 data/
 logs/
+cv.pdf
+*.pdf

@@ -1,0 +1,43 @@
+[candidate]
+home_country = "DE"
+home_city = "Berlin"
+max_german_level = "B1"
+accepted_languages = ["en"]
+
+[roles]
+primary = ["full stack", "fullstack", "full-stack", "frontend", "front-end", "front end"]
+secondary = ["backend", "back-end", "back end", "software engineer", "software developer", "web engineer", "web developer", "product engineer"]
+reject = [
+  "intern", "internship", "working student", "werkstudent", "junior", "entry level",
+  "engineering manager", "technical program manager", "product manager", "project manager",
+  "mobile engineer", "ios", "android", "devops", "site reliability", "sre",
+  "security engineer", "security lead", "data scientist", "data engineer",
+  "machine learning engineer", "research engineer", "solutions architect",
+  "qa engineer", "test engineer", "sales", "marketing", "recruiter"
+]
+
+[stack]
+core = [
+  "react", "next.js", "nextjs", "typescript", "vue", "vue.js", "nuxt",
+  "python", "django", "fastapi", "node.js", "nodejs", "ruby on rails",
+  "rails", "php", "symfony"
+]
+supporting = [
+  "javascript", "graphql", "postgresql", "postgres", "mysql", "mongodb",
+  "tailwind", "tailwindcss", "docker", "gitlab", "ci/cd", "rest api",
+  "langchain", "rag", "llm", "accessibility", "wcag"
+]
+incompatible = [
+  "java", "spring boot", "kotlin", "c++", "c#", ".net", "dotnet",
+  "golang", "rust", "salesforce", "sap", "swift"
+]
+
+[mission]
+keywords = [
+  "ngo", "nonprofit", "non-profit", "social impact", "humanitarian",
+  "civic tech", "digital rights", "climate", "mission-driven", "open source"
+]
+
+[notifications]
+immediate_score = 70
+digest_score = 45

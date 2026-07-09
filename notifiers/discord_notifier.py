@@ -34,6 +34,12 @@ _SOURCE_ICONS: dict[str, str] = {
     "devex": "🔴",
     "linkedin": "🔷",
     "stepstone": "🟦",
+    "greenhouse": "🟩",
+    "ashby": "🟨",
+    "personio": "🟧",
+    "lever": "🟦",
+    "workable": "🟪",
+    "jsonld": "🏢",
 }
 
 # Discord webhook rate-limit: ~30 requests per 60 seconds per webhook.
@@ -149,7 +155,7 @@ class DiscordNotifier(BaseNotifier):
     async def _send_single_job(self, job: Job) -> None:
         """Build and send a modern, visually polished embed for a job."""
         is_ngo = job.is_ngo
-        high_match = job.match_score >= 60
+        high_match = job.match_score >= 70
 
         # Colour priority: high match (amber) > NGO (emerald) > general (indigo)
         if high_match:
@@ -188,7 +194,7 @@ class DiscordNotifier(BaseNotifier):
 
         # Location line
         scope = job.remote_scope or "unknown"
-        if job.is_remote:
+        if job.workplace_type == "remote":
             scope_emoji = {
                 "worldwide": "🌍", "eu": "🇪🇺", "germany": "🇩🇪",
             }.get(scope, "📍")
@@ -199,8 +205,12 @@ class DiscordNotifier(BaseNotifier):
             if scope_label.lower() not in job.location.lower():
                 loc_text += f"  ·  *{scope_label} remote*"
         else:
-            loc_text = f"📍  {job.location}"
+            model_label = job.workplace_type.title()
+            loc_text = f"📍  {job.location}  ·  *{model_label}*"
         desc_lines.append(loc_text)
+
+        if job.eligibility_reasons:
+            desc_lines.append(f"✅  {job.eligibility_reasons[0]}")
 
         # Salary (if available)
         if job.salary:
@@ -239,6 +249,19 @@ class DiscordNotifier(BaseNotifier):
         if job.tags:
             tag_chips = "  ".join(f"`{t}`" for t in job.tags[:6])
             embed.add_embed_field(name="🏷️ Tags", value=tag_chips, inline=False)
+
+        if job.match_breakdown:
+            breakdown = " · ".join(
+                f"{name.replace('_', ' ').title()} **{score}**"
+                for name, score in job.match_breakdown.items()
+            )
+            embed.add_embed_field(name="🎯 Match breakdown", value=breakdown, inline=False)
+        if job.match_reasons:
+            embed.add_embed_field(
+                name="Why it matched",
+                value="; ".join(job.match_reasons[:4])[:1024],
+                inline=False,
+            )
 
         # ── Footer: source + posted time ───────────────────────────────
         posted_str = _format_relative_time(job.posted_at) if job.posted_at else "Unknown date"

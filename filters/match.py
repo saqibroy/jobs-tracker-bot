@@ -1,182 +1,114 @@
-"""Match score calculator.
-
-Computes a 0–100% match score for a job based on how well it matches
-the user's specific tech stack. Higher score = better match.
-
-Score = sum of matched keyword weights, normalized:
-  - Raw score > 60 → 95%+ match
-  - Linear scale below that
-
-Negative weights penalize mismatched stacks (Java, C++, etc.).
-"""
+"""Explainable CV-fit scoring for jobs that already passed hard eligibility."""
 
 from __future__ import annotations
 
 import re
 
-from loguru import logger
-
+from filters.profile import profile_list, profile_value
 from models.job import Job
-
-# ── User's tech stack — weighted by preference ─────────────────────────────
-STACK_WEIGHTS: dict[str, int] = {
-    # TIER 1 — Core daily stack (15-20 points each)
-    "react": 20,
-    "next.js": 18, "nextjs": 18,
-    "typescript": 16,
-    "vue": 15, "vue.js": 15,
-    "nuxt": 14, "nuxt.js": 14,
-    "fastapi": 16,
-    "django": 15,
-    "tailwind": 12, "tailwindcss": 12,
-    "python": 14,
-
-    # TIER 2 — Strong secondary skills (8-12 points)
-    "node": 12, "node.js": 12, "nodejs": 12,
-    "ruby on rails": 12, "rails": 10, "ruby": 8,
-    "graphql": 10,
-    "postgresql": 8, "postgres": 8,
-    "langchain": 12,
-    "rag": 12,
-    "llm": 10,
-    "javascript": 10,
-
-    # TIER 3 — Supporting skills (4-8 points)
-    "php": 7, "symfony": 8,
-    "docker": 6,
-    "gitlab": 5, "ci/cd": 5,
-    "rest api": 5,
-    "mysql": 5,
-    "mongodb": 4,
-    "jest": 4, "vitest": 4, "rspec": 4,
-    "wcag": 5, "accessibility": 5,
-    "stripe": 4,
-    "redis": 3,
-
-    # TIER 4 — NGO/mission signals (bonus, not tech)
-    "ngo": 15, "nonprofit": 15, "non-profit": 15,
-    "social impact": 10, "mission-driven": 10,
-    "open source": 6, "digital rights": 8,
-    "civic tech": 8, "humanitarian": 8,
-    "tactical tech": 20,  # direct match to previous employer type
-
-    # NEGATIVE weights (penalize mismatched stack)
-    "java": -5,
-    "spring boot": -5,
-    "c++": -8,
-    "c#": -5,
-    ".net": -5,
-    "kubernetes": -3,
-    "ansible": -3,
-    "terraform": -3,
-}
 
 
 def _normalize_score(raw: int) -> int:
-    """Normalize raw score to 0–100.
-
-    Calibrated for recalibrated weights (v1.5):
-      raw > 40 → 90-100%
-      raw 25-40 → 70-89%
-      raw 15-25 → 50-69%
-      raw 5-15  → 20-49%
-      raw < 5   → 0-19%
-    """
+    """Legacy helper retained for callers that score an already weighted sum."""
     if raw <= 0:
         return 0
     if raw >= 50:
         return min(95 + int((raw - 50) * 5 / 30), 100)
     if raw >= 40:
-        # 40..50 → 90..95
         return 90 + int((raw - 40) * 5 / 10)
     if raw >= 25:
-        # 25..40 → 70..90
         return 70 + int((raw - 25) * 20 / 15)
     if raw >= 15:
-        # 15..25 → 50..70
         return 50 + int((raw - 15) * 20 / 10)
     if raw >= 5:
-        # 5..15 → 20..50
         return 20 + int((raw - 5) * 30 / 10)
-    # 0..5 → 0..20
     return int(raw * 20 / 5)
 
 
+def _matched(text: str, values: list[str]) -> list[str]:
+    found: list[str] = []
+    for value in values:
+        if len(value) <= 3:
+            present = bool(re.search(rf"\b{re.escape(value)}\b", text))
+        else:
+            present = value in text
+        if present:
+            found.append(value)
+    return found
+
+
 def compute_match_score(job: Job) -> int:
-    """Compute a match score (0–100) for the job.
+    title = job.title.lower()
+    text = f"{title} {' '.join(job.tags).lower()} {(job.description or '').lower()}"
 
-    Checks title, tags, and first 500 chars of description against
-    the weighted keyword map.
-    """
-    title_lower = job.title.lower()
-    tags_lower = " ".join(job.tags).lower()
-    desc_lower = (job.description or "")[:500].lower()
-    combined = f"{title_lower} {tags_lower} {desc_lower}"
+    primary_roles = _matched(title, profile_list("roles", "primary"))
+    secondary_roles = _matched(title, profile_list("roles", "secondary"))
+    core = _matched(text, profile_list("stack", "core"))
+    supporting = _matched(text, profile_list("stack", "supporting"))
+    incompatible = _matched(text, profile_list("stack", "incompatible"))
+    mission = _matched(text + " " + job.company.lower(), profile_list("mission", "keywords"))
 
-    # Also check company for NGO-related keywords
-    company_lower = job.company.lower()
-    full_text = f"{combined} {company_lower}"
+    if primary_roles:
+        role_score = 40
+    elif secondary_roles:
+        role_score = 26
+    else:
+        role_score = 0
 
-    raw_score = 0
-    matched: list[str] = []
+    # Core skills matter much more than generic tooling. Synonyms are capped so
+    # repeated framework spellings cannot inflate the score beyond the dimension.
+    core_groups = {
+        value.replace(".js", "").replace("js", "").replace(" ", "").replace("-", "")
+        for value in core
+    }
+    stack_score = min(35, len(core_groups) * 8 + min(len(supporting), 3) * 3)
+    if incompatible and not core:
+        stack_score = 0
+    elif incompatible:
+        stack_score = max(0, stack_score - min(10, len(incompatible) * 3))
+    if _matched(title, profile_list("stack", "incompatible")):
+        # A mismatched backend language in the title is central to the role,
+        # not an incidental technology mentioned later in the description.
+        stack_score = min(stack_score, 10)
 
-    # Track already-counted keywords to avoid double-counting synonyms
-    counted_groups: set[str] = set()
+    if any(value in title for value in ("senior", "staff", "lead", "principal")):
+        seniority_score = 10
+    elif any(value in title for value in ("mid-level", "mid level", "professional")):
+        seniority_score = 8
+    else:
+        seniority_score = 6
 
-    # Short keywords that need word-boundary matching
-    _SHORT_KEYWORDS = {"ai", "vue", "php", "rag", "llm", "c#", "c++"}
+    mission_score = min(10, len(mission) * 5 + (5 if job.is_ngo else 0))
+    work_model_score = 5 if job.workplace_type in ("remote", "hybrid", "onsite") else 0
 
-    for keyword, weight in STACK_WEIGHTS.items():
-        if keyword in _SHORT_KEYWORDS:
-            if not re.search(rf"\b{re.escape(keyword)}\b", full_text):
-                continue
-        elif keyword not in full_text:
-            continue
+    breakdown = {
+        "role": role_score,
+        "stack": stack_score,
+        "seniority": seniority_score,
+        "mission": mission_score,
+        "work_model": work_model_score,
+    }
+    score = min(100, sum(breakdown.values()))
+    reasons: list[str] = []
+    if primary_roles or secondary_roles:
+        reasons.append(f"role: {(primary_roles or secondary_roles)[0]}")
+    if core:
+        reasons.append("core stack: " + ", ".join(core[:5]))
+    if supporting:
+        reasons.append("supporting: " + ", ".join(supporting[:3]))
+    if mission:
+        reasons.append("mission: " + ", ".join(mission[:2]))
+    if incompatible:
+        reasons.append("mixed stack: " + ", ".join(incompatible[:3]))
 
-        # Avoid double-counting synonym groups
-        group = _get_synonym_group(keyword)
-        if group in counted_groups:
-            continue
-        counted_groups.add(group)
-        raw_score += weight
-        matched.append(keyword)
-
-    # NGO bonus: if the job is flagged as NGO, add bonus
-    if job.is_ngo and "ngo" not in counted_groups and "nonprofit" not in counted_groups:
-        raw_score += 10
-        matched.append("ngo (flag)")
-
-    score = _normalize_score(raw_score)
-
-    if matched:
-        logger.debug(
-            "Match score {}: {} (raw={}, keywords={})",
-            score, job.title, raw_score, ", ".join(matched[:8]),
-        )
-
+    job.match_breakdown = breakdown
+    job.match_reasons = reasons
+    immediate = int(profile_value("notifications", "immediate_score", 70))
+    digest = int(profile_value("notifications", "digest_score", 45))
+    job.notification_tier = "immediate" if score >= immediate else "digest" if score >= digest else "none"
     return score
 
 
-def _get_synonym_group(keyword: str) -> str:
-    """Map synonymous keywords to a canonical group name."""
-    _GROUPS = {
-        "nextjs": "nextjs", "next.js": "nextjs",
-        "nodejs": "nodejs", "node": "nodejs", "node.js": "nodejs",
-        "tailwind": "tailwind", "tailwindcss": "tailwind",
-        "ngo": "ngo", "nonprofit": "ngo", "non-profit": "ngo",
-        "vue": "vue", "vue.js": "vue",
-        "nuxt": "nuxt", "nuxt.js": "nuxt",
-        "postgresql": "postgresql", "postgres": "postgresql",
-        "ruby on rails": "rails", "rails": "rails",
-    }
-    return _GROUPS.get(keyword, keyword)
-
-
 def match_score_bar(score: int) -> str:
-    """Render a 10-block Unicode bar for the match score.
-
-    Example: 78% → ████████░░
-    """
     filled = round(score / 10)
-    empty = 10 - filled
-    return "█" * filled + "░" * empty
+    return "█" * filled + "░" * (10 - filled)

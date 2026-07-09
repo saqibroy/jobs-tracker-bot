@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from models.job import Job
 from sources.base import BaseSource
+from sources.ats_common import country_codes_from_text, regions_from_text
 
 _API_URL = "https://remotive.com/api/remote-jobs"
 
@@ -68,11 +69,15 @@ class RemotiveSource(BaseSource):
                 if item.get("tags"):
                     tags = item["tags"] if isinstance(item["tags"], list) else []
 
+                required_location = item.get("candidate_required_location", "Anywhere")
                 job = Job(
                     title=item.get("title", ""),
                     company=item.get("company_name", ""),
-                    location=item.get("candidate_required_location", "Anywhere"),
+                    location=required_location,
                     is_remote=True,  # Remotive is remote-only board
+                    workplace_type="remote",
+                    eligible_countries=country_codes_from_text(required_location),
+                    eligible_regions=regions_from_text(required_location),
                     url=item.get("url", ""),
                     description=item.get("description", ""),
                     salary=item.get("salary", None) or None,

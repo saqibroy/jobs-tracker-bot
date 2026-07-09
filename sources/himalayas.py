@@ -162,6 +162,15 @@ class HimalayasSource(BaseSource):
             company=company,
             location=location,
             is_remote=True,
+            workplace_type="remote",
+            eligible_countries=[
+                value.lower() for value in restrictions
+                if value.lower() not in {"worldwide", "global", "anywhere", "remote", "europe", "eu", "eea", "emea"}
+            ],
+            eligible_regions=[
+                value.lower() for value in restrictions
+                if value.lower() in {"worldwide", "global", "anywhere", "remote", "europe", "eu", "eea", "emea"}
+            ],
             remote_scope=remote_scope,
             url=url,
             description=desc or None,

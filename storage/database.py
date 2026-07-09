@@ -7,6 +7,7 @@ Easy to swap for PostgreSQL later — just replace the SQL calls.
 from __future__ import annotations
 
 import os
+import json
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -23,6 +24,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     company     TEXT NOT NULL,
     location    TEXT,
     is_remote   INTEGER DEFAULT 1,
+    workplace_type TEXT DEFAULT 'unknown',
+    eligible_countries TEXT DEFAULT '[]',
+    eligible_regions TEXT DEFAULT '[]',
     remote_scope TEXT,
     url         TEXT NOT NULL UNIQUE,
     description TEXT,
@@ -31,6 +35,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     source      TEXT,
     is_ngo      INTEGER DEFAULT 0,
     match_score INTEGER DEFAULT 0,
+    match_breakdown TEXT DEFAULT '{}',
+    match_reasons TEXT DEFAULT '[]',
+    eligibility_status TEXT DEFAULT 'unknown',
+    eligibility_reasons TEXT DEFAULT '[]',
+    notification_tier TEXT DEFAULT 'none',
     posted_at   TEXT,
     fetched_at  TEXT NOT NULL,
     notified    INTEGER DEFAULT 0
@@ -45,6 +54,17 @@ CREATE INDEX IF NOT EXISTS idx_content_hash ON jobs(content_hash);
 _ADD_MATCH_SCORE_COL = """
 ALTER TABLE jobs ADD COLUMN match_score INTEGER DEFAULT 0;
 """
+
+_NEW_COLUMNS: dict[str, str] = {
+    "workplace_type": "TEXT DEFAULT 'unknown'",
+    "eligible_countries": "TEXT DEFAULT '[]'",
+    "eligible_regions": "TEXT DEFAULT '[]'",
+    "match_breakdown": "TEXT DEFAULT '{}'",
+    "match_reasons": "TEXT DEFAULT '[]'",
+    "eligibility_status": "TEXT DEFAULT 'unknown'",
+    "eligibility_reasons": "TEXT DEFAULT '[]'",
+    "notification_tier": "TEXT DEFAULT 'none'",
+}
 
 
 async def _db_path() -> str:
@@ -66,6 +86,12 @@ async def init_db() -> None:
             logger.debug("Migration: added match_score column")
         except Exception:
             pass  # column already exists
+        for column, definition in _NEW_COLUMNS.items():
+            try:
+                await db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {definition}")
+                logger.debug("Migration: added {} column", column)
+            except Exception:
+                pass
         await db.commit()
     logger.info("Database initialized at {}", path)
 
@@ -116,9 +142,12 @@ async def save_jobs(jobs: list[Job]) -> None:
                 """
                 INSERT OR IGNORE INTO jobs
                     (id, content_hash, title, company, location, is_remote,
+                     workplace_type, eligible_countries, eligible_regions,
                      remote_scope, url, description, salary, tags, source,
-                     is_ngo, match_score, posted_at, fetched_at, notified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                     is_ngo, match_score, match_breakdown, match_reasons,
+                     eligibility_status, eligibility_reasons, notification_tier,
+                     posted_at, fetched_at, notified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     job.id,
@@ -127,6 +156,9 @@ async def save_jobs(jobs: list[Job]) -> None:
                     job.company,
                     job.location,
                     int(job.is_remote),
+                    job.workplace_type,
+                    json.dumps(job.eligible_countries),
+                    json.dumps(job.eligible_regions),
                     job.remote_scope,
                     job.url,
                     job.description,
@@ -135,6 +167,11 @@ async def save_jobs(jobs: list[Job]) -> None:
                     job.source,
                     int(job.is_ngo),
                     job.match_score,
+                    json.dumps(job.match_breakdown),
+                    json.dumps(job.match_reasons),
+                    job.eligibility_status,
+                    json.dumps(job.eligibility_reasons),
+                    job.notification_tier,
                     job.posted_at.isoformat() if job.posted_at else None,
                     job.fetched_at.isoformat(),
                 ),
@@ -167,8 +204,9 @@ async def get_recent_unnotified(hours: int = 6, limit: int = 15) -> list[dict]:
             """
             SELECT * FROM jobs
             WHERE notified = 0
+              AND notification_tier = 'digest'
               AND fetched_at >= datetime(?, '-' || ? || ' hours')
-            ORDER BY fetched_at DESC
+            ORDER BY match_score DESC, fetched_at DESC
             LIMIT ?
             """,
             (cutoff, hours, limit),
@@ -221,6 +259,11 @@ async def get_stats() -> dict:
         )
         sources = {row[0]: row[1] for row in await cursor.fetchall()}
 
+        cursor = await db.execute(
+            "SELECT notification_tier, COUNT(*) FROM jobs GROUP BY notification_tier"
+        )
+        notification_tiers = {row[0]: row[1] for row in await cursor.fetchall()}
+
         # Top companies (top 10)
         cursor = await db.execute(
             "SELECT company, COUNT(*) as cnt FROM jobs GROUP BY company ORDER BY cnt DESC LIMIT 10"
@@ -244,6 +287,7 @@ async def get_stats() -> dict:
             "ngo_count": ngo_count,
             "new_24h": new_24h,
             "sources": sources,
+            "notification_tiers": notification_tiers,
             "top_companies": top_companies,
             "last_fetched_at": last_fetched_at,
         }

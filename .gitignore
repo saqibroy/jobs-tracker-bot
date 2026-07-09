@@ -17,6 +17,9 @@ data/*.db
 # Logs
 logs/
 
+# Candidate CV stays local; profile.toml contains the sanitized search profile.
+cv.pdf
+
 # IDE
 .vscode/
 .idea/

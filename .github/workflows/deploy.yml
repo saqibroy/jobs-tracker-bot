@@ -23,7 +23,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ""
           TELEGRAM_BOT_TOKEN: ""
           TELEGRAM_CHAT_ID: ""
-        run: python -m pytest tests/ -v --tb=short --timeout=30
+        run: python -m pytest -v --tb=short --timeout=30
 
   deploy:
     needs: test
@@ -44,19 +44,34 @@ jobs:
             # Backup DB before deploy
             bash scripts/backup.sh 2>/dev/null || true
 
-            # Pull and rebuild
+            # Pull and build without replacing the healthy container
             git pull origin main
-            sudo docker compose up -d --build
+            sudo docker compose build
+
+            # Validate public employer feeds and the complete pipeline.
+            sudo docker compose run --rm --no-deps job-bot python main.py --validate-sources
+            sudo docker compose run --rm --no-deps job-bot python main.py --dry-run --max-age 14
+
+            # Replace only after validation succeeds.
+            sudo docker compose up -d
 
             # Wait for health check
             echo "Waiting for container..."
+            HEALTHY=false
             for i in $(seq 1 12); do
               if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
                 echo "✓ Health check passed"
+                HEALTHY=true
                 break
               fi
               sleep 5
             done
+
+            if [ "$HEALTHY" != "true" ]; then
+              echo "Health check failed"
+              sudo docker compose logs --tail=100 job-bot
+              exit 1
+            fi
 
             sudo docker compose ps
             echo "Deploy complete"

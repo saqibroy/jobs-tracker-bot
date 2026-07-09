@@ -138,6 +138,8 @@ class ArbeitnowSource(BaseSource):
                     company=item.get("company_name", ""),
                     location=location,
                     is_remote=bool(remote),
+                    workplace_type="remote" if remote else "onsite",
+                    eligible_countries=[parsed_country.lower()] if parsed_country else [],
                     url=item.get("url", ""),
                     description=item.get("description", ""),
                     salary=item.get("salary", None) or None,

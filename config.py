@@ -58,11 +58,10 @@ SOURCE_MAX_AGE_DAYS: dict[str, int] = {
 # Comma-separated company names to always skip (case-insensitive).
 COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
 
-# ── ATS-specific company boards ─────────────────────────────────────────────
-# These ATS platforms don't have a global "browse all companies" endpoint —
-# you fetch one company's board at a time by its slug/subdomain. Add the
-# slugs of companies you want to track (comma-separated, case-sensitive
-# where noted).
+# ── Legacy ATS environment lists ───────────────────────────────────────────
+# Direct employer boards now live in validated companies.toml entries. These
+# values remain readable for backward compatibility with older scripts/tests,
+# but scheduled v2 scans do not use them.
 #
 # Ashby: the slug is the last path segment of https://jobs.ashbyhq.com/<slug>
 ASHBY_COMPANIES: list[str] = [

@@ -1,0 +1,328 @@
+# Employer boards are intentionally explicit. Run `python main.py
+# --validate-sources` before enabling a newly discovered board.
+
+[[companies]]
+company = "Taktile"
+provider = "ashby"
+slug = "taktile"
+enabled = true
+
+[[companies]]
+company = "Zapier"
+provider = "ashby"
+slug = "zapier"
+enabled = true
+
+[[companies]]
+company = "Synthesia"
+provider = "ashby"
+slug = "synthesia"
+enabled = true
+
+[[companies]]
+company = "PostHog"
+provider = "ashby"
+slug = "posthog"
+enabled = true
+
+[[companies]]
+company = "ResearchGate"
+provider = "personio"
+slug = "researchgate"
+enabled = true
+
+[[companies]]
+company = "Ecosia"
+provider = "personio"
+slug = "ecosia"
+enabled = true
+
+[[companies]]
+company = "Contentful"
+provider = "greenhouse"
+slug = "contentful"
+enabled = true
+
+[[companies]]
+company = "GetYourGuide"
+provider = "greenhouse"
+slug = "getyourguide"
+enabled = true
+
+[[companies]]
+company = "Grafana Labs"
+provider = "lever"
+slug = "grafana"
+region = "global"
+enabled = false
+
+[[companies]]
+company = "Elastic"
+provider = "lever"
+slug = "elastic"
+region = "global"
+enabled = false
+
+[[companies]]
+company = "Infarm"
+provider = "workable"
+slug = "infarm"
+enabled = true
+
+# Additional boards validated against their public feeds on 2026-07-09.
+
+[[companies]]
+company = "Moss"
+provider = "ashby"
+slug = "moss"
+enabled = true
+
+[[companies]]
+company = "Climatiq"
+provider = "ashby"
+slug = "climatiq"
+enabled = true
+
+[[companies]]
+company = "Qonto"
+provider = "ashby"
+slug = "qonto"
+enabled = true
+
+[[companies]]
+company = "Deel"
+provider = "ashby"
+slug = "deel"
+enabled = true
+
+[[companies]]
+company = "Vercel"
+provider = "ashby"
+slug = "vercel"
+enabled = true
+
+[[companies]]
+company = "Linear"
+provider = "ashby"
+slug = "linear"
+enabled = true
+
+[[companies]]
+company = "Supabase"
+provider = "ashby"
+slug = "supabase"
+enabled = true
+
+[[companies]]
+company = "Notion"
+provider = "ashby"
+slug = "notion"
+enabled = true
+
+[[companies]]
+company = "Chroma"
+provider = "ashby"
+slug = "trychroma"
+enabled = true
+
+[[companies]]
+company = "Alan"
+provider = "ashby"
+slug = "alan"
+enabled = true
+
+[[companies]]
+company = "Photoroom"
+provider = "ashby"
+slug = "photoroom"
+enabled = true
+
+[[companies]]
+company = "Clerk"
+provider = "ashby"
+slug = "clerk"
+enabled = true
+
+[[companies]]
+company = "Render"
+provider = "ashby"
+slug = "render"
+enabled = true
+
+[[companies]]
+company = "Railway"
+provider = "ashby"
+slug = "railway"
+enabled = true
+
+[[companies]]
+company = "Neon"
+provider = "ashby"
+slug = "neon"
+enabled = true
+
+[[companies]]
+company = "Sanity"
+provider = "ashby"
+slug = "sanity"
+enabled = true
+
+[[companies]]
+company = "Pinecone"
+provider = "ashby"
+slug = "pinecone"
+enabled = true
+
+[[companies]]
+company = "Cohere"
+provider = "ashby"
+slug = "cohere"
+enabled = true
+
+[[companies]]
+company = "Replit"
+provider = "ashby"
+slug = "replit"
+enabled = true
+
+[[companies]]
+company = "Airtable"
+provider = "ashby"
+slug = "airtable"
+enabled = true
+
+[[companies]]
+company = "Weaviate"
+provider = "ashby"
+slug = "weaviate"
+enabled = true
+
+[[companies]]
+company = "N26"
+provider = "greenhouse"
+slug = "n26"
+enabled = true
+
+[[companies]]
+company = "HelloFresh"
+provider = "greenhouse"
+slug = "hellofresh"
+enabled = true
+
+[[companies]]
+company = "SumUp"
+provider = "greenhouse"
+slug = "sumup"
+enabled = true
+
+[[companies]]
+company = "Flix"
+provider = "greenhouse"
+slug = "flix"
+enabled = true
+
+[[companies]]
+company = "Doctolib"
+provider = "greenhouse"
+slug = "doctolib"
+enabled = true
+
+[[companies]]
+company = "HubSpot"
+provider = "greenhouse"
+slug = "hubspot"
+enabled = true
+
+[[companies]]
+company = "GitLab"
+provider = "greenhouse"
+slug = "gitlab"
+enabled = true
+
+[[companies]]
+company = "Wolt"
+provider = "greenhouse"
+slug = "wolt"
+enabled = true
+
+[[companies]]
+company = "Datadog"
+provider = "greenhouse"
+slug = "datadog"
+enabled = true
+
+[[companies]]
+company = "StepStone"
+provider = "greenhouse"
+slug = "stepstone"
+enabled = true
+
+[[companies]]
+company = "Trade Republic"
+provider = "greenhouse"
+slug = "traderepublic"
+enabled = true
+
+[[companies]]
+company = "Cloudflare"
+provider = "greenhouse"
+slug = "cloudflare"
+enabled = true
+
+[[companies]]
+company = "MongoDB"
+provider = "greenhouse"
+slug = "mongodb"
+enabled = true
+
+[[companies]]
+company = "Dropbox"
+provider = "greenhouse"
+slug = "dropbox"
+enabled = true
+
+[[companies]]
+company = "Smava"
+provider = "personio"
+slug = "smava"
+enabled = true
+
+[[companies]]
+company = "Wunderflats"
+provider = "personio"
+slug = "wunderflats"
+enabled = true
+
+[[companies]]
+company = "McMakler"
+provider = "personio"
+slug = "mcmakler"
+enabled = true
+
+[[companies]]
+company = "Homeday"
+provider = "personio"
+slug = "homeday"
+enabled = true
+
+[[companies]]
+company = "Sofatutor"
+provider = "personio"
+slug = "sofatutor"
+enabled = true
+
+[[companies]]
+company = "deepset"
+provider = "personio"
+slug = "deepset"
+enabled = true
+
+# JOIN and Teamtailor do not expose an applicant-wide authenticated API.
+# Add their public career URL as `url` and enable after validation:
+#
+# [[companies]]
+# company = "Example"
+# provider = "jsonld"
+# slug = "example"
+# url = "https://example.join.com/jobs"
+# enabled = false
