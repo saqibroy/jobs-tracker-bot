@@ -261,7 +261,9 @@ enabled = true
 company = "Trade Republic"
 provider = "greenhouse"
 slug = "traderepublic"
-enabled = true
+# Disabled 2026-07-09: repeatedly timed out during Oracle validation and only
+# exposed one raw job when reachable.
+enabled = false
 
 [[companies]]
 company = "Cloudflare"
