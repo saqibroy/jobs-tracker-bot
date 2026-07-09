@@ -136,7 +136,53 @@ python main.py --validate-sources
 python main.py --stats
 ```
 
-### 4. Run the bot
+### 4. Discover and promote more employer boards
+
+The bot does not use `ASHBY_COMPANIES`, `PERSONIO_COMPANIES`, etc. from
+`.env` as runtime source lists anymore. Those old values are only useful as
+discovery seeds. Production boards live in `companies.toml`.
+
+Run discovery in report-only mode first:
+
+```bash
+python scripts/discover_companies.py \
+  --from-env \
+  --seed-file /path/to/company-discovery-notes.txt \
+  --detect-domains \
+  --new-only
+```
+
+This writes:
+
+- `data/discovery/discovered_companies.jsonl`
+- `data/discovery/companies.candidates.toml`
+
+Promote passing boards automatically after validation:
+
+```bash
+python scripts/discover_companies.py \
+  --from-env \
+  --seed-file /path/to/company-discovery-notes.txt \
+  --detect-domains \
+  --new-only \
+  --min-jobs 1 \
+  --min-eligible 1 \
+  --promote
+
+python main.py --validate-sources
+python main.py --dry-run --max-age 14
+```
+
+By default, promotion only appends boards that fetched live jobs and produced at
+least one Germany/Berlin-eligible job through the same hard eligibility filter
+used in production. Use `--min-matches 1` if you only want to promote boards
+that currently contain a role/profile match too.
+
+JOIN boards are handled through the public career/job page route:
+`provider = "jsonld"` plus a public URL. JOIN's employer API needs an
+employer-account token, so the bot does not store or require JOIN API secrets.
+
+### 5. Run the bot
 
 ```bash
 python main.py

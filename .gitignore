@@ -13,6 +13,7 @@ env/
 
 # Database
 data/*.db
+data/discovery/
 
 # Logs
 logs/
