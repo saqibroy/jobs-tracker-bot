@@ -434,3 +434,132 @@ provider = "personio"
 slug = "topi"
 url = "https://topi.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-09 20:51:09 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Ashby"
+provider = "ashby"
+slug = "ashby"
+url = "https://jobs.ashbyhq.com/ashby"
+enabled = true
+
+[[companies]]
+company = "Cello"
+provider = "ashby"
+slug = "cello"
+url = "https://jobs.ashbyhq.com/cello"
+enabled = true
+
+[[companies]]
+company = "Codesphere"
+provider = "ashby"
+slug = "codesphere"
+url = "https://jobs.ashbyhq.com/codesphere"
+enabled = true
+
+[[companies]]
+company = "Deepslate"
+provider = "ashby"
+slug = "deepslate"
+url = "https://jobs.ashbyhq.com/deepslate"
+enabled = true
+
+[[companies]]
+company = "Hawk"
+provider = "ashby"
+slug = "hawk"
+url = "https://jobs.ashbyhq.com/hawk"
+enabled = true
+
+[[companies]]
+company = "Xbowcareers"
+provider = "ashby"
+slug = "xbowcareers"
+url = "https://jobs.ashbyhq.com/xbowcareers"
+enabled = true
+
+[[companies]]
+company = "Commercetools"
+provider = "greenhouse"
+slug = "commercetools"
+url = "https://boards.greenhouse.io/commercetools"
+enabled = true
+
+[[companies]]
+company = "Nebius"
+provider = "greenhouse"
+slug = "nebius"
+url = "https://boards.greenhouse.io/nebius"
+enabled = true
+
+[[companies]]
+company = "Parloa"
+provider = "greenhouse"
+slug = "parloa"
+url = "https://boards.greenhouse.io/parloa"
+enabled = true
+
+[[companies]]
+company = "Aircall"
+provider = "lever"
+slug = "aircall"
+url = "https://jobs.lever.co/aircall"
+enabled = true
+
+[[companies]]
+company = "Insiderone"
+provider = "lever"
+slug = "insiderone"
+url = "https://jobs.lever.co/insiderone"
+enabled = true
+
+[[companies]]
+company = "Octoenergy"
+provider = "lever"
+slug = "octoenergy"
+url = "https://jobs.lever.co/octoenergy"
+enabled = true
+
+[[companies]]
+company = "Qonto"
+provider = "lever"
+slug = "qonto"
+url = "https://jobs.lever.co/qonto"
+enabled = true
+
+[[companies]]
+company = "Quantco"
+provider = "lever"
+slug = "quantco-"
+url = "https://jobs.lever.co/quantco-"
+enabled = true
+
+[[companies]]
+company = "Veo"
+provider = "lever"
+slug = "veo"
+url = "https://jobs.lever.co/veo"
+enabled = true
+
+[[companies]]
+company = "Data4life"
+provider = "personio"
+slug = "data4life"
+url = "https://data4life.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Egym"
+provider = "personio"
+slug = "egym"
+url = "https://egym.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Goreha"
+provider = "personio"
+slug = "goreha"
+url = "https://goreha.jobs.personio.de"
+enabled = true
