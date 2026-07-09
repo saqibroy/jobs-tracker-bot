@@ -53,6 +53,24 @@ _GERMAN_CITIES: list[str] = [
     "hannover", "nuremberg", "nürnberg", "dortmund", "essen", "bremen",
 ]
 
+# Tokens that signal Germany is an eligible base. "dach" is included because
+# DACH-region postings are conventionally open to Germany-based candidates.
+_GERMANY_TOKENS: list[str] = ["germany", "deutschland", "dach", *_GERMAN_CITIES]
+
+# EU/EEA countries OTHER than Germany. If one of these is named as the
+# specific location/residency requirement and Germany is NOT also named,
+# the role requires living outside Germany and is not a match for someone
+# based in Germany — even if Germany is mentioned elsewhere (e.g. company
+# HQ address) in the tags/description.
+_NON_GERMANY_EU_COUNTRIES: list[str] = [
+    "austria", "österreich", "switzerland", "schweiz",
+    "france", "spain", "portugal", "italy", "netherlands", "belgium",
+    "luxembourg", "ireland", "sweden", "denmark", "norway", "finland",
+    "iceland", "poland", "czech republic", "czechia", "romania", "hungary",
+    "slovakia", "slovenia", "croatia", "bulgaria", "estonia", "latvia",
+    "lithuania", "greece", "cyprus", "malta", "benelux",
+]
+
 # ── Blocklist patterns (lowercase) ─────────────────────────────────────────
 _BLOCK_PATTERNS: list[str] = [
     "uk only",
@@ -200,10 +218,15 @@ def _mentions_eu_country(text: str) -> bool:
 
 
 def _mentions_germany(text: str) -> bool:
-    """Return True if the text mentions Germany or a German city."""
-    if "germany" in text or "deutschland" in text:
-        return True
-    return any(city in text for city in _GERMAN_CITIES)
+    """Return True if the text mentions Germany, DACH, or a German city."""
+    return any(tok in text for tok in _GERMANY_TOKENS)
+
+
+def _mentions_non_germany_eu_country(text: str) -> bool:
+    """Return True if the text names a specific EU/EEA country other than
+    Germany (Austria/Switzerland included, since "DACH" is handled
+    separately as Germany-equivalent)."""
+    return any(country in text for country in _NON_GERMANY_EU_COUNTRIES)
 
 
 def _mentions_non_eu_location(loc: str) -> bool:
@@ -282,32 +305,60 @@ def _has_worldwide_override(loc: str) -> bool:
 def classify_remote_scope(job: Job) -> str:
     """Determine the remote scope from location + tags.
 
-    Priority: Germany > EU country > EU region > Worldwide (corroborated) >
-              Country blocklist > Non-EU pattern > generic remote.
+    Saqib needs to be based in Germany (remote) or Berlin (hybrid/onsite).
+    A role that is remote-eligible only from another specific EU country
+    (Spain, Poland, Portugal, etc.) is NOT usable for him even though it's
+    "EU remote" in a general sense — so those are classified "eu_other"
+    and rejected, distinct from generic "remote across Europe" postings
+    (scope "eu") which don't name an excluding country and presumably
+    include Germany.
+
+    Priority: Germany > specific non-Germany EU country (location field) >
+              specific non-Germany EU country (residency phrase) >
+              generic EU/worldwide region > country blocklist >
+              non-EU pattern > generic remote.
     """
     loc = _lower(job.location)
     tags_text = _lower(" ".join(job.tags))
     loc_and_tags = f"{loc} {tags_text}"
     desc_snippet = _lower((job.description or "")[:500])
+    combined = f"{loc_and_tags} {desc_snippet}"
 
-    # 1. Germany — highest specificity
+    # 1. Germany (or DACH / a German city) named anywhere in location/tags
+    #    — Germany is an eligible base, even if other countries are also
+    #    listed (e.g. "Germany, Spain, or Portugal").
     if _mentions_germany(loc_and_tags):
         return "germany"
 
-    # 2. Specific EU country in location/tags
-    if _mentions_eu_country(loc_and_tags):
-        return "eu"
+    # 2. Residency phrase explicitly names Germany in the description.
+    if _has_residency_with_eu_country(combined) and _mentions_germany(combined):
+        return "germany"
 
-    # 3. EU region keywords (location + tags + description)
-    combined = f"{loc_and_tags} {desc_snippet}"
+    # 3. The *location* field (most authoritative, structured) names a
+    #    specific non-Germany EU country and gives no worldwide/EU-region
+    #    override → this role isn't open to Germany-based candidates.
+    if _mentions_non_germany_eu_country(loc):
+        if not _has_any(loc, _WORLDWIDE_KEYWORDS) and not _has_any(loc, _EU_REGION_KEYWORDS):
+            return "eu_other"
+
+    # 4. A "must be located in / based in X" residency phrase names a
+    #    specific non-Germany EU country (and Germany isn't also named).
+    if _has_residency_with_eu_country(combined):
+        return "eu_other"
+
+    # 5. Generic EU/EEA region keywords (no specific excluding country) —
+    #    e.g. "Remote - Europe", "EMEA". Broad enough to presumably
+    #    include Germany.
     if _has_any(combined, _EU_REGION_KEYWORDS):
         return "eu"
 
-    # 4. Residency requirement in EU country (description)
-    if _has_residency_with_eu_country(combined):
-        return "eu"
+    # 6. A non-Germany EU country named only in tags/description (not the
+    #    location field) without any Germany mention → treat conservatively
+    #    as not usable.
+    if _mentions_non_germany_eu_country(loc_and_tags):
+        return "eu_other"
 
-    # 5. Worldwide — only trust if corroborated:
+    # 7. Worldwide — only trust if corroborated:
     #    - Source is a remote-only board (remoteok, weworkremotely, remotive)
     #    - Location explicitly says "Worldwide", "Work from anywhere", etc.
     #    For arbeitnow: "Worldwide" without other signal → treat as germany.
@@ -327,20 +378,20 @@ def classify_remote_scope(job: Job) -> str:
             return "worldwide"
         return "worldwide"
 
-    # 6. Country blocklist check — if location matches a blocked country
+    # 8. Country blocklist check — if location matches a blocked country
     #    and does NOT have an EU/worldwide override, mark as restricted.
     if _matches_country_blocklist(loc):
         if not _has_worldwide_override(loc):
             return "restricted"
 
-    # 7. Non-EU country/city in location field → restricted
+    # 9. Non-EU country/city in location field → restricted
     #    Only check the *location* string (not tags/description) to avoid
     #    false positives from tag lists like "python, aws, us team ok".
     if _mentions_non_eu_location(loc):
         return "restricted"
 
-    # 8. Generic remote — now returns "unknown" which will be REJECTED
-    #    by the location filter (unknown = we don't know = don't notify)
+    # 10. Generic remote — now returns "unknown" which will be REJECTED
+    #     by the location filter (unknown = we don't know = don't notify)
     if _has_remote_signal(combined):
         return "unknown"
 
@@ -370,6 +421,13 @@ def passes_location_filter(job: Job) -> bool:
         logger.debug("Location REJECT (restricted scope): {}", job.title)
         return False
 
+    # ── eu_other: EU-remote but tied to a specific non-Germany country ──
+    # (e.g. "Remote - Spain", "must be based in Poland"). Not usable for
+    # someone who needs to be based in Germany.
+    if job.remote_scope == "eu_other":
+        logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
+        return False
+
     # ── Unknown scope: DEFAULT TO REJECT ────────────────────────────────
     # Unknown scope = we don't know where it's accessible from = don't notify.
     if job.remote_scope == "unknown":
@@ -396,6 +454,12 @@ def passes_location_filter(job: Job) -> bool:
             logger.debug("Location REJECT (country blocklist): {}", job.title)
             return False
 
+    # ── Reject: specific non-Germany EU country in location, no override ─
+    if _mentions_non_germany_eu_country(loc) and not _mentions_germany(loc):
+        if not _has_any(loc, _WORLDWIDE_KEYWORDS) and not _has_any(loc, _EU_REGION_KEYWORDS):
+            logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
+            return False
+
     # ── Accept: worldwide remote ────────────────────────────────────────
     if _has_any(combined, _WORLDWIDE_KEYWORDS):
         logger.debug("Location ACCEPT (worldwide): {}", job.title)
@@ -419,19 +483,15 @@ def passes_location_filter(job: Job) -> bool:
         logger.debug("Location REJECT (Germany, no remote/hybrid signal): {}", job.title)
         return False
 
-    # ── Accept: specific EU country + remote signal ─────────────────────
-    if _mentions_eu_country(combined) and _has_remote_signal(combined):
-        logger.debug("Location ACCEPT (EU country + remote): {}", job.title)
-        return True
+    # ── Reject: specific non-Germany EU country + remote signal ─────────
+    # (previously accepted — now rejected since Saqib needs Germany)
+    if _mentions_non_germany_eu_country(combined):
+        logger.debug("Location REJECT (EU country, not Germany): {}", job.title)
+        return False
 
-    # ── Accept: EU country explicitly in location field ─────────────────
-    if _mentions_eu_country(loc):
-        logger.debug("Location ACCEPT (EU country in location): {}", job.title)
-        return True
-
-    # ── Accept: residency requirement in EU country ─────────────────────
-    if _has_residency_with_eu_country(combined):
-        logger.debug("Location ACCEPT (residency in EU country): {}", job.title)
+    # ── Accept: residency requirement in Germany specifically ───────────
+    if _has_residency_with_eu_country(combined) and _mentions_germany(combined):
+        logger.debug("Location ACCEPT (residency in Germany): {}", job.title)
         return True
 
     # ── No known eligible scope — reject ────────────────────────────────

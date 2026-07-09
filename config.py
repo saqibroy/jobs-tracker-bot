@@ -58,6 +58,21 @@ SOURCE_MAX_AGE_DAYS: dict[str, int] = {
 # Comma-separated company names to always skip (case-insensitive).
 COMPANY_BLOCKLIST: list[str] = _get_list("COMPANY_BLOCKLIST")
 
+# ── ATS-specific company boards ─────────────────────────────────────────────
+# These ATS platforms don't have a global "browse all companies" endpoint —
+# you fetch one company's board at a time by its slug/subdomain. Add the
+# slugs of companies you want to track (comma-separated, case-sensitive
+# where noted).
+#
+# Ashby: the slug is the last path segment of https://jobs.ashbyhq.com/<slug>
+ASHBY_COMPANIES: list[str] = [
+    s.strip() for s in _get("ASHBY_COMPANIES", "").split(",") if s.strip()
+]
+# Personio: the subdomain of https://<slug>.jobs.personio.de
+PERSONIO_COMPANIES: list[str] = _get_list("PERSONIO_COMPANIES")
+# BambooHR: the subdomain of https://<slug>.bamboohr.com
+BAMBOOHR_COMPANIES: list[str] = _get_list("BAMBOOHR_COMPANIES")
+
 # ── Optional quality filters ──────────────────────────────────────────────
 FILTER_SENIOR_ONLY: bool = _get("FILTER_SENIOR_ONLY", "false").lower() in ("true", "1", "yes")
 MIN_SALARY_EUR: int = int(_get("MIN_SALARY_EUR", "0"))
