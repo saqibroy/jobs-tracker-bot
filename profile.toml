@@ -13,7 +13,8 @@ reject = [
   "mobile engineer", "ios", "android", "devops", "site reliability", "sre",
   "security engineer", "security lead", "data scientist", "data engineer",
   "machine learning engineer", "research engineer", "solutions architect",
-  "qa engineer", "test engineer", "sales", "marketing", "recruiter"
+  "qa engineer", "test engineer", "embedded", "firmware", "desktop application",
+  "desktop applications", "sales", "marketing", "recruiter"
 ]
 
 [stack]

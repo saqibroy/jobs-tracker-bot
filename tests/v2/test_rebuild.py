@@ -109,6 +109,7 @@ def test_role_profile_accepts_target_and_rejects_noise():
     assert not passes_role_filter(make_job(title="Junior React Developer"))
     assert not passes_role_filter(make_job(title="Ruby on Rails Developer", tags=["Entry-level"]))
     assert not passes_role_filter(make_job(title="Applied AI Engineer", description="Model research"))
+    assert not passes_role_filter(make_job(title="Embedded Software Engineer", description="Python for devices"))
 
 
 def test_advanced_german_requirement_is_rejected():
