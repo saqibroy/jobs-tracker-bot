@@ -49,27 +49,29 @@ jobs:
             git pull origin main
             sudo docker compose build
 
-            # Validate public employer feeds and the complete pipeline.
+            # Validate public employer feeds before replacing the container.
             sudo docker compose run --rm --no-deps job-bot python main.py --validate-sources
-            sudo docker compose run --rm --no-deps job-bot python main.py --dry-run --max-age 14
 
-            # Replace only after validation succeeds.
+            # Replace only after validation succeeds. The app runs an immediate
+            # startup scan, so use the real health summary as the pipeline gate
+            # instead of duplicating a full 10k+ job dry-run inside deploy.
             sudo docker compose up -d
 
-            # Wait for health check
-            echo "Waiting for container..."
+            # Wait for the container and its startup scan.
+            echo "Waiting for container startup scan..."
             HEALTHY=false
-            for i in $(seq 1 12); do
-              if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-                echo "✓ Health check passed"
+            for i in $(seq 1 90); do
+              if HEALTH_JSON=$(curl -sf --max-time 5 http://localhost:8080/health) && \
+                HEALTH_JSON="$HEALTH_JSON" python3 -c 'import json, os, sys; payload=json.loads(os.environ["HEALTH_JSON"]); summary=payload.get("last_scan_summary") or {}; ok=payload.get("status") == "ok" and int(summary.get("raw") or 0) > 0; print("✓ Health check passed — raw={} matches={} immediate={} digest={}".format(summary.get("raw"), summary.get("eligible_role_matches"), summary.get("immediate"), summary.get("digest"))) if ok else None; sys.exit(0 if ok else 1)'
+              then
                 HEALTHY=true
                 break
               fi
-              sleep 5
+              sleep 10
             done
 
             if [ "$HEALTHY" != "true" ]; then
-              echo "Health check failed"
+              echo "Health/startup scan check failed"
               sudo docker compose logs --tail=100 job-bot
               exit 1
             fi
