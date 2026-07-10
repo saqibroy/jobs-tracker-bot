@@ -1,0 +1,341 @@
+# Seed list for scripts/discover_companies.py --seed-file
+# Unverified — run through:
+#   python scripts/discover_companies.py --from-env --seed-file <this-seed-file> \
+#     --detect-domains --new-only --min-jobs 1 --min-eligible 1 --promote
+# Comments are allowed with #.
+# The current discovery CLI detects ATS URLs and domains in this file. Company
+# names are useful notes, but domains or direct career/ATS URLs give the best
+# automated discovery hit rate.
+
+# --- Domain hints for --detect-domains ---
+solarisgroup.com
+raisin.com
+vivid.money
+getpenta.com
+billie.io
+mambu.com
+finleap.com
+bling.de
+cashlink.de
+tomorrow.one
+insify.com
+naga.com
+scalable.capital
+fyrst.de
+payhawk.com
+getpliant.com
+moonfare.com
+banxware.com
+enpal.de
+1komma5grad.com
+enter.de
+voltfang.de
+sunfire.de
+tado.com
+zolar.de
+mobilityhouse.com
+instagrid.co
+reev.com
+otovo.com
+aleph-alpha.com
+deepl.com
+mistral.ai
+blackforestlabs.ai
+latticeflow.ai
+helsing.ai
+merantix.com
+prewave.com
+kern.ai
+wingback.com
+baserow.io
+windmill.dev
+speechify.com
+vaultree.com
+modal.com
+fal.ai
+together.ai
+baseten.co
+val.town
+zalando.de
+aboutyou.com
+traderepublic.com
+global-savings-group.com
+mirakl.com
+spryker.com
+shopware.com
+contorion.de
+kleinanzeigen.de
+auto1-group.com
+misterspex.de
+flaconi.de
+home24.de
+westwing.com
+choco.com
+flink.com
+deliveryhero.com
+personio.com
+awork.com
+zenjob.com
+instaffo.com
+coachhub.com
+leapsome.com
+talon.one
+configit.com
+contentsquare.com
+storyblok.com
+usercentrics.com
+userlane.com
+vinted.com
+circula.com
+candis.io
+ada.com
+kaiahealth.com
+klara.com
+formelskin.de
+fernarzt.com
+avimedical.com
+amboss.com
+mediteo.com
+selfapy.com
+nia-health.de
+vivy.com
+caresyntax.com
+floy.com
+mimi.io
+pricehubble.com
+casavi.com
+immoscout24.de
+wohnungshelden.de
+vermietet.de
+flix.com
+tier.app
+wundermobility.com
+grover.com
+miles-mobility.com
+free-now.com
+blacklane.com
+door2door.io
+isaraerospace.com
+rebelliondefense.com
+quantumbrilliance.com
+meetiqm.com
+planqc.eu
+semron.ai
+vay.io
+marvelfusion.com
+northflank.com
+depot.dev
+xata.io
+tembo.io
+grafbase.com
+nhost.io
+appwrite.io
+directus.io
+encore.dev
+temporal.io
+speakeasy.com
+resend.com
+trigger.dev
+unkey.com
+better-auth.com
+remote.com
+deel.com
+oysterhr.com
+usemultiplier.com
+bitpanda.com
+n26.com
+wise.com
+revolut.com
+gocardless.com
+tide.co
+starlingbank.com
+monzo.com
+yapily.com
+truelayer.com
+
+# --- Berlin / DACH fintech ---
+Solaris
+Raisin
+Vivid Money
+Penta
+Billie
+Mambu
+Finleap
+Bling
+Cashlink
+Tomorrow Bank
+Insify
+Naga Group
+Scalable Capital
+Fyrst
+Payhawk
+Pliant
+Karta
+Moonfare
+LiquidX
+Banxware
+
+# --- Climate / energy tech ---
+Enpal
+1KOMMA5°
+Enter
+Voltfang
+Sunfire
+Tado
+Zolar
+The Mobility House
+Instagrid
+Ambeco
+Volytica
+Reev
+Otovo
+Enzero
+
+# --- AI / dev tools ---
+Aleph Alpha
+DeepL
+Mistral AI
+Black Forest Labs
+LatticeFlow
+Helsing
+Merantix
+Prewave
+Kern AI
+Wingback
+Baserow
+Windmill
+Aleph Alpha Research
+Speechify
+Vaultree
+Modal Labs
+Fal AI
+Together AI
+Baseten
+Val Town
+
+# --- E-commerce / marketplace ---
+Zalando
+About You
+Trade Republic
+Global Savings Group
+Mirakl
+Spryker
+Shopware
+Contorion
+Kleinanzeigen
+Auto1 Group
+Mister Spex
+Flaconi
+Home24
+Westwing
+Book a Tiger
+Choco
+Flink
+Gorillas (legacy check)
+Delivery Hero
+
+# --- HR / SaaS / B2B tools ---
+Personio
+Awork
+Zenjob
+Instaffo
+Coachhub
+Leapsome
+Impala Intech
+Talon.One
+Configit
+Contentsquare
+Storyblok
+Usercentrics
+Cliqz
+Chatlayer
+Userlane
+Trustshare
+Vinted
+Journy
+Circula
+Candis
+Pliant
+
+# --- Health tech ---
+Ada Health
+Kaia Health
+Klara
+Formel Skin
+Fernarzt
+Avi Medical
+Amboss
+Mediteo
+Selfapy
+Nia Health
+Vivy
+Caresyntax
+Floy
+Mimi Hearing Technologies
+
+# --- Real estate / proptech ---
+Homeday
+McMakler
+Wunderflats
+PriceHubble
+Dept Ventures
+Casavi
+Immoscout24
+Wohnungshelden
+Vermietet.de
+
+# --- Mobility ---
+FlixBus
+Tier Mobility
+Wunder Mobility
+Grover
+Miles Mobility
+Cluno
+Free Now
+Blacklane
+Door2Door
+
+# --- Deep tech / infra ---
+Isar Aerospace
+Rebellion Defense
+Helsing
+Quantum Brilliance
+IQM Quantum Computers
+Planqc
+Semron
+Vay
+Marvel Fusion
+
+# --- Devtools / infra (EU broader) ---
+Northflank
+Depot
+Xata
+Tembo
+Grafbase
+Nhost
+Appwrite
+Directus
+Encore
+Temporal Technologies
+Speakeasy
+Resend
+Trigger.dev
+Unkey
+Better Auth
+
+# --- International remote-friendly (fill gaps) ---
+Remote.com
+Deel
+Oyster HR
+Multiplier
+Bitpanda
+N26
+Wise
+Revolut
+GoCardless
+Tide
+Starling Bank
+Monzo
+Fintern
+Yapily
+TrueLayer

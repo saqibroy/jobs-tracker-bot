@@ -151,12 +151,23 @@ This writes:
 - `data/discovery/discovered_companies.jsonl`
 - `data/discovery/companies.candidates.toml`
 
+The same discovery command also runs automatically every Monday at 06:00 UTC
+via `.github/workflows/discover.yml`. Add more company names, domains, or ATS
+URLs to `seeds/companies-seed.txt`; comments starting with `#` are allowed.
+For the current discovery CLI, domains and direct ATS URLs give the best hit
+rate because `--detect-domains` inspects domains found in the seed file.
+The workflow promotes validated boards into `companies.toml`, validates all
+enabled employer boards, uploads `data/discovery/` as a workflow artifact, and
+dispatches `deploy.yml` when `companies.toml` changed so production picks up
+the new board list. If `GOOGLE_API_KEY` and `GOOGLE_CX` repository secrets are
+configured, the workflow also enables the existing `--google` discovery mode.
+
 Promote passing boards automatically after validation:
 
 ```bash
 python scripts/discover_companies.py \
   --from-env \
-  --seed-file /path/to/company-discovery-notes.txt \
+  --seed-file seeds/companies-seed.txt \
   --detect-domains \
   --new-only \
   --min-jobs 1 \

@@ -1,0 +1,96 @@
+name: Discover employer boards
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: discover-employer-boards
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Discover and promote employer boards
+        env:
+          DISCORD_WEBHOOK_URL: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CX: ${{ secrets.GOOGLE_CX }}
+        run: |
+          GOOGLE_ARGS=""
+          if [ -n "$GOOGLE_API_KEY" ] && [ -n "$GOOGLE_CX" ]; then
+            GOOGLE_ARGS="--google"
+          fi
+
+          python scripts/discover_companies.py --from-env \
+            --seed-file seeds/companies-seed.txt --detect-domains --new-only \
+            --min-jobs 1 --min-eligible 1 --promote $GOOGLE_ARGS
+
+      - name: Validate promoted boards
+        env:
+          DISCORD_WEBHOOK_URL: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+        run: python main.py --validate-sources
+
+      - name: Upload discovery reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-report-${{ github.run_id }}
+          path: data/discovery/
+          if-no-files-found: ignore
+
+      - name: Commit discovery updates
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add companies.toml
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "companies_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No discovery changes to commit."
+            exit 0
+          fi
+
+          if git diff --cached --quiet -- companies.toml; then
+            echo "companies_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "companies_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git commit -m "chore: auto-discover companies"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch deploy workflow
+        if: steps.commit.outputs.changed == 'true' && steps.commit.outputs.companies_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy.yml --ref main
