@@ -1,11 +1,15 @@
-"""Personio ATS source — public, unauthenticated XML job feed.
+"""Personio ATS source — public, unauthenticated XML and HTML job feeds.
 
 Personio doesn't have a "browse all companies" endpoint — each employer's
 career site exposes its own XML feed. Add company subdomains to
 PERSONIO_COMPANIES in .env (the part before ".jobs.personio.de").
 
-Endpoint (no auth required):
+Primary endpoint (no auth required):
   GET https://{slug}.jobs.personio.de/xml?language=en
+
+Some live Personio career sites expose a public HTML listing while the XML feed
+is unavailable or stale. In that case the source falls back to the public
+career page and job detail pages.
 
 Feed schema (workzag-jobs / position):
   id, office, department, recruitingCategory, name, employmentType,
@@ -16,19 +20,30 @@ Feed schema (workzag-jobs / position):
 from __future__ import annotations
 
 import asyncio
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import urljoin
 
+import httpx
 from loguru import logger
+from bs4 import BeautifulSoup
 
 from models.job import Job
 from sources.base import BaseSource
-from sources.ats_common import country_codes_from_text, infer_workplace, regions_from_text
+from sources.ats_common import clean_html, country_codes_from_text, infer_workplace, regions_from_text
 from sources.registry import CompanyBoard, boards_for
 
 _XML_URL = "https://{slug}.jobs.personio.de/xml"
+_HTML_URL = "https://{slug}.jobs.personio.de"
 
 _REMOTE_HINT_TOKENS = ("remote", "home office", "hybrid", "homeoffice")
+_JOB_LINK_RE = re.compile(r"/job/([A-Za-z0-9_-]+)")
+_LOCATION_SPLIT_RE = re.compile(
+    r"\b(?:full[- ]time|part[- ]time|permanent employee|temporary|internship|"
+    r"working student|freelance|contract|trainee|minijob)\b",
+    re.IGNORECASE,
+)
 
 
 class PersonioSource(BaseSource):
@@ -37,9 +52,25 @@ class PersonioSource(BaseSource):
     async def _fetch_company(self, board: CompanyBoard | str) -> list[Job]:
         if isinstance(board, str):
             board = CompanyBoard(company=board, provider=self.name, slug=board)
+        jobs = await self._fetch_xml_company(board)
+        if jobs is not None:
+            return jobs
+        return await self._fetch_html_company(board)
+
+    async def _fetch_xml_company(self, board: CompanyBoard) -> list[Job] | None:
         slug = board.slug
         try:
             resp = await self._get(_XML_URL.format(slug=slug), params={"language": "en"})
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in (404, 410) or 300 <= status < 400:
+                logger.info(
+                    "[{}] XML feed unavailable for '{}' (HTTP {}) — trying HTML fallback",
+                    self.name, slug, status,
+                )
+                return None
+            logger.warning("[{}] Failed to fetch feed '{}': {}", self.name, slug, exc)
+            return []
         except Exception as exc:
             logger.warning("[{}] Failed to fetch feed '{}': {}", self.name, slug, exc)
             return []
@@ -47,14 +78,14 @@ class PersonioSource(BaseSource):
         if resp.status_code == 429:
             return []
         if resp.status_code == 404:
-            logger.warning("[{}] No such feed: '{}' (check PERSONIO_COMPANIES)", self.name, slug)
-            return []
+            logger.info("[{}] XML feed missing for '{}' — trying HTML fallback", self.name, slug)
+            return None
 
         try:
             root = ET.fromstring(resp.text)
         except ET.ParseError as exc:
-            logger.warning("[{}] Malformed XML for '{}': {}", self.name, slug, exc)
-            return []
+            logger.info("[{}] Malformed XML for '{}' — trying HTML fallback: {}", self.name, slug, exc)
+            return None
 
         jobs: list[Job] = []
         for position in root.findall("position"):
@@ -113,6 +144,155 @@ class PersonioSource(BaseSource):
                 continue
 
         return jobs
+
+    async def _fetch_html_company(self, board: CompanyBoard) -> list[Job]:
+        slug = board.slug
+        base_url = _HTML_URL.format(slug=slug)
+        try:
+            resp = await self._get(base_url)
+        except Exception as exc:
+            logger.warning("[{}] HTML fallback failed for '{}': {}", self.name, slug, exc)
+            return []
+
+        links = self._extract_html_job_links(resp.text, base_url)
+        if not links:
+            logger.warning("[{}] HTML fallback found no jobs for '{}'", self.name, slug)
+            return []
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def fetch_detail(url: str, card_text: str) -> Job | None:
+            async with semaphore:
+                return await self._fetch_html_detail(board, url, card_text)
+
+        results = await asyncio.gather(
+            *(fetch_detail(url, card_text) for url, card_text in links),
+            return_exceptions=True,
+        )
+
+        jobs: list[Job] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("[{}] HTML detail failed for '{}': {}", self.name, slug, result)
+                continue
+            if result:
+                jobs.append(result)
+
+        logger.info(
+            "[{}] HTML fallback fetched {} jobs for '{}'",
+            self.name, len(jobs), slug,
+        )
+        return jobs
+
+    def _extract_html_job_links(self, html: str, base_url: str) -> list[tuple[str, str]]:
+        soup = BeautifulSoup(html, "html.parser")
+        by_url: dict[str, str] = {}
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href") or "")
+            if not _JOB_LINK_RE.search(href):
+                continue
+            url = urljoin(base_url, href)
+            card_text = anchor.get_text(" ", strip=True)
+            by_url.setdefault(url, card_text)
+        return sorted(by_url.items())
+
+    async def _fetch_html_detail(
+        self,
+        board: CompanyBoard,
+        url: str,
+        card_text: str,
+    ) -> Job | None:
+        try:
+            resp = await self._get(url)
+            return self._parse_html_detail(board, url, resp.text, card_text)
+        except Exception as exc:
+            logger.warning("[{}] Failed to fetch HTML job '{}': {}", self.name, url, exc)
+            return self._job_from_card(board, url, card_text)
+
+    def _parse_html_detail(
+        self,
+        board: CompanyBoard,
+        url: str,
+        html: str,
+        card_text: str,
+    ) -> Job | None:
+        soup = BeautifulSoup(html, "html.parser")
+
+        title_el = (
+            soup.select_one("h1.job-position-title")
+            or soup.select_one('[class*="jobTitle"]')
+            or soup.find("h1")
+        )
+        title = title_el.get_text(" ", strip=True) if title_el else ""
+        if not title:
+            return self._job_from_card(board, url, card_text)
+
+        location_el = (
+            soup.select_one('[class*="JobAttributes_jobMetaItemLocation"]')
+            or soup.select_one(".detail-subtitle")
+            or soup.select_one('[class*="detail-subtitle"]')
+        )
+        location = self._clean_html_location(
+            location_el.get_text(" ", strip=True) if location_el else ""
+        )
+
+        description_el = (
+            soup.select_one('[class*="jobDescription"]')
+            or soup.select_one(".detail-content-block-conditions")
+            or soup.select_one(".detail-content-block")
+            or soup.select_one('[class*="detail-content-block"]')
+        )
+        description = clean_html(str(description_el)) if description_el else ""
+        if not description:
+            main = soup.find("main") or soup.body
+            description = clean_html(str(main)) if main else card_text
+
+        signal_text = f"{title} {location} {description[:1000]}".lower()
+        workplace_type = infer_workplace(signal_text)
+
+        return Job(
+            title=title,
+            company=board.company,
+            location=location or "Unspecified",
+            is_remote=workplace_type in ("remote", "hybrid"),
+            workplace_type=workplace_type,
+            eligible_countries=country_codes_from_text(f"{title} {location}"),
+            eligible_regions=regions_from_text(f"{title} {location}"),
+            url=url,
+            description=description,
+            tags=[],
+            source=self.name,
+        )
+
+    def _job_from_card(self, board: CompanyBoard, url: str, card_text: str) -> Job | None:
+        text = " ".join(card_text.split())
+        if not text:
+            return None
+        # Personio cards usually render as "Title Location Schedule Type".
+        # Keep this conservative: the fallback preserves the job as raw input,
+        # while downstream role/location filters decide whether it is usable.
+        location = self._clean_html_location(text)
+        workplace_type = infer_workplace(text)
+        return Job(
+            title=text,
+            company=board.company,
+            location=location or "Unspecified",
+            is_remote=workplace_type in ("remote", "hybrid"),
+            workplace_type=workplace_type,
+            eligible_countries=country_codes_from_text(text),
+            eligible_regions=regions_from_text(text),
+            url=url,
+            description=text,
+            tags=[],
+            source=self.name,
+        )
+
+    def _clean_html_location(self, value: str) -> str:
+        text = " ".join(value.split())
+        if not text:
+            return ""
+        text = _LOCATION_SPLIT_RE.split(text, maxsplit=1)[0]
+        return text.strip(" ·,-|")
 
     async def fetch(self) -> list[Job]:
         boards = boards_for(self.name)

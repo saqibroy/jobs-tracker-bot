@@ -865,3 +865,160 @@ provider = "workable"
 slug = "mondu"
 url = "https://apply.workable.com/mondu"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-10 15:27:58 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "1komma5grad"
+provider = "personio"
+slug = "1komma5grad"
+url = "https://1komma5grad.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Adsquare"
+provider = "personio"
+slug = "adsquare"
+url = "https://adsquare.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Beroe Inc"
+provider = "personio"
+slug = "beroe-inc"
+url = "https://beroe-inc.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Bliq"
+provider = "personio"
+slug = "bliq"
+url = "https://bliq.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Deskbird"
+provider = "personio"
+slug = "deskbird"
+url = "https://deskbird.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Emil Group Gmbh"
+provider = "personio"
+slug = "emil-group-gmbh"
+url = "https://emil-group-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Envelio"
+provider = "personio"
+slug = "envelio"
+url = "https://envelio.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Fuchs Eule"
+provider = "personio"
+slug = "fuchs-eule"
+url = "https://fuchs-eule.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Impower"
+provider = "personio"
+slug = "impower"
+url = "https://impower.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Itonics Gmbh"
+provider = "personio"
+slug = "itonics-gmbh"
+url = "https://itonics-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Koppla"
+provider = "personio"
+slug = "koppla"
+url = "https://koppla.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Legalhero"
+provider = "personio"
+slug = "legalhero"
+url = "https://legalhero.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Mercanis"
+provider = "personio"
+slug = "mercanis"
+url = "https://mercanis.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Neoshare"
+provider = "personio"
+slug = "neoshare"
+url = "https://neoshare.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "P36"
+provider = "personio"
+slug = "p36"
+url = "https://p36.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Powerus"
+provider = "personio"
+slug = "powerus"
+url = "https://powerus.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Stark"
+provider = "personio"
+slug = "stark"
+url = "https://stark.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Sunhat"
+provider = "personio"
+slug = "sunhat"
+url = "https://sunhat.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Syseleven"
+provider = "personio"
+slug = "syseleven"
+url = "https://syseleven.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Tonies"
+provider = "personio"
+slug = "tonies"
+url = "https://tonies.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Velio"
+provider = "personio"
+slug = "velio"
+url = "https://velio.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Wire 1"
+provider = "personio"
+slug = "wire-1"
+url = "https://wire-1.jobs.personio.de"
+enabled = true

@@ -756,6 +756,15 @@ async def _async_main(sources: list) -> None:
         name="Health Check",
     )
 
+    if config.DAILY_STATUS_ENABLED:
+        scheduler.add_job(
+            send_daily_status_summary,
+            CronTrigger(hour=config.DAILY_STATUS_HOUR, minute=0, timezone=timezone.utc),
+            id="daily_status",
+            name="Daily Status Summary",
+        )
+        logger.info("Daily status scheduled: {:02d}:00 UTC", config.DAILY_STATUS_HOUR)
+
     # Weekly NGO digest — default: Monday 08:00 UTC
     if config.WEEKLY_DIGEST_ENABLED:
         scheduler.add_job(
@@ -764,6 +773,7 @@ async def _async_main(sources: list) -> None:
                 day_of_week=config.WEEKLY_DIGEST_DAY,
                 hour=config.WEEKLY_DIGEST_HOUR,
                 minute=0,
+                timezone=timezone.utc,
             ),
             id="weekly_ngo_digest",
             name="Weekly NGO Digest",
@@ -1063,6 +1073,103 @@ async def _scheduled_health_check() -> None:
             pass
     except Exception:
         logger.exception("Health check failed")
+
+
+# ── Daily status summary ──────────────────────────────────────────────────
+
+async def send_daily_status_summary() -> None:
+    """Send one lightweight Discord status embed per day.
+
+    This is intentionally not a job alert. It gives a heartbeat-style summary
+    so production can be checked without manually triggering scans.
+    """
+    if not config.DISCORD_WEBHOOK_URL:
+        logger.warning("No Discord webhook configured — skipping daily status")
+        return
+
+    try:
+        from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
+        from health import get_last_scan_time, get_scan_summary
+
+        total = await get_total_count()
+        stats = await get_stats()
+        summary = get_scan_summary()
+        last_scan = get_last_scan_time()
+
+        if last_scan:
+            age = datetime.now(timezone.utc) - last_scan
+            minutes = int(age.total_seconds() // 60)
+            if minutes < 1:
+                last_scan_text = "just now"
+            elif minutes < 60:
+                last_scan_text = f"{minutes}m ago"
+            else:
+                last_scan_text = f"{minutes // 60}h ago"
+            last_scan_text += f" · `{last_scan.isoformat(timespec='seconds')}`"
+        else:
+            last_scan_text = "No successful scan recorded yet"
+
+        raw = summary.get("raw", 0)
+        accepted = summary.get("eligible_role_matches", 0)
+        rejected = summary.get("rejected", 0)
+        immediate = summary.get("immediate", 0)
+        digest = summary.get("digest", 0)
+        diagnostic = summary.get("diagnostic", 0)
+
+        source_counts = summary.get("sources", {}) or {}
+        top_sources = sorted(source_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+        source_lines = [f"`{name}` {count}" for name, count in top_sources]
+
+        webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
+        embed = DiscordEmbed(
+            title="📊 Daily Job Bot Status",
+            description="Production heartbeat — no jobs are alerted from this message.",
+            color=0x0EA5E9,  # sky blue
+        )
+        embed.add_embed_field(
+            name="Last scan",
+            value=last_scan_text,
+            inline=False,
+        )
+        embed.add_embed_field(
+            name="Latest scan",
+            value=(
+                f"`{raw}` raw\n"
+                f"`{accepted}` accepted\n"
+                f"`{rejected}` rejected"
+            ),
+            inline=True,
+        )
+        embed.add_embed_field(
+            name="Routing",
+            value=(
+                f"`{immediate}` immediate\n"
+                f"`{digest}` digest\n"
+                f"`{diagnostic}` diagnostic"
+            ),
+            inline=True,
+        )
+        embed.add_embed_field(
+            name="Database",
+            value=(
+                f"`{total}` total tracked\n"
+                f"`{stats.get('new_24h', 0)}` new in 24h"
+            ),
+            inline=True,
+        )
+        if source_lines:
+            embed.add_embed_field(
+                name="Top raw sources",
+                value=" · ".join(source_lines),
+                inline=False,
+            )
+        embed.set_footer(text="Job Tracker Bot · Daily Status")
+        embed.set_timestamp(datetime.now(timezone.utc).isoformat())
+        webhook.add_embed(embed)
+        await webhook.execute()
+        logger.info("📊 Daily status sent to Discord")
+    except Exception:
+        logger.exception("Daily status summary failed")
 
 
 # ── Weekly NGO digest ──────────────────────────────────────────────────────

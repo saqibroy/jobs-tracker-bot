@@ -59,6 +59,16 @@ def set_scan_summary(summary: dict) -> None:
     _scan_summary = summary
 
 
+def get_scan_summary() -> dict:
+    """Return a copy of the latest non-sensitive scan summary."""
+    return dict(_scan_summary)
+
+
+def get_last_scan_time() -> datetime | None:
+    """Return the latest successful scan timestamp."""
+    return _last_scan_time
+
+
 async def _health_handler(request: web.Request) -> web.Response:
     """Handle GET /health requests."""
     uptime = time.monotonic() - _start_time

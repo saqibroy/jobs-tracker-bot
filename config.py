@@ -33,6 +33,11 @@ TELEGRAM_CHAT_ID: str = _get("TELEGRAM_CHAT_ID")
 SCAN_INTERVAL_MINUTES: int = int(_get("SCAN_INTERVAL_MINUTES", "45"))
 DIGEST_INTERVAL_HOURS: int = int(_get("DIGEST_INTERVAL_HOURS", "6"))
 
+# Lightweight daily status embed. This does not send jobs; it reports whether
+# scans are running and how many jobs were fetched/accepted in the latest scan.
+DAILY_STATUS_ENABLED: bool = _get("DAILY_STATUS_ENABLED", "true").lower() in ("true", "1", "yes")
+DAILY_STATUS_HOUR: int = int(_get("DAILY_STATUS_HOUR", "18"))  # UTC hour
+
 # Weekly NGO digest (Monday morning summary)
 WEEKLY_DIGEST_ENABLED: bool = _get("WEEKLY_DIGEST_ENABLED", "true").lower() in ("true", "1", "yes")
 WEEKLY_DIGEST_DAY: str = _get("WEEKLY_DIGEST_DAY", "mon")  # mon, tue, wed, ...

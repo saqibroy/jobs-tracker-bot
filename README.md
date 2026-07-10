@@ -17,6 +17,8 @@ and Telegram alerts.
 - Unknown eligibility is rejected rather than guessed.
 - Scores 70–100 alert immediately, 45–69 enter the six-hour digest, and lower
   scores are retained only for diagnostics.
+- A lightweight daily Discord status embed reports the latest scan counts so
+  production activity is visible even when no new jobs are sent.
 
 The sanitized search profile lives in `profile.toml`. Employer boards live in
 `companies.toml`; notification credentials remain in `.env`.
@@ -291,6 +293,8 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `TELEGRAM_CHAT_ID` | — | Target chat/group ID |
 | `SCAN_INTERVAL_MINUTES` | `45` | Minutes between scan cycles |
 | `DIGEST_INTERVAL_HOURS` | `6` | Hours between digest summaries |
+| `DAILY_STATUS_ENABLED` | `true` | Send a once-daily Discord heartbeat/status summary |
+| `DAILY_STATUS_HOUR` | `18` | UTC hour for the daily status summary |
 | `MAX_JOB_AGE_DAYS` | `14` | Reject jobs older than this (days) |
 | `MAX_JOB_AGE_DAYS_RELIEFWEB` | `30` | Override for ReliefWeb (UN hiring is slow) |
 | `LOCATION_ALLOWLIST` | `worldwide,eu,...` | Comma-separated location accept keywords |

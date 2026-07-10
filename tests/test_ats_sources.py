@@ -10,6 +10,7 @@ import config
 from sources.ashby import AshbySource
 from sources.bamboohr import BambooHRSource
 from sources.personio import PersonioSource
+from sources.registry import CompanyBoard
 
 
 def _mock_response(status_code=200, json_data=None, text_data=""):
@@ -24,13 +25,16 @@ def _mock_response(status_code=200, json_data=None, text_data=""):
 class TestAshbySource:
     @pytest.mark.asyncio
     async def test_no_companies_configured_returns_empty(self, monkeypatch):
-        monkeypatch.setattr(config, "ASHBY_COMPANIES", [])
+        monkeypatch.setattr("sources.ashby.boards_for", lambda provider: [])
         source = AshbySource()
         assert await source.fetch() == []
 
     @pytest.mark.asyncio
     async def test_parses_jobs_and_builds_location_from_secondary(self, monkeypatch):
-        monkeypatch.setattr(config, "ASHBY_COMPANIES", ["acme"])
+        monkeypatch.setattr(
+            "sources.ashby.boards_for",
+            lambda provider: [CompanyBoard(company="acme", provider="ashby", slug="acme")],
+        )
         payload = {
             "jobs": [
                 {
@@ -63,7 +67,10 @@ class TestAshbySource:
 
     @pytest.mark.asyncio
     async def test_404_board_returns_empty_without_crashing(self, monkeypatch):
-        monkeypatch.setattr(config, "ASHBY_COMPANIES", ["doesnotexist"])
+        monkeypatch.setattr(
+            "sources.ashby.boards_for",
+            lambda provider: [CompanyBoard(company="doesnotexist", provider="ashby", slug="doesnotexist")],
+        )
         source = AshbySource()
         with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(status_code=404))):
             jobs = await source.fetch()
@@ -110,13 +117,16 @@ _PERSONIO_XML = """<?xml version="1.0" encoding="UTF-8"?>
 class TestPersonioSource:
     @pytest.mark.asyncio
     async def test_no_companies_configured_returns_empty(self, monkeypatch):
-        monkeypatch.setattr(config, "PERSONIO_COMPANIES", [])
+        monkeypatch.setattr("sources.personio.boards_for", lambda provider: [])
         source = PersonioSource()
         assert await source.fetch() == []
 
     @pytest.mark.asyncio
     async def test_parses_xml_feed(self, monkeypatch):
-        monkeypatch.setattr(config, "PERSONIO_COMPANIES", ["acme"])
+        monkeypatch.setattr(
+            "sources.personio.boards_for",
+            lambda provider: [CompanyBoard(company="acme", provider="personio", slug="acme")],
+        )
         source = PersonioSource()
         with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(text_data=_PERSONIO_XML))):
             jobs = await source.fetch()
@@ -133,11 +143,69 @@ class TestPersonioSource:
 
     @pytest.mark.asyncio
     async def test_malformed_xml_returns_empty_without_crashing(self, monkeypatch):
-        monkeypatch.setattr(config, "PERSONIO_COMPANIES", ["acme"])
+        monkeypatch.setattr(
+            "sources.personio.boards_for",
+            lambda provider: [CompanyBoard(company="acme", provider="personio", slug="acme")],
+        )
         source = PersonioSource()
-        with patch.object(source, "_get", new=AsyncMock(return_value=_mock_response(text_data="not xml <<<"))):
+
+        async def fake_get(url, **kwargs):
+            if url.endswith("/xml"):
+                return _mock_response(text_data="not xml <<<")
+            raise RuntimeError("html fallback unavailable")
+
+        with patch.object(source, "_get", new=fake_get):
             jobs = await source.fetch()
         assert jobs == []
+
+    @pytest.mark.asyncio
+    async def test_html_fallback_parses_public_personio_pages(self, monkeypatch):
+        monkeypatch.setattr(
+            "sources.personio.boards_for",
+            lambda provider: [CompanyBoard(company="acme", provider="personio", slug="acme")],
+        )
+        listing_html = """
+        <html><body>
+          <a href="/job/123">Senior Frontend Engineer Berlin / Remote Berlin Full-time</a>
+          <a href="https://acme.jobs.personio.de/job/456">Sales Manager Paris Full-time</a>
+        </body></html>
+        """
+        detail_html = """
+        <html><body>
+          <h1 class="job-position-title">Senior Frontend Engineer Berlin / Remote</h1>
+          <div class="JobAttributes_jobMetaItemLocation__MX4Xg">Berlin</div>
+          <div class="page_jobDescription__1wA05">
+            <h2>Your mission</h2>
+            <p>Build product features with React, TypeScript and Python.</p>
+            <p>This role can be done onsite in Berlin or remote from Germany.</p>
+          </div>
+        </body></html>
+        """
+
+        async def fake_get(url, **kwargs):
+            if url.endswith("/xml"):
+                return _mock_response(status_code=404)
+            if url == "https://acme.jobs.personio.de":
+                return _mock_response(text_data=listing_html)
+            if url == "https://acme.jobs.personio.de/job/123":
+                return _mock_response(text_data=detail_html)
+            raise RuntimeError("detail unavailable")
+
+        source = PersonioSource()
+        with patch.object(source, "_get", new=fake_get):
+            jobs = await source.fetch()
+
+        assert len(jobs) == 2
+        parsed = next(job for job in jobs if job.url.endswith("/job/123"))
+        assert parsed.title == "Senior Frontend Engineer Berlin / Remote"
+        assert parsed.location == "Berlin"
+        assert parsed.workplace_type == "hybrid"
+        assert parsed.is_remote is True
+        assert "React" in parsed.description
+        assert "de" in parsed.eligible_countries
+
+        card_only = next(job for job in jobs if job.url.endswith("/job/456"))
+        assert card_only.title.startswith("Sales Manager Paris")
 
 
 # ── BambooHR ─────────────────────────────────────────────────────────────

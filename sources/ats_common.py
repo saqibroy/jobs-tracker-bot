@@ -29,9 +29,13 @@ def infer_workplace(value: str, is_remote: bool | None = None) -> str:
     text = value.lower()
     if "hybrid" in text:
         return "hybrid"
-    if any(token in text for token in ("on-site", "onsite", "on site", "in-office")):
+    has_onsite = any(token in text for token in ("on-site", "onsite", "on site", "in-office"))
+    has_remote = is_remote is True or "remote" in text
+    if has_onsite and has_remote:
+        return "hybrid"
+    if has_onsite:
         return "onsite"
-    if is_remote is True or "remote" in text:
+    if has_remote:
         return "remote"
     return "unknown"
 
