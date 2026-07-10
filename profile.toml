@@ -8,7 +8,8 @@ accepted_languages = ["en"]
 primary = ["full stack", "fullstack", "full-stack", "frontend", "front-end", "front end"]
 secondary = ["backend", "back-end", "back end", "software engineer", "software developer", "web engineer", "web developer", "product engineer"]
 reject = [
-  "intern", "internship", "working student", "werkstudent", "junior", "entry level",
+  "intern", "internship", "working student", "werkstudent", "junior", "associate",
+  "entry level", "ai training",
   "engineering manager", "technical program manager", "product manager", "project manager",
   "mobile engineer", "ios", "android", "devops", "site reliability", "sre",
   "security engineer", "security lead", "data scientist", "data engineer",

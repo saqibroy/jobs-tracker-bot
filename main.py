@@ -118,6 +118,7 @@ ALL_SOURCES = {
 DEFAULT_SOURCE_NAMES = (
     "greenhouse", "ashby", "personio", "lever", "workable", "jsonld",
     "arbeitnow", "stepstone", "remotive", "himalayas",
+    "remoteok", "idealist", "linkedin",
 )
 
 # ── Senior-only title keywords ────────────────────────────────────────────

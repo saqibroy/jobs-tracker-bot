@@ -21,7 +21,7 @@ Results are deduplicated by ``objectID`` before returning.
   COUNTRY + EU-allowlisted    → eu
   COUNTRY + non-EU            → restricted  (country-locked, not EU)
   STATE / CITY                → restricted  (geo-locked to a region)
-  <missing/empty>             → worldwide   (Idealist default)
+  <missing/empty>             → unknown     (rejected by eligibility gate)
 
 Fields per hit:
   name, orgName, type, locationType, description (plain text),
@@ -245,12 +245,12 @@ class IdealistSource(BaseSource):
           COUNTRY + EU country code  → "eu"
           COUNTRY + non-EU code      → "restricted"  (country-locked)
           STATE / CITY               → "restricted"  (geo-locked)
-          <missing/empty>            → "worldwide"   (Idealist default)
+          <missing/empty>            → "unknown"     (insufficient evidence)
         """
         zone = (hit.get("remoteZone") or "").upper()
         country_code = (hit.get("remoteCountry") or "").upper()
 
-        if zone == "WORLD":
+        if zone in {"WORLD", "WORLDWIDE"}:
             return "worldwide"
 
         if zone == "COUNTRY" and country_code in _EU_COUNTRY_CODES:
@@ -259,8 +259,8 @@ class IdealistSource(BaseSource):
         if zone in ("COUNTRY", "STATE", "CITY"):
             return "restricted"
 
-        # Missing / empty zone — default to worldwide
-        return "worldwide"
+        # Missing / empty zone — unknown eligibility must be rejected later.
+        return "unknown"
 
     @staticmethod
     def _build_location(hit: dict) -> str:

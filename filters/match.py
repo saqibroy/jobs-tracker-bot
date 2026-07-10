@@ -28,7 +28,7 @@ def _normalize_score(raw: int) -> int:
 def _matched(text: str, values: list[str]) -> list[str]:
     found: list[str] = []
     for value in values:
-        if len(value) <= 3:
+        if value.isalpha():
             present = bool(re.search(rf"\b{re.escape(value)}\b", text))
         else:
             present = value in text

@@ -5,8 +5,8 @@ Uses LinkedIn's public guest API which returns HTML fragments:
 
 Parameters:
   keywords   — search query
-  location   — e.g. "Germany", "Europe"
-  f_WT=2     — remote only
+  location   — e.g. "Germany", "Berlin"
+  f_WT        — 1 onsite, 2 remote, 3 hybrid
   f_TPR=r604800 — last 7 days
   start      — pagination offset (0, 10, 20, ...)
 
@@ -32,12 +32,19 @@ from sources.base import BaseSource
 
 _BASE_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
-# Multiple search queries to maximise coverage
+# Focused queries for Saqib's target profile:
+# - remote roles available in Germany
+# - hybrid/on-site roles in Berlin
 _SEARCH_QUERIES: list[dict[str, str]] = [
-    {"keywords": "software engineer", "location": "Germany"},
-    {"keywords": "fullstack developer", "location": "Germany"},
-    {"keywords": "backend developer", "location": "Europe"},
-    {"keywords": "frontend developer", "location": "Europe"},
+    {"keywords": "full stack developer", "location": "Germany", "f_WT": "2", "workplace_type": "remote"},
+    {"keywords": "full-stack developer", "location": "Germany", "f_WT": "2", "workplace_type": "remote"},
+    {"keywords": "fullstack developer", "location": "Germany", "f_WT": "2", "workplace_type": "remote"},
+    {"keywords": "frontend developer", "location": "Germany", "f_WT": "2", "workplace_type": "remote"},
+    {"keywords": "front end developer", "location": "Germany", "f_WT": "2", "workplace_type": "remote"},
+    {"keywords": "full stack developer", "location": "Berlin", "f_WT": "3", "workplace_type": "hybrid"},
+    {"keywords": "frontend developer", "location": "Berlin", "f_WT": "3", "workplace_type": "hybrid"},
+    {"keywords": "full stack developer", "location": "Berlin", "f_WT": "1", "workplace_type": "onsite"},
+    {"keywords": "frontend developer", "location": "Berlin", "f_WT": "1", "workplace_type": "onsite"},
 ]
 
 _HEADERS = {
@@ -85,7 +92,7 @@ class LinkedInSource(BaseSource):
         params = {
             "keywords": query["keywords"],
             "location": query["location"],
-            "f_WT": "2",          # remote only
+            "f_WT": query["f_WT"],
             "f_TPR": "r604800",   # last 7 days
             "start": "0",
         }
@@ -105,9 +112,9 @@ class LinkedInSource(BaseSource):
             logger.warning("[{}] LinkedIn redirected to login — guest API blocked", self.name)
             return []
 
-        return self._parse_html(resp.text)
+        return self._parse_html(resp.text, workplace_type=query["workplace_type"])
 
-    def _parse_html(self, html: str) -> list[Job]:
+    def _parse_html(self, html: str, *, workplace_type: str = "remote") -> list[Job]:
         """Parse LinkedIn guest API HTML fragment into Job objects."""
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
@@ -171,7 +178,8 @@ class LinkedInSource(BaseSource):
                     title=title,
                     company=company,
                     location=location,
-                    is_remote=True,  # f_WT=2 filters for remote
+                    is_remote=workplace_type == "remote",
+                    workplace_type=workplace_type,  # type: ignore[arg-type]
                     url=url,
                     description="",  # Guest API doesn't include descriptions
                     salary=None,

@@ -773,12 +773,12 @@ class TestCompanyBlocklistOrder:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  RemoteOK + is_remote=True + scope=unknown → accepted (volume fix)
+#  RemoteOK + is_remote=True + scope=unknown → rejected (precision fix)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestRemoteOKUnknownScopeAccepted:
     def test_remoteok_unknown_scope_defaults_worldwide(self):
-        """RemoteOK job with scope=unknown → defaults to 'worldwide' → accepted."""
+        """RemoteOK job with scope=unknown stays ineligible."""
         job = _make_job(
             title="Software Engineer",
             company="Remote Co",
@@ -789,11 +789,10 @@ class TestRemoteOKUnknownScopeAccepted:
             url="https://remoteok.com/job/123",
         )
         results = _apply_filters([job])
-        assert len(results) == 1
-        assert results[0].remote_scope == "worldwide"
+        assert len(results) == 0
 
     def test_remoteok_remote_no_scope_accepted(self):
-        """RemoteOK job with bare 'Remote' location → worldwide → accepted."""
+        """RemoteOK job with bare 'Remote' location is rejected as unknown."""
         job = _make_job(
             title="Backend Developer",
             company="Startup Inc",
@@ -803,4 +802,4 @@ class TestRemoteOKUnknownScopeAccepted:
             url="https://remoteok.com/job/456",
         )
         results = _apply_filters([job])
-        assert len(results) == 1
+        assert len(results) == 0
