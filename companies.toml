@@ -677,3 +677,191 @@ provider = "personio"
 slug = "thermondo"
 url = "https://thermondo.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-10 11:43:15 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Airtable"
+provider = "greenhouse"
+slug = "airtable"
+url = "https://boards.greenhouse.io/airtable"
+enabled = true
+
+[[companies]]
+company = "Asana"
+provider = "greenhouse"
+slug = "asana"
+url = "https://boards.greenhouse.io/asana"
+enabled = true
+
+[[companies]]
+company = "Databricks"
+provider = "greenhouse"
+slug = "databricks"
+url = "https://boards.greenhouse.io/databricks"
+enabled = true
+
+[[companies]]
+company = "Figma"
+provider = "greenhouse"
+slug = "figma"
+url = "https://boards.greenhouse.io/figma"
+enabled = true
+
+[[companies]]
+company = "Netlify"
+provider = "greenhouse"
+slug = "netlify"
+url = "https://boards.greenhouse.io/netlify"
+enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-10 11:43:29 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Clera"
+provider = "ashby"
+slug = "Clera"
+url = "https://jobs.ashbyhq.com/Clera"
+enabled = true
+
+[[companies]]
+company = "Deepl"
+provider = "ashby"
+slug = "DeepL"
+url = "https://jobs.ashbyhq.com/DeepL"
+enabled = true
+
+[[companies]]
+company = "Elevenlabs"
+provider = "ashby"
+slug = "elevenlabs"
+url = "https://jobs.ashbyhq.com/elevenlabs"
+enabled = true
+
+[[companies]]
+company = "Emidat"
+provider = "ashby"
+slug = "emidat"
+url = "https://jobs.ashbyhq.com/emidat"
+enabled = true
+
+[[companies]]
+company = "Hipeople Official"
+provider = "ashby"
+slug = "hipeople-official"
+url = "https://jobs.ashbyhq.com/hipeople-official"
+enabled = true
+
+[[companies]]
+company = "Kittl"
+provider = "ashby"
+slug = "kittl"
+url = "https://jobs.ashbyhq.com/kittl"
+enabled = true
+
+[[companies]]
+company = "Langchain"
+provider = "ashby"
+slug = "langchain"
+url = "https://jobs.ashbyhq.com/langchain"
+enabled = true
+
+[[companies]]
+company = "Mercura"
+provider = "ashby"
+slug = "mercura"
+url = "https://jobs.ashbyhq.com/mercura"
+enabled = true
+
+[[companies]]
+company = "Tourlane"
+provider = "ashby"
+slug = "tourlane"
+url = "https://jobs.ashbyhq.com/tourlane"
+enabled = true
+
+[[companies]]
+company = "Upvest"
+provider = "ashby"
+slug = "upvest"
+url = "https://jobs.ashbyhq.com/upvest"
+enabled = true
+
+[[companies]]
+company = "Voize"
+provider = "ashby"
+slug = "voize"
+url = "https://jobs.ashbyhq.com/voize"
+enabled = true
+
+[[companies]]
+company = "Vrey"
+provider = "ashby"
+slug = "vrey"
+url = "https://jobs.ashbyhq.com/vrey"
+enabled = true
+
+[[companies]]
+company = "Grover"
+provider = "greenhouse"
+slug = "grover"
+url = "https://job-boards.greenhouse.io/grover"
+enabled = true
+
+[[companies]]
+company = "3pc"
+provider = "personio"
+slug = "3pc"
+url = "https://3pc.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Aixigo Ag"
+provider = "personio"
+slug = "aixigo-ag"
+url = "https://aixigo-ag.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Azeti"
+provider = "personio"
+slug = "azeti"
+url = "https://azeti.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Floy"
+provider = "personio"
+slug = "floy"
+url = "https://floy.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Jedox"
+provider = "personio"
+slug = "jedox"
+url = "https://jedox.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Nitrado"
+provider = "personio"
+slug = "nitrado"
+url = "https://nitrado.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Rapid Data"
+provider = "personio"
+slug = "rapid-data"
+url = "https://rapid-data.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Mondu"
+provider = "workable"
+slug = "mondu"
+url = "https://apply.workable.com/mondu"
+enabled = true
