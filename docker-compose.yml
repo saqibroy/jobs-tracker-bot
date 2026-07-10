@@ -19,7 +19,8 @@ services:
         limits:
           memory: 512M
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=10).close()"]
       interval: 5m
-      timeout: 10s
+      timeout: 20s
       retries: 3
+      start_period: 10m
