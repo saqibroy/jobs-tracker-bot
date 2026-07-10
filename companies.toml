@@ -1022,3 +1022,60 @@ provider = "personio"
 slug = "wire-1"
 url = "https://wire-1.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-10 21:41:16 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Pliant"
+provider = "ashby"
+slug = "pliant"
+url = "https://jobs.ashbyhq.com/pliant"
+enabled = true
+
+[[companies]]
+company = "Blackforestlabs"
+provider = "greenhouse"
+slug = "blackforestlabs"
+url = "https://job-boards.greenhouse.io/blackforestlabs"
+enabled = true
+
+[[companies]]
+company = "Speechify"
+provider = "greenhouse"
+slug = "speechify"
+url = "https://boards.greenhouse.io/speechify"
+enabled = true
+
+[[companies]]
+company = "Contentsquare"
+provider = "lever"
+slug = "contentsquare"
+url = "https://jobs.lever.co/contentsquare"
+enabled = true
+
+[[companies]]
+company = "Getsafe"
+provider = "personio"
+slug = "getsafe"
+enabled = true
+
+[[companies]]
+company = "Miles Mobility"
+provider = "personio"
+slug = "miles-mobility"
+url = "https://miles-mobility.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Vivid"
+provider = "personio"
+slug = "vivid"
+url = "https://vivid.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Xayn"
+provider = "personio"
+slug = "xayn"
+enabled = true
