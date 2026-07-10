@@ -377,18 +377,18 @@ class TestClassifyRemoteScope:
         ) == "restricted"
 
     def test_missing_zone(self):
-        """No remoteZone → worldwide (Idealist default)."""
-        assert IdealistSource._classify_remote_scope({}) == "worldwide"
+        """No remoteZone is insufficient evidence for Germany eligibility."""
+        assert IdealistSource._classify_remote_scope({}) == "unknown"
 
     def test_none_zone(self):
         assert IdealistSource._classify_remote_scope(
             {"remoteZone": None, "remoteCountry": None}
-        ) == "worldwide"
+        ) == "unknown"
 
     def test_empty_string_zone(self):
         assert IdealistSource._classify_remote_scope(
             {"remoteZone": "", "remoteCountry": ""}
-        ) == "worldwide"
+        ) == "unknown"
 
     def test_case_insensitive_zone(self):
         """Zone value is uppercased internally."""

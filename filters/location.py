@@ -14,7 +14,8 @@ from loguru import logger
 
 from models.job import Job
 
-GERMANY_TOKENS = {"germany", "deutschland", "de"}
+GERMANY_TOKENS = {"germany", "deutschland"}
+STRUCTURED_GERMANY_TOKENS = GERMANY_TOKENS | {"de"}
 BERLIN_TOKENS = {"berlin"}
 BROAD_REGIONS = {
     "worldwide", "global", "anywhere", "europe", "european union",
@@ -88,7 +89,7 @@ def _structured_remote_decision(job: Job) -> tuple[bool | None, str | None]:
     countries = {value.lower() for value in job.eligible_countries}
     regions = {value.lower() for value in job.eligible_regions}
     if countries:
-        if countries & GERMANY_TOKENS:
+        if countries & STRUCTURED_GERMANY_TOKENS:
             return True, "structured eligibility includes Germany"
         return False, f"structured eligibility is limited to {', '.join(sorted(countries))}"
     if regions:

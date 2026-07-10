@@ -33,19 +33,11 @@ Built for a specific use case: finding remote tech roles at NGOs and impact-driv
 
 ## Features
 
-### Sources (11 job boards)
+### Default sources
 
-- **Remotive** — JSON API, all remote tech jobs
-- **Arbeitnow** — JSON API, Germany/EU focused
-- **RemoteOK** — JSON feed with User-Agent requirement
-- **We Work Remotely** — RSS/XML feed parsing
-- **Idealist** — Algolia search API with multi-index queries
-- **ReliefWeb** — RSS feeds (3 career categories: ICT, PPM, IM)
-- **Tech Jobs for Good** — Playwright + BeautifulSoup (Cloudflare-protected, NGO/impact)
-- **EuroBrussels** — httpx + BeautifulSoup (EU-focused NGO/policy/civil society)
-- **80,000 Hours** — Playwright-based scraper (Effective Altruism / impact sector)
-- **GoodJobs.eu** — httpx + BeautifulSoup (DE/EU mission-driven organisations)
-- **Devex** — JSON API (international development sector, NGO/INGO)
+- **Direct employer feeds** — Greenhouse, Ashby, Personio, Lever, Workable, and JSON-LD career pages configured in `companies.toml`
+- **Germany/remote curated feeds** — Arbeitnow, StepStone, Remotive, Himalayas, RemoteOK, Idealist, and LinkedIn
+- **Optional legacy/impact sources** — We Work Remotely, ReliefWeb, Tech Jobs for Good, EuroBrussels, 80,000 Hours, GoodJobs.eu, Devex, No Fluff Jobs, Landing.jobs, The Muse, and BambooHR remain available via `--source NAME`
 
 ### Filtering & Classification
 
@@ -203,9 +195,9 @@ python main.py [OPTIONS]
 
 Options:
   --dry-run          One-shot scan, print results, no DB writes or notifications
-  --source NAME      Test a single source (remotive, arbeitnow, remoteok,
-                     weworkremotely, idealist, reliefweb, techjobsforgood,
-                     eurobrussels, hours80k, goodjobs, devex)
+  --source NAME      Test a single source (greenhouse, ashby, personio, lever,
+                     workable, jsonld, arbeitnow, stepstone, remotive,
+                     himalayas, remoteok, idealist, linkedin, etc.)
   --max-age DAYS     Override MAX_JOB_AGE_DAYS for this run
   --verbose          Show all rejected jobs with reasons (use with --dry-run)
   --stats            Print database statistics and exit

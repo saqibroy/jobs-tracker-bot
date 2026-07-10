@@ -37,7 +37,10 @@ def role_rejection_reason(job: Job) -> str | None:
     seniority_text = f"{title} {' '.join(job.tags).lower()}"
     if _contains(
         seniority_text,
-        ["intern", "internship", "working student", "werkstudent", "junior", "entry level", "entry-level"],
+        [
+            "intern", "internship", "working student", "werkstudent",
+            "junior", "associate", "entry level", "entry-level",
+        ],
     ):
         return "job seniority is below the target profile"
 

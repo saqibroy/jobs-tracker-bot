@@ -25,7 +25,8 @@ _API_URL = "https://remoteok.com/api"
 
 # ── RemoteOK location pre-parsing ─────────────────────────────────────────
 # Map raw location strings to (remote_scope, normalized_location).
-# RemoteOK is a remote-only board, so bare "Remote" → worldwide.
+# RemoteOK is a remote-only board, but we still require explicit geography.
+# Bare "Remote" stays unknown and is rejected by the hard eligibility gate.
 _REMOTEOK_WORLDWIDE_PATTERNS: list[str] = [
     "worldwide", "global", "anywhere", "work from anywhere",
     "remote - worldwide", "remote worldwide",
@@ -70,13 +71,13 @@ def _parse_remoteok_location(raw_location: str) -> tuple[str, str | None]:
     """Parse a RemoteOK location string into (normalized_location, remote_scope).
 
     Returns (location_string, scope) where scope is one of:
-    - "worldwide", "eu", "germany", "restricted", or None (let classifier decide).
+    - "worldwide", "eu", "germany", "restricted", or "unknown".
     """
     loc = raw_location.strip().lower()
 
-    # Empty or bare "Remote" → worldwide (RemoteOK is remote-only)
+    # Empty or bare "Remote" is not enough evidence for Germany eligibility.
     if not loc or loc == "remote":
-        return (raw_location or "Remote", "worldwide")
+        return (raw_location or "Remote", "unknown")
 
     # Check for worldwide signals
     for pattern in _REMOTEOK_WORLDWIDE_PATTERNS:
@@ -93,14 +94,13 @@ def _parse_remoteok_location(raw_location: str) -> tuple[str, str | None]:
         if pattern in loc:
             return (raw_location, "eu")
 
-    # Check for restricted patterns (non-EU countries)
-    # But first check if it ALSO mentions an EU country or worldwide
-    from filters.location import _EU_COUNTRIES, _WORLDWIDE_KEYWORDS
+    # Check for restricted patterns (non-Germany countries). If the location
+    # also explicitly says EU/Europe/worldwide, let the main classifier decide.
+    from filters.location import BROAD_REGIONS
 
-    has_eu = any(c in loc for c in _EU_COUNTRIES)
-    has_worldwide = any(w in loc for w in _WORLDWIDE_KEYWORDS)
+    has_broad_region = any(region in loc for region in BROAD_REGIONS)
 
-    if not has_eu and not has_worldwide:
+    if not has_broad_region:
         for pattern in _REMOTEOK_RESTRICTED_PATTERNS:
             # Word-boundary match for short tokens
             if pattern in _REMOTEOK_SHORT_TOKENS or len(pattern) <= 3:
@@ -110,9 +110,8 @@ def _parse_remoteok_location(raw_location: str) -> tuple[str, str | None]:
                 if pattern in loc:
                     return (raw_location, "restricted")
 
-    # Couldn't determine — let the main classifier handle it
-    # For RemoteOK (remote-only board), if we can't determine, it's likely worldwide
-    return (raw_location, "worldwide")
+    # Couldn't determine — unknown eligibility must be rejected later.
+    return (raw_location, "unknown")
 
 
 class RemoteOKSource(BaseSource):

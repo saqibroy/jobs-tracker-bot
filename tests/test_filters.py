@@ -218,6 +218,13 @@ class TestLocationFilter:
         assert job.remote_scope == "restricted"
         assert passes_location_filter(job) is False
 
+    def test_spanish_de_in_location_is_not_germany(self):
+        """Spanish preposition 'de' must not be treated as Germany country code."""
+        job = _make_job(location="Santiago de Surco, Perú")
+        job.remote_scope = classify_remote_scope(job)
+        assert job.remote_scope == "unknown"
+        assert passes_location_filter(job) is False
+
     def test_reject_tampa_fl(self):
         """'Tampa, FL' — US city → restricted → REJECT."""
         job = _make_job(location="Tampa, FL")
@@ -925,15 +932,15 @@ from sources.remoteok import _parse_remoteok_location
 
 
 class TestRemoteOKLocationParsing:
-    def test_empty_location_worldwide(self):
-        """Empty location → worldwide (RemoteOK is remote-only board)."""
+    def test_empty_location_unknown(self):
+        """Empty location is not enough evidence for Germany eligibility."""
         loc, scope = _parse_remoteok_location("")
-        assert scope == "worldwide"
+        assert scope == "unknown"
 
-    def test_bare_remote_worldwide(self):
-        """Bare 'Remote' → worldwide."""
+    def test_bare_remote_unknown(self):
+        """Bare 'Remote' is not enough evidence for Germany eligibility."""
         loc, scope = _parse_remoteok_location("Remote")
-        assert scope == "worldwide"
+        assert scope == "unknown"
 
     def test_worldwide_explicit(self):
         loc, scope = _parse_remoteok_location("Worldwide")
@@ -984,10 +991,10 @@ class TestRemoteOKLocationParsing:
         loc, scope = _parse_remoteok_location("Tampa, FL")
         assert scope == "restricted"
 
-    def test_unknown_defaults_worldwide(self):
-        """Unknown location on RemoteOK → worldwide (benefit of the doubt)."""
+    def test_unknown_stays_unknown(self):
+        """Unknown RemoteOK location must not silently become worldwide."""
         loc, scope = _parse_remoteok_location("Somewhere random")
-        assert scope == "worldwide"
+        assert scope == "unknown"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

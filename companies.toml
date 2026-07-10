@@ -565,3 +565,55 @@ provider = "personio"
 slug = "goreha"
 url = "https://goreha.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-10 09:13:04 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Cosuno"
+provider = "ashby"
+slug = "cosuno"
+url = "https://jobs.ashbyhq.com/cosuno"
+enabled = true
+
+[[companies]]
+company = "Partyhat"
+provider = "ashby"
+slug = "partyhat"
+url = "https://jobs.ashbyhq.com/partyhat"
+enabled = true
+
+[[companies]]
+company = "Searchapi"
+provider = "ashby"
+slug = "SearchApi"
+url = "https://jobs.ashbyhq.com/SearchApi"
+enabled = true
+
+[[companies]]
+company = "Trading212"
+provider = "ashby"
+slug = "trading212"
+url = "https://jobs.ashbyhq.com/trading212"
+enabled = true
+
+[[companies]]
+company = "Dampsoft"
+provider = "personio"
+slug = "dampsoft"
+url = "https://dampsoft.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Liveeo Gmbh"
+provider = "personio"
+slug = "liveeo-gmbh"
+url = "https://liveeo-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Yoummday Gmbh"
+provider = "personio"
+slug = "yoummday-gmbh"
+url = "https://yoummday-gmbh.jobs.personio.de"
+enabled = true
