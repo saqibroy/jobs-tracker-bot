@@ -617,3 +617,63 @@ provider = "personio"
 slug = "yoummday-gmbh"
 url = "https://yoummday-gmbh.jobs.personio.de"
 enabled = true
+
+# Personio watch-list boards promoted on 2026-07-10.
+# These boards have live jobs but no current CV-match; strict filters still
+# decide notifications, so they are enabled for future coverage.
+
+[[companies]]
+company = "Cycle"
+provider = "personio"
+slug = "cycle"
+url = "https://cycle.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Globalct"
+provider = "personio"
+slug = "globalct"
+url = "https://globalct.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Jtl Software Gmbh"
+provider = "personio"
+slug = "jtl-software-gmbh"
+url = "https://jtl-software-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Legartis"
+provider = "personio"
+slug = "legartis"
+url = "https://legartis.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Meteocontrol"
+provider = "personio"
+slug = "meteocontrol"
+url = "https://meteocontrol.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Pitch"
+provider = "personio"
+slug = "pitch"
+url = "https://pitch.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Reisetopia"
+provider = "personio"
+slug = "reisetopia"
+url = "https://reisetopia.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Thermondo"
+provider = "personio"
+slug = "thermondo"
+url = "https://thermondo.jobs.personio.de"
+enabled = true
