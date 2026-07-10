@@ -791,20 +791,27 @@ async def _async_main(sources: list) -> None:
             return await run_scan(sources_list, dry_run=False)
 
         channel_id = int(config.DISCORD_COMMAND_CHANNEL_ID)
-        discord_bot = JobTrackerBot(
-            command_channel_id=channel_id,
-            scan_callback=_manual_scan_callback,
-        )
 
-        scan_job = scheduler.get_job("scan")
-        if scan_job:
-            discord_bot.set_scan_times(last_scan=None, next_scan=scan_job.next_run_time)
+        def _new_discord_bot() -> JobTrackerBot:
+            bot = JobTrackerBot(
+                command_channel_id=channel_id,
+                scan_callback=_manual_scan_callback,
+            )
+            scan_job = scheduler.get_job("scan")
+            if scan_job:
+                bot.set_scan_times(last_scan=None, next_scan=scan_job.next_run_time)
+            return bot
+
+        discord_bot = _new_discord_bot()
 
         async def _run_discord_forever():
             """Keep the Discord bot running, reconnect on failure."""
+            nonlocal discord_bot
             while True:
                 try:
                     await discord_bot.start(config.DISCORD_BOT_TOKEN)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     logger.error("Discord bot disconnected: {} — reconnecting in 30s", exc)
                     if not discord_bot.is_closed():
@@ -813,6 +820,7 @@ async def _async_main(sources: list) -> None:
                         except Exception:
                             pass
                     await asyncio.sleep(30)
+                    discord_bot = _new_discord_bot()
 
         background_tasks.append(asyncio.create_task(
             _run_discord_forever(),
