@@ -1,0 +1,3 @@
+# Passive ATS candidates mined from aggregator job URLs.
+# This file is append-only seed input for scripts/discover_companies.py.
+# Lines use: provider:slug board-url

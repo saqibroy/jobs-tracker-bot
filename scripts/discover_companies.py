@@ -7,13 +7,14 @@ tool automates the boring part around that registry:
 1. collect candidate ATS boards from env seed lists, text files, URLs, domains,
    and optional Google Custom Search;
 2. validate each public board endpoint;
-3. run a no-write eligibility/profile preview through the same filters the bot
-   uses in production;
+3. run a no-write eligibility/profile preview for diagnostics using the same
+   filters the bot uses in production;
 4. write candidate reports; and
 5. optionally append passing boards to `companies.toml`.
 
-Promotion is explicit (`--promote`) and threshold-gated by default. That keeps
-discovery automated without letting stale dorks poison production.
+Promotion is explicit (`--promote`) and gated by live-board validation by
+default. Runtime scans still re-apply Germany/Berlin eligibility and CV-fit
+filters before notifying.
 """
 
 from __future__ import annotations
@@ -83,6 +84,10 @@ ATS_URL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 JOIN_URL_RE = re.compile(r"https?://(?:www\.)?join\.com/(?:companies/)?[^\s\"')<>]+", re.I)
 URL_RE = re.compile(r"https?://[^\s\"')<>]+", re.I)
 DOMAIN_RE = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b", re.I)
+PROVIDER_HINT_RE = re.compile(
+    r"^\s*(ashby|greenhouse|personio|lever|workable|jsonld):([^\s|#]+)(?:[\s|]+(https?://[^\s#]+))?\s*$",
+    re.I,
+)
 
 CAREER_PATHS = (
     "/careers", "/career", "/jobs", "/join-us", "/open-positions",
@@ -209,22 +214,38 @@ def candidates_from_text(path: Path) -> tuple[list[Candidate], list[str]]:
     if not path.exists():
         return [], []
     text = path.read_text(encoding="utf-8", errors="ignore")
+    uncommented_text = "\n".join(
+        raw_line.split("#", 1)[0]
+        for raw_line in text.splitlines()
+    )
     candidates: list[Candidate] = []
     domains: set[str] = set()
 
     # Parse env-style snippets pasted into a text file.
-    candidates.extend(candidates_from_env_text(text, source_prefix=str(path)))
+    candidates.extend(candidates_from_env_text(uncommented_text, source_prefix=str(path)))
+
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = PROVIDER_HINT_RE.match(line)
+        if not match:
+            continue
+        provider = match.group(1).lower()
+        slug = match.group(2).strip()
+        url = (match.group(3) or "").rstrip(".,;")
+        candidates.append(_candidate(provider, slug, url=url, source=str(path)))
 
     for provider, pattern in ATS_URL_PATTERNS:
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(uncommented_text):
             candidates.append(_candidate(provider, match.group(1), url=match.group(0), source=str(path)))
 
-    for match in JOIN_URL_RE.finditer(text):
+    for match in JOIN_URL_RE.finditer(uncommented_text):
         url = match.group(0).rstrip(".,;")
         slug = hashlib.sha1(url.encode()).hexdigest()[:12]
         candidates.append(_candidate("jsonld", slug, company=_guess_company(urlparse(url).path.split("/")[2] if "/companies/" in url else "JOIN"), url=url, source=str(path)))
 
-    for match in DOMAIN_RE.finditer(text):
+    for match in DOMAIN_RE.finditer(uncommented_text):
         domain = match.group(0).lower().strip(".,;")
         if not _looks_like_provider_domain(domain):
             domains.add(domain)
@@ -455,7 +476,7 @@ def promote(results: list[ValidationResult], companies_path: Path, *, promotable
     block = [
         "",
         f"# Auto-promoted by scripts/discover_companies.py on {stamp}.",
-        "# Promotion thresholds were applied before writing these boards.",
+        "# Live-board promotion thresholds were applied before writing these boards.",
         "",
     ]
     block.extend(board_to_toml(candidate) + "\n" for candidate in selected)
@@ -594,7 +615,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-env", action="store_true", help="Use *_COMPANIES values from .env as seed candidates")
     parser.add_argument("--env-file", default=".env", help="Env file to read when --from-env is set")
-    parser.add_argument("--seed-file", action="append", default=[], help="Text file containing URLs, domains, or env-style company lists")
+    parser.add_argument("--seed-file", action="append", default=[], help="Text file containing URLs, domains, provider:slug hints, or env-style company lists")
     parser.add_argument("--url", action="append", default=[], help="Specific ATS/JOIN URL to inspect")
     parser.add_argument("--domain", action="append", default=[], help="Company domain to inspect for career-page ATS links")
     parser.add_argument("--detect-domains", action="store_true", help="Visit discovered/provided domains and detect ATS redirects/links")
@@ -605,9 +626,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0, help="Validate at most N candidates after discovery/dedupe")
     parser.add_argument("--concurrency", type=int, default=3, help="Concurrent validation/detection requests")
     parser.add_argument("--top-jobs", type=int, default=5, help="Top matching jobs stored in JSONL preview")
-    parser.add_argument("--min-jobs", type=int, default=1, help="Promotion threshold: minimum raw jobs")
-    parser.add_argument("--min-eligible", type=int, default=1, help="Promotion threshold: minimum Germany/Berlin-eligible jobs")
-    parser.add_argument("--min-matches", type=int, default=0, help="Promotion threshold: minimum eligible role/profile matches")
+    parser.add_argument("--min-jobs", type=int, default=1, help="Promotion threshold: minimum live jobs on the board")
+    parser.add_argument("--min-eligible", type=int, default=0, help="Optional promotion threshold: minimum Germany/Berlin-eligible jobs; normal scans always re-apply eligibility")
+    parser.add_argument("--min-matches", type=int, default=0, help="Optional promotion threshold: minimum eligible role/profile matches")
     parser.add_argument("--output-dir", default="data/discovery", help="Directory for generated reports")
     parser.add_argument("--companies-file", default="companies.toml", help="Registry file to append to with --promote")
     parser.add_argument("--promote", action="store_true", help="Append passing, non-duplicate boards to companies.toml")

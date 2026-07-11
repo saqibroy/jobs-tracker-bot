@@ -47,12 +47,30 @@ def test_discovery_parses_ats_urls_domains_and_join_jsonld(tmp_path: Path):
     assert {"n26.com", "contentful.com"} <= set(domains)
 
 
-def test_promotion_thresholds_require_valid_preview():
+def test_discovery_parses_provider_slug_seed_hints(tmp_path: Path):
+    seed = tmp_path / "sniffed.txt"
+    seed.write_text(
+        "# first_seen=2026-07-11 source=linkedin\n"
+        "# comment-only domains like ignored.example and job URLs are ignored\n"
+        "# job_url=https://de.linkedin.com/jobs/view/example\n"
+        "ashby:acme https://jobs.ashbyhq.com/acme\n"
+        "jsonld:join-example https://join.com/companies/join-example\n",
+        encoding="utf-8",
+    )
+    candidates, domains = candidates_from_text(seed)
+    keys = {(candidate.provider, candidate.slug, candidate.url) for candidate in candidates}
+    assert ("ashby", "acme", "https://jobs.ashbyhq.com/acme") in keys
+    assert ("jsonld", "join-example", "https://join.com/companies/join-example") in keys
+    assert domains == []
+
+
+def test_promotion_thresholds_default_to_live_board_not_eligibility():
     candidate = Candidate(provider="ashby", slug="fresh-board-for-test", company="Fresh Board")
     failed = ValidationResult(candidate, "failed", "404")
-    assert not promotion_allowed(failed, min_jobs=1, min_eligible=1, min_matches=0)
+    assert not promotion_allowed(failed, min_jobs=1, min_eligible=0, min_matches=0)
 
     no_eligible = ValidationResult(candidate, "ok", preview=Preview(raw_jobs=5, eligible=0))
+    assert promotion_allowed(no_eligible, min_jobs=1, min_eligible=0, min_matches=0)
     assert not promotion_allowed(no_eligible, min_jobs=1, min_eligible=1, min_matches=0)
 
     good = ValidationResult(candidate, "ok", preview=Preview(raw_jobs=5, eligible=1, role_matches=0))

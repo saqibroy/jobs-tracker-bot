@@ -13,7 +13,8 @@ env/
 
 # Database
 data/*.db
-data/discovery/
+data/discovery/*
+!data/discovery/sniffed_from_jobs.txt
 
 # Logs
 logs/

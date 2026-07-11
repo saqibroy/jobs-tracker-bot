@@ -45,8 +45,10 @@ jobs:
           fi
 
           python scripts/discover_companies.py --from-env \
-            --seed-file seeds/companies-seed.txt --detect-domains --new-only \
-            --min-jobs 1 --min-eligible 1 --promote $GOOGLE_ARGS
+            --seed-file seeds/companies-seed.txt \
+            --seed-file data/discovery/sniffed_from_jobs.txt \
+            --detect-domains --new-only \
+            --min-jobs 1 --promote $GOOGLE_ARGS
 
       - name: Validate promoted boards
         env:
@@ -69,7 +71,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add companies.toml
+          git add companies.toml data/discovery/sniffed_from_jobs.txt
 
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"

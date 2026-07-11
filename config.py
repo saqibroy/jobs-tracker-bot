@@ -93,6 +93,12 @@ ACCEPT_ONSITE_GERMANY: bool = _get("ACCEPT_ONSITE_GERMANY", "false").lower() in 
 # ── Concurrency ────────────────────────────────────────────────────────────
 MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "3"))
 
+# ── Passive company discovery ──────────────────────────────────────────────
+# Mine aggregator apply links for known ATS board URLs and append newly-seen
+# boards to data/discovery/sniffed_from_jobs.txt for the scheduled discovery
+# workflow to validate/promote later. This performs no extra HTTP requests.
+ENABLE_ATS_SNIFFING: bool = _get("ENABLE_ATS_SNIFFING", "true").lower() in ("true", "1", "yes")
+
 # ── Health endpoint ────────────────────────────────────────────────────────
 HEALTH_PORT: int = int(_get("HEALTH_PORT", "8080"))
 

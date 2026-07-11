@@ -1,7 +1,7 @@
 # Seed list for scripts/discover_companies.py --seed-file
 # Unverified — run through:
 #   python scripts/discover_companies.py --from-env --seed-file <this-seed-file> \
-#     --detect-domains --new-only --min-jobs 1 --min-eligible 1 --promote
+#     --detect-domains --new-only --min-jobs 1 --promote
 # Comments are allowed with #.
 # The current discovery CLI detects ATS URLs and domains in this file. Company
 # names are useful notes, but domains or direct career/ATS URLs give the best
@@ -339,3 +339,264 @@ Monzo
 Fintern
 Yapily
 TrueLayer
+
+# ============================================================
+# NEW ENTRIES (added this round)
+# ============================================================
+
+# --- New domain hints ---
+volocopter.com
+lilium.com
+celonis.com
+personetics.com
+finiata.com
+billomat.com
+sevdesk.de
+lexoffice.de
+fastbill.com
+debitoor.com
+weclapp.com
+raycast.com
+linear.app
+warp.dev
+retool.com
+zeplin.io
+framer.com
+webflow.com
+lovable.dev
+bolt.new
+cursor.sh
+replicate.com
+huggingface.co
+lambdalabs.com
+runpod.io
+vast.ai
+scale.com
+labelbox.com
+weightsandbiases.com
+comet.com
+neptune.ai
+dagshub.com
+clear.ml
+determined.ai
+anyscale.com
+dstack.ai
+banana.dev
+octoml.ai
+groq.com
+cerebras.net
+sambanova.ai
+lightning.ai
+gradio.app
+streamlit.io
+supertokens.com
+workos.com
+frontegg.com
+descope.com
+stytch.com
+propelauth.com
+permit.io
+oso.dev
+authzed.com
+cerbos.dev
+warrant.dev
+teleport.dev
+infisical.com
+doppler.com
+n8n.io
+zapier.com
+make.com
+tray.io
+workato.com
+merge.dev
+apideck.com
+paragon.com
+prismatic.io
+kombo.dev
+metronome.com
+orb.com
+lago.dev
+recurly.com
+chargebee.com
+paddle.com
+mollie.com
+adyen.com
+checkout.com
+klarna.com
+airwallex.com
+rapyd.net
+nium.com
+thunes.com
+currencycloud.com
+ebury.com
+payoneer.com
+worldremit.com
+azimo.com
+lunar.app
+holvi.com
+qonto.com
+pleo.io
+spendesk.com
+soldo.com
+ramp.com
+brex.com
+mercury.com
+juni.co
+kontist.com
+finom.co
+bunq.com
+
+# --- Munich / Bavaria SMEs (often Personio) ---
+Celonis
+Personetics
+Isar Aerospace
+Konux
+Lilium
+Volocopter
+Freeletics
+Uberall
+Simscale
+Numbrs
+Konfuzio
+Ottobock
+Trumpf Ventures
+
+# --- Hamburg / Cologne / NRW ---
+Jimdo
+Xing
+New Work SE
+Adjust
+Deliverect
+Trivago
+Payback
+Fielmann Digital
+Zeitgold
+Getsafe
+
+# --- Insurtech / legal tech ---
+Wefox
+Clark
+Coya
+Getsafe
+Feather Insurance
+Element Insurance
+Neodigital
+Ottonova
+Friday Insurance
+Simplesurance
+Hepster
+Laka
+Lawpilots
+Legalbase
+Flightright
+Conny
+Aroundhome
+Advocado
+Rightmart
+Klugo
+Bryter
+Leverton
+Leftshift One
+
+# --- Edtech ---
+Sofatutor
+Simpleclub
+Studysmarter
+Lecturio
+GoStudent
+Masterschool
+Bettermarks
+Speexx
+Babbel
+Lingoda
+Preply
+
+# --- Foodtech / logistics ---
+Choco
+Flink
+Delivery Hero
+Getir
+Picnic
+HelloFresh
+Marley Spoon
+Foodspring
+Sennder
+Forto
+Everoad
+Instafreight
+Cargoone
+Shipcloud
+Parcelperform
+Onfleet
+Bringg
+Route4Me
+
+# --- Gaming ---
+Wooga
+Bigpoint
+Goodgame Studios
+Gameforge
+Flying Oak Games
+Payload Studios
+Metaplay
+Space Ape Games
+Rockbite Games
+Ustwo Games
+
+# --- Media / martech / adtech ---
+Adjust
+Smartclip
+Exasol
+Cliqz
+Adition
+Improve Digital
+Remerge
+Liftoff
+Appsflyer
+Adikteev
+Vidmob
+Bidstack
+Seedtag
+Taboola Europe
+Outbrain Europe
+
+# --- Cybersecurity ---
+Vaultree
+Corelight
+Sysdig
+Wiz
+Orca Security
+Snyk
+Semgrep
+Socket Security
+Lacework
+Netbird
+Twingate
+Tailscale
+Zerotier
+Nordlayer
+Perimeter81
+
+# --- Agritech / foodtech deep ---
+Infarm
+Klim
+Farmdok
+365farmnet
+Agvolution
+Taranis
+
+# --- More YC / EU remote startups ---
+Turso
+Convex
+Instantdb
+Liveblocks
+Ably
+Pusher
+Pubnub
+Stream
+Getstream.io
+Sendbird
+Messagebird
+Infobip
+Sinch
+Vonage

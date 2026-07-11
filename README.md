@@ -151,11 +151,21 @@ This writes:
 - `data/discovery/discovered_companies.jsonl`
 - `data/discovery/companies.candidates.toml`
 
-The same discovery command also runs automatically every Monday at 06:00 UTC
-via `.github/workflows/discover.yml`. Add more company names, domains, or ATS
-URLs to `seeds/companies-seed.txt`; comments starting with `#` are allowed.
-For the current discovery CLI, domains and direct ATS URLs give the best hit
-rate because `--detect-domains` inspects domains found in the seed file.
+The same discovery command also runs automatically every day at 06:00 UTC via
+`.github/workflows/discover.yml`. Add more company names, domains, or ATS URLs
+to `seeds/companies-seed.txt`; comments starting with `#` are allowed. For the
+current discovery CLI, domains and direct ATS URLs give the best hit rate
+because `--detect-domains` inspects domains found in the seed file.
+
+The bot also passively mines apply links from aggregator sources such as
+LinkedIn, StepStone, Remotive, Arbeitnow, Himalayas, RemoteOK, WeWorkRemotely,
+and Idealist. When a job URL points at a known ATS board (Ashby, Greenhouse,
+Personio, Lever, Workable, or a JOIN public career page), the bot appends a
+deduped seed line to `data/discovery/sniffed_from_jobs.txt`. The scheduled
+discovery workflow reads that file as a second seed source, validates those
+boards through the existing discovery pipeline, and only then promotes passing
+boards into `companies.toml`.
+
 The workflow promotes validated boards into `companies.toml`, validates all
 enabled employer boards, uploads `data/discovery/` as a workflow artifact, and
 dispatches `deploy.yml` when `companies.toml` changed so production picks up
@@ -168,20 +178,21 @@ Promote passing boards automatically after validation:
 python scripts/discover_companies.py \
   --from-env \
   --seed-file seeds/companies-seed.txt \
+  --seed-file data/discovery/sniffed_from_jobs.txt \
   --detect-domains \
   --new-only \
   --min-jobs 1 \
-  --min-eligible 1 \
   --promote
 
 python main.py --validate-sources
 python main.py --dry-run --max-age 14
 ```
 
-By default, promotion only appends boards that fetched live jobs and produced at
-least one Germany/Berlin-eligible job through the same hard eligibility filter
-used in production. Use `--min-matches 1` if you only want to promote boards
-that currently contain a role/profile match too.
+By default, promotion only appends boards that are reachable and fetched at
+least one live job. The normal `main.py` scan pipeline still re-applies hard
+Germany/Berlin eligibility, language, role, stack, and CV-fit filters before
+saving or notifying jobs. Use `--min-eligible 1` or `--min-matches 1` if you
+want a stricter one-off promotion run.
 
 JOIN boards are handled through the public career/job page route:
 `provider = "jsonld"` plus a public URL. JOIN's employer API needs an
@@ -316,6 +327,7 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `MIN_SALARY_EUR` | `0` | Reject jobs with salary below this (0 = off) |
 | `DISABLE_PLAYWRIGHT` | `false` | Skip Playwright sources (saves ~50MB RAM) |
 | `MAX_CONCURRENT_SOURCES` | `6` | Max sources fetched in parallel (lower = less RAM) |
+| `ENABLE_ATS_SNIFFING` | `true` | Mine aggregator apply links for known ATS boards and append discovery seeds |
 | `HEALTH_PORT` | `8080` | Port for the health HTTP endpoint |
 | `DATABASE_PATH` | `./data/jobs.db` | SQLite database file |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG` for verbose logs) |

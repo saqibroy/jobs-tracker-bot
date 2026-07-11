@@ -37,6 +37,7 @@ from models.job import Job
 from notifiers.discord_notifier import DiscordNotifier
 from notifiers.telegram_notifier import TelegramNotifier
 from sources.arbeitnow import ArbeitnowSource
+from sources.ats_url_sniffer import append_sniffed_candidates
 from sources.ashby import AshbySource
 from sources.bamboohr import BambooHRSource
 from sources.devex import DevexSource
@@ -414,6 +415,14 @@ async def run_scan(
         del results  # free HTTP response data eagerly
 
     logger.info("Total raw jobs fetched: {}", total_raw)
+
+    if config.ENABLE_ATS_SNIFFING:
+        try:
+            appended = append_sniffed_candidates(all_jobs)
+            if appended:
+                logger.info("ATS sniffing discovered {} new candidate boards", appended)
+        except Exception:
+            logger.exception("ATS sniffing failed; continuing scan")
 
     # Apply filters
     filtered = _apply_filters(all_jobs, max_age_days=max_age_days, verbose=verbose)
