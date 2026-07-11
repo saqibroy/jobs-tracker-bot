@@ -1079,3 +1079,13 @@ company = "Xayn"
 provider = "personio"
 slug = "xayn"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-11 07:49:15 UTC.
+# Promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Mistral"
+provider = "ashby"
+slug = "mistral.ai"
+url = "https://jobs.ashbyhq.com/mistral.ai"
+enabled = true
