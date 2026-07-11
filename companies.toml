@@ -1089,3 +1089,181 @@ provider = "ashby"
 slug = "mistral.ai"
 url = "https://jobs.ashbyhq.com/mistral.ai"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-11 11:07:21 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Anyscale"
+provider = "ashby"
+slug = "anyscale"
+url = "https://jobs.ashbyhq.com/anyscale"
+enabled = true
+
+[[companies]]
+company = "Authzed"
+provider = "ashby"
+slug = "authzed"
+url = "https://jobs.ashbyhq.com/authzed"
+enabled = true
+
+[[companies]]
+company = "Cerebras"
+provider = "ashby"
+slug = "cerebras"
+url = "https://jobs.ashbyhq.com/cerebras"
+enabled = true
+
+[[companies]]
+company = "Depot"
+provider = "ashby"
+slug = "depot"
+url = "https://jobs.ashbyhq.com/depot"
+enabled = true
+
+[[companies]]
+company = "Fal Ai"
+provider = "ashby"
+slug = "fal-ai"
+url = "https://jobs.ashbyhq.com/fal-ai"
+enabled = true
+
+[[companies]]
+company = "Lambda"
+provider = "ashby"
+slug = "lambda"
+url = "https://jobs.ashbyhq.com/lambda"
+enabled = true
+
+[[companies]]
+company = "Pleo"
+provider = "ashby"
+slug = "pleo"
+url = "https://jobs.ashbyhq.com/pleo"
+enabled = true
+
+[[companies]]
+company = "Runpod"
+provider = "ashby"
+slug = "runpod"
+url = "https://jobs.ashbyhq.com/runpod"
+enabled = true
+
+[[companies]]
+company = "Speakeasy"
+provider = "ashby"
+slug = "Speakeasy"
+url = "https://jobs.ashbyhq.com/Speakeasy"
+enabled = true
+
+[[companies]]
+company = "Stream"
+provider = "ashby"
+slug = "stream"
+url = "https://jobs.ashbyhq.com/stream"
+enabled = true
+
+[[companies]]
+company = "Tray Ai"
+provider = "ashby"
+slug = "tray-ai"
+url = "https://jobs.ashbyhq.com/tray-ai"
+enabled = true
+
+[[companies]]
+company = "Triggerdev"
+provider = "ashby"
+slug = "triggerdev"
+url = "https://jobs.ashbyhq.com/triggerdev"
+enabled = true
+
+[[companies]]
+company = "Workos"
+provider = "ashby"
+slug = "workos"
+url = "https://jobs.ashbyhq.com/workos"
+enabled = true
+
+[[companies]]
+company = "Descope"
+provider = "greenhouse"
+slug = "descope"
+url = "https://job-boards.greenhouse.io/descope"
+enabled = true
+
+[[companies]]
+company = "Gocardless"
+provider = "greenhouse"
+slug = "gocardless"
+url = "https://boards.greenhouse.io/gocardless"
+enabled = true
+
+[[companies]]
+company = "Mercury"
+provider = "greenhouse"
+slug = "mercury"
+url = "https://job-boards.greenhouse.io/mercury"
+enabled = true
+
+[[companies]]
+company = "Monzo"
+provider = "greenhouse"
+slug = "monzo"
+url = "https://boards.greenhouse.io/monzo"
+enabled = true
+
+[[companies]]
+company = "Prismatic"
+provider = "greenhouse"
+slug = "prismatic"
+url = "https://job-boards.greenhouse.io/prismatic"
+enabled = true
+
+[[companies]]
+company = "Webflow"
+provider = "greenhouse"
+slug = "webflow"
+url = "https://job-boards.greenhouse.io/webflow"
+enabled = true
+
+[[companies]]
+company = "Nium"
+provider = "lever"
+slug = "nium"
+url = "https://jobs.lever.co/nium"
+enabled = true
+
+[[companies]]
+company = "Bling Services Gmbh"
+provider = "personio"
+slug = "bling-services-gmbh"
+url = "https://bling-services-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Semron"
+provider = "personio"
+slug = "semron"
+url = "https://semron.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Voltfang"
+provider = "personio"
+slug = "voltfang"
+url = "https://voltfang.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Weclapp"
+provider = "personio"
+slug = "weclapp"
+url = "https://weclapp.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Huggingface"
+provider = "workable"
+slug = "huggingface"
+url = "https://apply.workable.com/huggingface"
+enabled = true
