@@ -1,0 +1,4 @@
+# Auto-populated by Zoho Mail ingestion.
+# Compatible with scripts/discover_companies.py --seed-file.
+# Example:
+#   greenhouse:example https://boards.greenhouse.io/example

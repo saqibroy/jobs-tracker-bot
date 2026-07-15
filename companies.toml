@@ -1267,3 +1267,20 @@ provider = "workable"
 slug = "huggingface"
 url = "https://apply.workable.com/huggingface"
 enabled = true
+
+# Auto-promoted from Zoho Mail discovery on 2026-07-15.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Emnify"
+provider = "greenhouse"
+slug = "emnify"
+url = "https://boards.greenhouse.io/emnify"
+enabled = true
+
+[[companies]]
+company = "Think Cell"
+provider = "greenhouse"
+slug = "think-cell"
+url = "https://boards.greenhouse.io/think-cell"
+enabled = true

@@ -17,7 +17,6 @@ import asyncio
 import re
 import signal
 import sys
-import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -586,7 +585,7 @@ async def _show_stats() -> None:
         last_scan_str = "never"
 
     print(f"\n{'='*60}")
-    print(f"  📊  JOB TRACKER — DATABASE STATS")
+    print("  📊  JOB TRACKER — DATABASE STATS")
     print(f"{'='*60}\n")
 
     print(f"  Total jobs in DB:    {total}")
@@ -603,14 +602,14 @@ async def _show_stats() -> None:
 
     if sources:
         print(f"\n  {'─'*50}")
-        print(f"  📡  Sources breakdown:")
+        print("  📡  Sources breakdown:")
         for src, count in sources.items():
             bar = "█" * min(count, 40)
             print(f"      {src:<20s} {count:>4d}  {bar}")
 
     if top_companies:
         print(f"\n  {'─'*50}")
-        print(f"  🏢  Top companies:")
+        print("  🏢  Top companies:")
         for company, count in top_companies:
             name = company if len(company) <= 35 else company[:32] + "..."
             print(f"      {name:<35s} ({count})")
@@ -668,6 +667,16 @@ def main():
         action="store_true",
         help="Re-compute match scores for all jobs with score=0 and exit.",
     )
+    parser.add_argument(
+        "--zoho-sync",
+        action="store_true",
+        help="Run one Zoho Mail ingestion cycle and exit. First sync defaults to dry-run.",
+    )
+    parser.add_argument(
+        "--zoho-write",
+        action="store_true",
+        help="Allow --zoho-sync to write extracted records and advance checkpoints.",
+    )
     args = parser.parse_args()
     args.verbose = args.verbose or getattr(args, "explain", False)
 
@@ -691,6 +700,12 @@ def main():
     if args.backfill_scores:
         logger.info("Backfilling match scores for existing jobs...")
         asyncio.run(_run_backfill_cli())
+        return
+
+    if args.zoho_sync:
+        logger.info("Running Zoho Mail ingestion...")
+        dry_run = False if args.zoho_write else (True if args.dry_run else None)
+        asyncio.run(_run_zoho_sync_cli(dry_run=dry_run))
         return
 
     sources = _get_sources(args.source)
@@ -790,6 +805,22 @@ async def _async_main(sources: list) -> None:
         logger.info(
             "Weekly NGO digest scheduled: {}s at {:02d}:00 UTC",
             config.WEEKLY_DIGEST_DAY.upper(), config.WEEKLY_DIGEST_HOUR,
+        )
+
+    if config.ZOHO_MAIL_SYNC_ENABLED:
+        scheduler.add_job(
+            _scheduled_zoho_mail_sync,
+            "interval",
+            minutes=config.ZOHO_MAIL_SYNC_INTERVAL_MINUTES,
+            id="zoho_mail_sync",
+            name="Zoho Mail Sync",
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+            max_instances=1,
+        )
+        logger.info(
+            "Zoho Mail sync scheduled every {} min (dry_run={})",
+            config.ZOHO_MAIL_SYNC_INTERVAL_MINUTES,
+            config.ZOHO_MAIL_SYNC_DRY_RUN,
         )
 
     scheduler.start()
@@ -964,6 +995,49 @@ async def _scheduled_scan() -> None:
             pass
     except Exception:
         logger.exception("Scheduled scan failed")
+
+
+async def _run_zoho_sync_cli(*, dry_run: bool | None) -> None:
+    from integrations.zoho_mail import ZohoMailIngestionWorker
+
+    worker = ZohoMailIngestionWorker()
+    result = await worker.run(dry_run=dry_run)
+    mode = "DRY RUN" if result.dry_run else "WRITE"
+    print(f"\n{'='*68}")
+    print(f"  ZOHO MAIL INGESTION — {mode}")
+    print(f"{'='*68}")
+    print(f"  Accounts:                {result.accounts}")
+    print(f"  Relevant folders:        {result.folders}")
+    print(f"  Message summaries seen:  {result.messages_seen}")
+    print(f"  Full messages fetched:   {result.full_messages_fetched}")
+    print(f"  Extracted records:       {result.extracted_records}")
+    print(f"  Review queue records:    {result.review_records}")
+    print(f"  Discovery candidates:    {result.discovery_candidates}")
+    print(f"  Checkpoint advanced:     {result.checkpoint_advanced}")
+    print(f"{'='*68}\n")
+
+
+async def _scheduled_zoho_mail_sync() -> None:
+    from integrations.zoho_mail import ZohoMailIngestionWorker
+
+    logger.info("📬 Scheduled Zoho Mail sync starting...")
+    try:
+        worker = ZohoMailIngestionWorker()
+        result = await worker.run(dry_run=config.ZOHO_MAIL_SYNC_DRY_RUN)
+        logger.info(
+            "Zoho Mail sync finished: accounts={} folders={} messages={} full={} records={} review={} discovery={} checkpoint={} dry_run={}",
+            result.accounts,
+            result.folders,
+            result.messages_seen,
+            result.full_messages_fetched,
+            result.extracted_records,
+            result.review_records,
+            result.discovery_candidates,
+            result.checkpoint_advanced,
+            result.dry_run,
+        )
+    except Exception:
+        logger.exception("Scheduled Zoho Mail sync failed")
 
 
 async def _scheduled_digest() -> None:

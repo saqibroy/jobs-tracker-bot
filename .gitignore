@@ -10,11 +10,23 @@ env/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 
 # Database
 data/*.db
+data/private/
+data/zoho/
+data/mail/
 data/discovery/*
 !data/discovery/sniffed_from_jobs.txt
+!data/discovery/zoho_mail_candidates.txt
+
+# Private OAuth/email artefacts
+zoho_oauth_token.json
+zoho_mail_*.json
+zoho_mail_*.jsonl
+mail_exports/
 
 # Logs
 logs/
@@ -32,3 +44,5 @@ Thumbs.db
 
 # pytest
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/

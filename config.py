@@ -99,6 +99,31 @@ MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "3"))
 # workflow to validate/promote later. This performs no extra HTTP requests.
 ENABLE_ATS_SNIFFING: bool = _get("ENABLE_ATS_SNIFFING", "true").lower() in ("true", "1", "yes")
 
+# ── Zoho Mail ingestion ────────────────────────────────────────────────────
+# Optional read-only worker for application/recruiter email history. It is off
+# by default; run ``python main.py --zoho-sync --dry-run`` locally first.
+ZOHO_MAIL_SYNC_ENABLED: bool = _get("ZOHO_MAIL_SYNC_ENABLED", "false").lower() in ("true", "1", "yes")
+ZOHO_MAIL_SYNC_INTERVAL_MINUTES: int = int(_get("ZOHO_MAIL_SYNC_INTERVAL_MINUTES", "180"))
+ZOHO_CLIENT_ID: str = _get("ZOHO_CLIENT_ID")
+ZOHO_CLIENT_SECRET: str = _get("ZOHO_CLIENT_SECRET")
+ZOHO_REFRESH_TOKEN: str = _get("ZOHO_REFRESH_TOKEN")
+ZOHO_ACCOUNT_ID: str = _get("ZOHO_ACCOUNT_ID")
+ZOHO_ACCOUNTS_URL: str = _get("ZOHO_ACCOUNTS_URL", "https://accounts.zoho.com").rstrip("/")
+ZOHO_MAIL_API_BASE: str = _get("ZOHO_MAIL_API_BASE").rstrip("/")
+ZOHO_OAUTH_TOKEN_FILE: str = _get("ZOHO_OAUTH_TOKEN_FILE", "./data/private/zoho_oauth_token.json")
+ZOHO_INITIAL_SYNC_FROM: str = _get("ZOHO_INITIAL_SYNC_FROM")
+ZOHO_SYNC_OVERLAP_HOURS: int = int(_get("ZOHO_SYNC_OVERLAP_HOURS", "48"))
+ZOHO_FOLDER_PAGE_LIMIT: int = int(_get("ZOHO_FOLDER_PAGE_LIMIT", "200"))
+ZOHO_MAIL_SYNC_DRY_RUN: bool = _get("ZOHO_MAIL_SYNC_DRY_RUN", "true").lower() in ("true", "1", "yes")
+ZOHO_COMPANY_DISCOVERY_ENABLED: bool = _get("ZOHO_COMPANY_DISCOVERY_ENABLED", "true").lower() in ("true", "1", "yes")
+ZOHO_DISCOVERY_SEED_FILE: str = _get("ZOHO_DISCOVERY_SEED_FILE", "./data/discovery/zoho_mail_candidates.txt")
+ZOHO_DISCOVERY_MIN_CONFIDENCE: float = float(_get("ZOHO_DISCOVERY_MIN_CONFIDENCE", "0.65"))
+
+ZOHO_SKIP_FOLDERS: list[str] = _get_list(
+    "ZOHO_SKIP_FOLDERS",
+    "drafts,spam,trash,templates,outbox",
+)
+
 # ── Health endpoint ────────────────────────────────────────────────────────
 HEALTH_PORT: int = int(_get("HEALTH_PORT", "8080"))
 

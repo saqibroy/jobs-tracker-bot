@@ -47,6 +47,7 @@ jobs:
           python scripts/discover_companies.py --from-env \
             --seed-file seeds/companies-seed.txt \
             --seed-file data/discovery/sniffed_from_jobs.txt \
+            --seed-file data/discovery/zoho_mail_candidates.txt \
             --detect-domains --new-only \
             --min-jobs 1 --promote $GOOGLE_ARGS
 

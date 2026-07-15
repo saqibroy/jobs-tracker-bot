@@ -128,6 +128,9 @@ python main.py --validate-sources
 
 # Check database stats
 python main.py --stats
+
+# Inspect Zoho Mail application/recruiter emails without writing anything
+python main.py --zoho-sync --dry-run
 ```
 
 ### 4. Discover and promote more employer boards
@@ -209,8 +212,121 @@ This starts the scheduler. The bot will:
 - Scan all sources every 45 minutes
 - Send a digest summary every 6 hours
 - Log a health check every hour
+- Optionally run Zoho Mail ingestion when `ZOHO_MAIL_SYNC_ENABLED=true`
 
 Press `Ctrl+C` to stop gracefully.
+
+## Zoho Mail application ingestion
+
+The optional Zoho worker reads your own mailbox through the official Zoho Mail
+REST API and extracts application/recruiter metadata into separate SQLite
+tables. It does not change the normal job-source filters and does not fetch
+attachments.
+
+Use read-only OAuth scopes only:
+
+```text
+ZohoMail.accounts.READ
+ZohoMail.folders.READ
+ZohoMail.messages.READ
+```
+
+For EU accounts, use the EU accounts host:
+
+```env
+ZOHO_ACCOUNTS_URL=https://accounts.zoho.eu
+```
+
+The worker stores the OAuth `api_domain` returned during token refresh in
+`./data/private/zoho_oauth_token.json` and derives the matching Mail API host
+such as `https://mail.zoho.eu`. You can override it with `ZOHO_MAIL_API_BASE`
+if your Zoho data center requires a different host.
+
+Local dry run, safe for first sync:
+
+```bash
+source venv/bin/activate
+python tools/setup_zoho.py
+python main.py --zoho-sync --dry-run
+```
+
+`tools/setup_zoho.py` walks through the whole OAuth setup: asks for Client ID
+and Client Secret, opens the Zoho authorization URL, asks for the redirected
+authorization code, exchanges it for tokens, saves the refresh token/account ID
+to `.env`, lists folders, and verifies one email can be read without printing
+the email body.
+
+Single-step helpers are also available if you need to debug one part:
+
+```bash
+python tools/zoho_auth_url.py
+python tools/zoho_exchange_code.py --code "PASTE_CODE_HERE"
+python tools/zoho_account_id.py --save-first
+python tools/zoho_list_folders.py
+python tools/zoho_read_one_email.py
+```
+
+Local write run after reviewing dry-run counts:
+
+```bash
+python main.py --zoho-sync --zoho-write
+```
+
+Docker dry run:
+
+```bash
+docker compose run --rm job-bot python main.py --zoho-sync --dry-run
+```
+
+Docker write run:
+
+```bash
+docker compose run --rm job-bot python main.py --zoho-sync --zoho-write
+```
+
+Enable scheduled ingestion only after the manual dry run looks sane:
+
+```env
+ZOHO_MAIL_SYNC_ENABLED=true
+ZOHO_MAIL_SYNC_INTERVAL_MINUTES=180
+ZOHO_MAIL_SYNC_DRY_RUN=false
+ZOHO_INITIAL_SYNC_FROM=2025-01-01T00:00:00+00:00
+ZOHO_SYNC_OVERLAP_HOURS=48
+```
+
+Sync behavior:
+
+- On every run it retrieves all Zoho folders.
+- It processes Inbox, Sent, Archive and custom folders.
+- It skips Drafts, Spam, Trash, Templates and Outbox by default.
+- First run processes full available history unless `ZOHO_INITIAL_SYNC_FROM`
+  is set.
+- Later runs start at `last_successful_sync_at - ZOHO_SYNC_OVERLAP_HOURS`.
+- It paginates folders with `ZOHO_FOLDER_PAGE_LIMIT=200`.
+- Checkpoints advance only after all relevant folders finish successfully.
+- Deduplication uses `account_id + message_id`, so moved messages are safe.
+- Full message content is fetched only for likely job/recruitment emails.
+- Quoted history, tracking pixels and signatures are stripped before
+  extraction.
+- Supported deterministic ATS detection: Personio, Ashby, Greenhouse, Lever,
+  Workable, BambooHR, Teamtailor, SmartRecruiters, Recruitee, JOIN, Onlyfy,
+  Softgarden, Workday and SAP SuccessFactors.
+- Low-confidence or incomplete records go into
+  `email_application_review_queue`.
+- High-confidence company/ATS candidates that are not already in
+  `companies.toml` are appended to
+  `data/discovery/zoho_mail_candidates.txt`. The scheduled discovery workflow
+  reads this file together with the normal seed files, validates reachable
+  boards, and promotes only boards that expose live jobs.
+- Email-discovered Greenhouse, Ashby, Personio, Lever and Workable boards are
+  promoted through their native adapters. Teamtailor, Recruitee, JOIN, Onlyfy
+  and Softgarden candidates are tested through the public JSON-LD career-page
+  adapter. Workday and SAP SuccessFactors records are stored for review until
+  dedicated source adapters exist.
+
+Keep credentials and generated mail artefacts private. `.env`,
+`data/private/`, `data/zoho/`, `data/mail/`, and local Zoho JSON exports are
+ignored by Git.
 
 ## CLI Reference
 
@@ -225,6 +341,8 @@ Options:
   --max-age DAYS     Override MAX_JOB_AGE_DAYS for this run
   --verbose          Show all rejected jobs with reasons (use with --dry-run)
   --stats            Print database statistics and exit
+  --zoho-sync        Run one Zoho Mail ingestion cycle and exit
+  --zoho-write       Allow Zoho ingestion to write records and checkpoint
 ```
 
 ## Setting Up Discord Notifications
