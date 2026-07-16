@@ -312,6 +312,45 @@ def test_metadata_detection_for_application_confirmation_senders():
             "workday",
             "covestro",
         ),
+        (
+            msg(
+                "m6",
+                sender="ng-voice-jobs@m.personio.de",
+                subject="Your application at ng-voice for Software engineer (m/f/d)",
+            ),
+            "personio",
+            "ng-voice",
+        ),
+        (
+            msg(
+                "m7",
+                sender="casavi-jobs@m.personio.de",
+                subject="Deine Bewerbung bei casavi / Your application at casavi",
+            ),
+            "personio",
+            "casavi",
+        ),
+        (
+            msg(
+                "m8",
+                sender="suitepad-jobs@m.personio.de",
+                subject="Your application as Full Stack Engineer (m/f/x)",
+            ),
+            "personio",
+            "suitepad",
+        ),
+        (
+            msg(
+                "m9",
+                sender="Recruiting <jobs@personio.com>",
+                subject=(
+                    "Thank you for your interest in the Senior Frontend Engineer "
+                    "(d/f/m) position at Personio."
+                ),
+            ),
+            "personio",
+            "personio",
+        ),
     ]
     for message, ats, slug in cases:
         detections = detect_ats_from_message_metadata(message)

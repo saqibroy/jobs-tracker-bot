@@ -60,6 +60,7 @@ ATS_HINT_KEYWORDS = {
     "ashbyhq.com",
     "greenhouse.io",
     "personio.",
+    "m.personio.de",
     "lever.co",
     "workable.com",
     "bamboohr.com",
@@ -662,12 +663,16 @@ def _company_from_subject(subject: str) -> str:
     patterns = [
         r"thank you (?:very much )?for applying to\s+(.+?)(?:$|[–—|])",
         r"thanks for applying to(?: join)?\s+(.+?)(?:$|[–—|])",
+        r"your application at\s+(.+?)(?:\s+for\b|$|[–—|/])",
+        r"deine bewerbung bei\s+(.+?)(?:\s*/|$|[–—|])",
+        r"feedback on your application\s*\|\s*.+?\|\s*(.+?)(?:$|[–—|])",
         r"(.+?)\s*\|\s*application received",
         r"(.+?)\s*\|\s*update on your application",
         r"we received your application for a position at\s+(.+?)(?:$|[–—|])",
         r"your application @\s*(.+?)(?:$|[–—|])",
         r"\[(.+?)\]\s*thank",
         r"application received for .+? at\s+(.+?)(?:$|[–—|])",
+        r"\bposition at\s+(.+?)(?:$|[–—|.])",
     ]
     for pattern in patterns:
         match = re.search(pattern, subject, flags=re.I)
@@ -684,10 +689,63 @@ def detect_ats_from_message_metadata(message: ZohoMessageSummary) -> list[Detect
     subject = message.subject
     detections: list[DetectedATS] = []
 
+    sender_email = parseaddr(message.sender)[1].lower()
     email_match = re.search(r"@([^>\s]+)", sender)
-    sender_domain = email_match.group(1) if email_match else sender
+    sender_domain = (
+        sender_email.rsplit("@", 1)[1]
+        if "@" in sender_email
+        else (email_match.group(1) if email_match else sender)
+    )
     sender_domain = sender_domain.strip().strip(">")
+    sender_local = sender_email.split("@", 1)[0] if "@" in sender_email else ""
     company_from_subject = _company_from_subject(subject)
+
+    if sender_domain == "m.personio.de":
+        slug = ""
+        local = re.sub(r"\+.*$", "", sender_local)
+        match = re.match(r"(?P<slug>.+?)-jobs(?:[._-].*)?$", local)
+        if match:
+            slug = match.group("slug").lower()
+        elif company_from_subject:
+            slug = _slugify_company(company_from_subject)
+        if slug:
+            detections.append(
+                DetectedATS(
+                    ats="personio",
+                    slug=slug,
+                    board_url=f"https://{slug}.jobs.personio.de",
+                    original_job_url="",
+                    company_name=company_from_subject or _display_name(slug),
+                    company_domain=sender_domain,
+                    confidence=0.86,
+                    evidence={
+                        "detected_from_sender": sender_domain,
+                        "sender_local": sender_local,
+                        "subject": subject,
+                        "source": "personio_sender_alias",
+                    },
+                )
+            )
+
+    if sender_domain in {"personio.com", "personio.de"} and company_from_subject:
+        slug = _slugify_company(company_from_subject)
+        if slug:
+            detections.append(
+                DetectedATS(
+                    ats="personio",
+                    slug=slug,
+                    board_url=f"https://{slug}.jobs.personio.de",
+                    original_job_url="",
+                    company_name=company_from_subject,
+                    company_domain=sender_domain,
+                    confidence=0.68,
+                    evidence={
+                        "detected_from_sender": sender_domain,
+                        "subject": subject,
+                        "source": "personio_company_subject",
+                    },
+                )
+            )
 
     if sender_domain.endswith(".teamtailor-mail.com"):
         slug = sender_domain.removesuffix(".teamtailor-mail.com").lower()
