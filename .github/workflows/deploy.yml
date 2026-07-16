@@ -45,8 +45,11 @@ jobs:
             # Backup DB before deploy
             bash scripts/backup.sh 2>/dev/null || true
 
-            # Pull and build without replacing the healthy container
-            git pull origin main
+            # Pull and build without replacing the healthy container. Runtime
+            # discovery can append to tracked seed files on the server between
+            # workflow runs, so autostash keeps those local discoveries from
+            # blocking deploys.
+            git pull --rebase --autostash origin main
             sudo docker compose build
 
             # Validate public employer feeds before replacing the container.
