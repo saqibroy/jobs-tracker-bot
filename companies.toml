@@ -1329,3 +1329,83 @@ provider = "greenhouse"
 slug = "numa"
 url = "https://boards.greenhouse.io/numa"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-16 10:37:34 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Acture Germany"
+provider = "personio"
+slug = "acture-germany"
+url = "https://acture-germany.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Casavi"
+provider = "personio"
+slug = "casavi"
+url = "https://casavi.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Cito Transport Technologies"
+provider = "personio"
+slug = "cito-transport-technologies"
+url = "https://cito-transport-technologies.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Indra Avitech"
+provider = "personio"
+slug = "indra-avitech"
+url = "https://indra-avitech.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Koro Handels Gmbh"
+provider = "personio"
+slug = "koro-handels-gmbh"
+url = "https://koro-handels-gmbh.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Mediaire"
+provider = "personio"
+slug = "mediaire"
+url = "https://mediaire.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Merantix"
+provider = "personio"
+slug = "merantix"
+url = "https://merantix.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Ng Voice"
+provider = "personio"
+slug = "ng-voice"
+url = "https://ng-voice.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Personio"
+provider = "personio"
+slug = "personio"
+url = "https://personio.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Suitepad"
+provider = "personio"
+slug = "suitepad"
+url = "https://suitepad.jobs.personio.de"
+enabled = true
+
+[[companies]]
+company = "Xolife"
+provider = "personio"
+slug = "xolife"
+url = "https://xolife.jobs.personio.de"
+enabled = true

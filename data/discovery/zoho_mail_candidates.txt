@@ -47,3 +47,28 @@ greenhouse:beatstars-inc https://boards.greenhouse.io/beatstars-inc
 greenhouse:preply https://boards.greenhouse.io/preply
 # first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=recruitee company='Entyre' confidence=0.93
 jsonld:entyre https://entyre.recruitee.com
+
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Personio' confidence=0.71
+personio:personio https://personio.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='ng-voice' confidence=0.89
+personio:ng-voice https://ng-voice.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='casavi' confidence=0.86
+personio:casavi https://casavi.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Suitepad' confidence=0.90
+personio:suitepad https://suitepad.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='mediaire - Challenge Interview' confidence=0.89
+personio:mediaire https://mediaire.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Koro Handels Gmbh' confidence=0.90
+personio:koro-handels-gmbh https://koro-handels-gmbh.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Acture' confidence=0.93
+personio:acture-germany https://acture-germany.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Cito Transport Technologies' confidence=0.86
+personio:cito-transport-technologies https://cito-transport-technologies.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Indra Avitech' confidence=0.86
+personio:indra-avitech https://indra-avitech.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Supertab' confidence=0.89
+personio:laterpay https://laterpay.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Xolife' confidence=0.93
+personio:xolife https://xolife.jobs.personio.de
+# first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Merantix' confidence=0.89
+personio:merantix https://merantix.jobs.personio.de
