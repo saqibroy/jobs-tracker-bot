@@ -2,3 +2,48 @@
 # Compatible with scripts/discover_companies.py --seed-file.
 # Example:
 #   greenhouse:example https://boards.greenhouse.io/example
+
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Eternohealthgmbh' confidence=0.79
+jsonld:eternohealthgmbh https://eternohealthgmbh.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='smartclip' confidence=0.79
+jsonld:smartclipeuropegmbh https://smartclipeuropegmbh.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=recruitee company='Amperecloud' confidence=0.81
+jsonld:amperecloud https://amperecloud.recruitee.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Teamviewer' confidence=0.80
+jsonld:teamviewer https://teamviewer.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Candisgmbh' confidence=0.79
+jsonld:candisgmbh https://candisgmbh.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Spyrosoft' confidence=0.79
+jsonld:spyrosoftsa https://spyrosoftsa.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Salveinnoconsultingpaulinabochentyn' confidence=0.79
+jsonld:salveinnoconsultingpaulinabochentyn https://salveinnoconsultingpaulinabochentyn.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Nearform' confidence=0.93
+greenhouse:nearform https://boards.greenhouse.io/nearform
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=ashby company='Mux' confidence=0.93
+ashby:mux https://jobs.ashbyhq.com/mux
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=ashby company='Ramp' confidence=0.93
+ashby:ramp https://jobs.ashbyhq.com/ramp
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Testgorilla 1680540968' confidence=0.93
+jsonld:testgorilla-1680540968 https://testgorilla-1680540968.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Bryter' confidence=0.76
+jsonld:bryter https://bryter.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=teamtailor company='Sumsub' confidence=0.79
+jsonld:sumsub https://sumsub.teamtailor.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=join company='Candidates' confidence=0.93
+jsonld:candidates https://candidates.join.com
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Builder.io' confidence=0.71
+greenhouse:builder-io https://boards.greenhouse.io/builder-io
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=softgarden company='Holtzbrinck Careers' confidence=0.82
+jsonld:holtzbrinck-careers https://holtzbrinck-careers.softgarden.io
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Numa' confidence=0.71
+greenhouse:numa https://boards.greenhouse.io/numa
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Awin' confidence=0.71
+greenhouse:awin https://boards.greenhouse.io/awin
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Cresta' confidence=0.71
+greenhouse:cresta https://boards.greenhouse.io/cresta
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='BeatStars Inc' confidence=0.71
+greenhouse:beatstars-inc https://boards.greenhouse.io/beatstars-inc
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=greenhouse company='Preply' confidence=0.75
+greenhouse:preply https://boards.greenhouse.io/preply
+# first_seen=2026-07-15T17:04:56+00:00 source=zoho_mail ats=recruitee company='Entyre' confidence=0.93
+jsonld:entyre https://entyre.recruitee.com

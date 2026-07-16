@@ -1284,3 +1284,48 @@ provider = "greenhouse"
 slug = "think-cell"
 url = "https://boards.greenhouse.io/think-cell"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-16 08:23:19 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Mux"
+provider = "ashby"
+slug = "mux"
+url = "https://jobs.ashbyhq.com/mux"
+enabled = true
+
+[[companies]]
+company = "Ramp"
+provider = "ashby"
+slug = "ramp"
+url = "https://jobs.ashbyhq.com/ramp"
+enabled = true
+
+[[companies]]
+company = "Awin"
+provider = "greenhouse"
+slug = "awin"
+url = "https://boards.greenhouse.io/awin"
+enabled = true
+
+[[companies]]
+company = "Cresta"
+provider = "greenhouse"
+slug = "cresta"
+url = "https://boards.greenhouse.io/cresta"
+enabled = true
+
+[[companies]]
+company = "Nearform"
+provider = "greenhouse"
+slug = "nearform"
+url = "https://boards.greenhouse.io/nearform"
+enabled = true
+
+[[companies]]
+company = "Numa"
+provider = "greenhouse"
+slug = "numa"
+url = "https://boards.greenhouse.io/numa"
+enabled = true

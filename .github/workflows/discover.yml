@@ -31,6 +31,31 @@ jobs:
       - name: Install dependencies
         run: pip install --no-cache-dir -r requirements.txt
 
+      - name: Import Zoho candidates from production
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          if [ -z "$ORACLE_HOST" ] || [ -z "$ORACLE_SSH_KEY" ]; then
+            echo "Oracle SSH secrets unavailable; skipping Zoho candidate import."
+            exit 0
+          fi
+
+          mkdir -p ~/.ssh data/discovery
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          ssh-keyscan -H "$ORACLE_HOST" >> ~/.ssh/known_hosts
+
+          if scp -i ~/.ssh/oracle_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "opc@$ORACLE_HOST:~/jobs-tracker-bot/data/discovery/zoho_mail_candidates.txt" \
+            /tmp/zoho_mail_candidates.remote.txt; then
+            if [ -s /tmp/zoho_mail_candidates.remote.txt ]; then
+              cp /tmp/zoho_mail_candidates.remote.txt data/discovery/zoho_mail_candidates.txt
+            fi
+          else
+            echo "No production Zoho candidate file available yet; continuing."
+          fi
+
       - name: Discover and promote employer boards
         env:
           DISCORD_WEBHOOK_URL: ""
@@ -72,7 +97,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add companies.toml data/discovery/sniffed_from_jobs.txt
+          git add companies.toml data/discovery/sniffed_from_jobs.txt data/discovery/zoho_mail_candidates.txt
 
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
