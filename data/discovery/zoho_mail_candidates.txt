@@ -72,3 +72,16 @@ personio:laterpay https://laterpay.jobs.personio.de
 personio:xolife https://xolife.jobs.personio.de
 # first_seen=2026-07-16T10:36:55+00:00 source=zoho_mail ats=personio company='Merantix' confidence=0.89
 personio:merantix https://merantix.jobs.personio.de
+
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=teamtailor company='Doodle' confidence=0.79
+jsonld:doodle https://doodle.teamtailor.com
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=greenhouse company='SoundCloud' confidence=0.71
+greenhouse:soundcloud https://boards.greenhouse.io/soundcloud
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=greenhouse company='Orcrist Technologies' confidence=0.71
+greenhouse:orcrist-technologies https://boards.greenhouse.io/orcrist-technologies
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=greenhouse company='Sporty Group' confidence=0.71
+greenhouse:sporty-group https://boards.greenhouse.io/sporty-group
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=softgarden company='Hits Jobs' confidence=0.82
+jsonld:hits-jobs https://hits-jobs.softgarden.io
+# first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=personio company='XU (english below)' confidence=0.89
+personio:xu-de https://xu-de.jobs.personio.de

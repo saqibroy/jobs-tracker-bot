@@ -1409,3 +1409,13 @@ provider = "personio"
 slug = "xolife"
 url = "https://xolife.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-07-30 08:22:27 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Xu De"
+provider = "personio"
+slug = "xu-de"
+url = "https://xu-de.jobs.personio.de"
+enabled = true
