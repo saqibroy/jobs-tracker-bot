@@ -85,3 +85,6 @@ greenhouse:sporty-group https://boards.greenhouse.io/sporty-group
 jsonld:hits-jobs https://hits-jobs.softgarden.io
 # first_seen=2026-07-29T11:13:54+00:00 source=zoho_mail ats=personio company='XU (english below)' confidence=0.89
 personio:xu-de https://xu-de.jobs.personio.de
+
+# first_seen=2026-07-30T08:32:02+00:00 source=zoho_mail ats=teamtailor company='Searchatlas Na' confidence=0.83
+jsonld:searchatlas.na https://searchatlas.na.teamtailor.com
