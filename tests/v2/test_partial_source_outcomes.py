@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -43,6 +44,12 @@ from storage.database import (
     init_db,
     persist_scan_metrics,
 )
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str) -> object:
+    return json.loads((_FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
 def make_job(*, source: str = "components", suffix: str = "1") -> Job:
@@ -286,19 +293,7 @@ async def test_malformed_greenhouse_listing_does_not_make_source_partial(
     board = CompanyBoard(company="Good", provider="greenhouse", slug="good")
     monkeypatch.setattr(greenhouse_module, "boards_for", lambda _provider: [board])
     source = GreenhouseSource()
-    response = json_response(
-        {
-            "jobs": [
-                {"location": "malformed location"},
-                {
-                    "title": "Software Engineer",
-                    "location": {"name": "Remote worldwide"},
-                    "absolute_url": "https://example.com/jobs/valid",
-                    "content": "Build software",
-                },
-            ]
-        }
-    )
+    response = json_response(load_fixture("greenhouse_mixed_listings.json"))
     monkeypatch.setattr(source, "_get", AsyncMock(return_value=response))
 
     outcome = await source.fetch_outcome()
@@ -402,13 +397,9 @@ async def test_failed_later_himalayas_page_preserves_earlier_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(himalayas_module, "_MAX_PAGES", 2)
-    item = {
-        "title": "Software Engineer",
-        "companyName": "Acme",
-        "applicationLink": "https://example.com/himalayas/1",
-        "categories": ["software"],
-        "locationRestrictions": ["Germany"],
-    }
+    fixture = load_fixture("himalayas_page.json")
+    assert isinstance(fixture, dict)
+    item = fixture["jobs"][0]
     source = HimalayasSource()
     monkeypatch.setattr(
         source,
@@ -454,17 +445,9 @@ async def test_failed_later_stepstone_page_preserves_earlier_jobs(
 ) -> None:
     monkeypatch.setattr(stepstone_module, "_SEARCH_QUERIES", [{"was": "Developer", "wo": "Deutschland"}])
     monkeypatch.setattr(stepstone_module, "_MAX_PAGES", 2)
-    first_page = {
-        "stellenangebote": [
-            {
-                "refnr": "first",
-                "titel": "Software Engineer",
-                "arbeitgeber": "Acme",
-                "arbeitsort": {"ort": "Berlin"},
-            }
-        ]
-        * stepstone_module._PAGE_SIZE
-    }
+    first_page = load_fixture("stepstone_page.json")
+    assert isinstance(first_page, dict)
+    first_page["stellenangebote"] *= stepstone_module._PAGE_SIZE
     source = StepstoneSource()
     monkeypatch.setattr(
         source,

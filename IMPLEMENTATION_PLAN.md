@@ -1034,17 +1034,18 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 - Tests:
   - Phase 1A regression: `python -m pytest tests/v2/test_observability.py -q` — 40 passed in 0.73s.
   - Phase 1B focused: `python -m pytest tests/v2/test_partial_source_outcomes.py -q` — 30 passed in 0.63s.
-  - Blocking v2: `python -m pytest tests/v2 -q` — 104 passed in 1.12s.
-  - CI-equivalent: `python -m pytest -q --timeout=30` — 104 passed in 1.20s.
-  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 981 passed, 104 failed, 10 warnings in 7.97s. A JUnit node-ID comparison confirmed the 104 failures exactly match the Phase 0 baseline, with no new or missing failing node IDs.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 104 passed in 1.21s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 104 passed in 1.15s.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 981 passed, 104 failed, 10 warnings in 8.01s. A JUnit node-ID comparison confirmed the 104 failures exactly match the Phase 0 baseline, with no new or missing failing node IDs.
 - Peak memory: 325.2 MiB / 512 MiB (63.51%), 5.5 MiB above Phase 0, 2.7 MiB above Phase 1A, 104.8 MiB below the 430 MiB target.
 - Notes:
   - Added one shared per-attempt collector that counts every failed component, retains at most five sanitized issue details, strips URL queries/fragments and secrets, and applies deterministic complete-failure precedence: rate limited, blocked, network, parse, unknown.
   - Instrumented all scoped/default multi-unit adapters: Greenhouse, Ashby, Personio, Lever, Workable, JSON-LD, StepStone, Remotive, Himalayas, Idealist, and LinkedIn. Existing request/page concurrency, normalization, deduplication, filters, queries, retries, and endpoint behavior were preserved.
+  - Automated adapter coverage uses mocked HTTP/component calls and saved JSON response fixtures; no test depends on a live platform.
   - Requested live dry scans: Greenhouse `healthy` / 6,190 jobs / 0 issues; Ashby `healthy` / 3,114 / 0; Personio `partial_success` / 1,399 / 1; Lever `healthy` / 475 / 0; Workable `healthy` / 9 / 0; JSON-LD `zero_results` / 0 / 0; StepStone `unknown_error` / 0 / 5.
   - The Personio `pitch` board redirects to `https://personio.com` and is the live partial failure. The configured ResearchGate, Beroe, Sunhat, Velio, Getsafe, and Xayn XML URLs return 404 but their HTML fallbacks currently succeed, so those boards remain successful components. StepStone's five unchanged query requests all return HTTP 404 and correctly aggregate to complete failure rather than partial success.
   - The all-default `--explain` dry scan completed with 11,595 raw jobs and 39 accepted. Other multi-unit default outcomes were Remotive `healthy` / 34 / 0, Himalayas `healthy` / 21 / 0, Idealist `healthy` / 36 / 0, and LinkedIn `healthy` / 42 / 0.
-  - Final image: `job-bot:phase1b`, `sha256:73c9966987ac88a4a8f381003e8ad89ebeb2df1099a092635235af2a766f4ddc`, 373,713,042 bytes.
+  - Final image: `job-bot:phase1b`, `sha256:36951a523690c14e12dd24baf33ea11433561777383b515a910bba128df7e5eb`, 373,715,457 bytes.
   - The isolated 512 MiB service used a temporary database/log tree, no `.env`, disabled notifications/Zoho, and loopback-only `127.0.0.1:18081`. Its startup scan completed in 53.9 seconds with 11,595 raw, 40 accepted/unseen/saved, 8 immediate, 32 digest, and 0 diagnostic jobs.
   - `/health`, `--stats`, and daily status expose compact source status, total issue count, bounded sanitized summary, `last_usable_at`, and diagnostic `last_fully_successful_at`; no per-board detail list is exposed. Live Personio advanced `last_usable_at` but had no fully-successful timestamp, while complete-failure StepStone advanced neither usable timestamp.
   - No database migration or dependency was needed. External board/query repair and non-default optional multi-unit adapters remain deferred; Phase 2 was not started.

@@ -1,0 +1,15 @@
+{
+  "jobs": [
+    {
+      "title": "Software Engineer",
+      "companyName": "Acme",
+      "applicationLink": "https://example.com/himalayas/1",
+      "categories": [
+        "software"
+      ],
+      "locationRestrictions": [
+        "Germany"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "jobs": [
+    {
+      "location": "malformed location"
+    },
+    {
+      "title": "Software Engineer",
+      "location": {
+        "name": "Remote worldwide"
+      },
+      "absolute_url": "https://example.com/jobs/valid",
+      "content": "Build software"
+    }
+  ]
+}

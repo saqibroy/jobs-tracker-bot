@@ -1,0 +1,12 @@
+{
+  "stellenangebote": [
+    {
+      "refnr": "first",
+      "titel": "Software Engineer",
+      "arbeitgeber": "Acme",
+      "arbeitsort": {
+        "ort": "Berlin"
+      }
+    }
+  ]
+}
