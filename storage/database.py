@@ -424,6 +424,8 @@ async def get_latest_scan_summary() -> dict | None:
                     "raw",
                     "accepted",
                     "saved",
+                    "issue_count",
+                    "sanitized_error",
                     "last_completed_at",
                     "last_usable_at",
                     "last_fully_successful_at",

@@ -39,6 +39,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from models.job import Job
+from models.scan import sanitize_source_error
 from sources.base import BaseSource
 
 _ALGOLIA_APP_ID = "NSV3AUESS7"
@@ -80,16 +81,33 @@ class IdealistSource(BaseSource):
         tasks = [
             self._post_algolia(query=q, filters=f) for q, f in _QUERIES
         ]
-        responses = await asyncio.gather(*tasks)
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         seen_ids: set[str] = set()
         jobs: list[Job] = []
 
-        for resp in responses:
-            if resp is None:
+        for (query, _filters), resp in zip(_QUERIES, responses):
+            component = f"query:{query or 'technology_it'}"
+            if isinstance(resp, Exception):
+                self._record_component_issue(component, resp)
+                logger.error(
+                    "[{}] Algolia query failed: {}",
+                    self.name, sanitize_source_error(resp),
+                )
                 continue
-            data = resp.json()
-            for hit in data.get("hits", []):
+            try:
+                data = resp.json()
+                hits = data.get("hits", [])
+            except Exception as exc:
+                self._record_component_issue(component, exc)
+                logger.error(
+                    "[{}] Algolia query parse failed: {}",
+                    self.name, sanitize_source_error(exc),
+                )
+                continue
+
+            self._record_component_success()
+            for hit in hits:
                 oid = hit.get("objectID", "")
                 if oid in seen_ids:
                     continue  # dedup across queries
@@ -152,21 +170,12 @@ class IdealistSource(BaseSource):
             "Content-Type": "application/json",
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    _ALGOLIA_URL, json=payload, headers=headers
-                )
-                if resp.status_code == 429:
-                    logger.warning(
-                        "[{}] Algolia rate limited (429) — skipping", self.name
-                    )
-                    return None
-                resp.raise_for_status()
-                return resp
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            logger.error("[{}] Algolia request failed: {}", self.name, exc)
-            return None
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.post(
+                _ALGOLIA_URL, json=payload, headers=headers
+            )
+            resp.raise_for_status()
+            return resp
 
     # ── Parse a single Algolia hit → Job ────────────────────────────────
     def _parse_hit(self, hit: dict) -> Job | None:

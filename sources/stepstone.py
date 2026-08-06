@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from models.job import Job
+from models.scan import sanitize_source_error
 from sources.base import BaseSource
 
 _API_URL = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs"
@@ -56,6 +57,7 @@ class StepstoneSource(BaseSource):
 
         for query in _SEARCH_QUERIES:
             for page in range(1, _MAX_PAGES + 1):
+                component = f"query:{query['was']}/page:{page}"
                 params = {
                     "was": query["was"],
                     "wo": query["wo"],
@@ -71,22 +73,18 @@ class StepstoneSource(BaseSource):
                         headers=headers,
                         params=params,
                     )
+                    self._require_component_response(resp)
+                    data = resp.json()
+                    postings = data.get("stellenangebote") or []
                 except Exception as exc:
+                    self._record_component_issue(component, exc)
                     logger.error(
                         "[{}] API request failed (query='{}', page={}): {}",
-                        self.name, query["was"], page, exc,
+                        self.name, query["was"], page, sanitize_source_error(exc),
                     )
                     break
 
-                if resp.status_code != 200:
-                    logger.warning(
-                        "[{}] API returned {} for query='{}'",
-                        self.name, resp.status_code, query["was"],
-                    )
-                    break
-
-                data = resp.json()
-                postings = data.get("stellenangebote") or []
+                self._record_component_success()
                 if not postings:
                     break
 

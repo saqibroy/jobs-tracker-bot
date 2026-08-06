@@ -28,6 +28,7 @@ from urllib.parse import urljoin
 import httpx
 from loguru import logger
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
 
 from models.job import Job
 from sources.base import BaseSource
@@ -70,13 +71,13 @@ class PersonioSource(BaseSource):
                 )
                 return None
             logger.warning("[{}] Failed to fetch feed '{}': {}", self.name, slug, exc)
-            return []
+            raise
         except Exception as exc:
             logger.warning("[{}] Failed to fetch feed '{}': {}", self.name, slug, exc)
-            return []
+            raise
 
         if resp.status_code == 429:
-            return []
+            self._require_component_response(resp)
         if resp.status_code == 404:
             logger.info("[{}] XML feed missing for '{}' — trying HTML fallback", self.name, slug)
             return None
@@ -139,7 +140,7 @@ class PersonioSource(BaseSource):
                     posted_at=posted_at,
                 )
                 jobs.append(job)
-            except (AttributeError, TypeError) as exc:
+            except (ValidationError, AttributeError, TypeError) as exc:
                 logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
                 continue
 
@@ -148,11 +149,8 @@ class PersonioSource(BaseSource):
     async def _fetch_html_company(self, board: CompanyBoard) -> list[Job]:
         slug = board.slug
         base_url = _HTML_URL.format(slug=slug)
-        try:
-            resp = await self._get(base_url)
-        except Exception as exc:
-            logger.warning("[{}] HTML fallback failed for '{}': {}", self.name, slug, exc)
-            return []
+        resp = await self._get(base_url)
+        self._require_component_response(resp)
 
         links = self._extract_html_job_links(resp.text, base_url)
         if not links:
@@ -302,12 +300,9 @@ class PersonioSource(BaseSource):
 
         results = await self._map_bounded(boards, self._fetch_company)
 
-        all_jobs: list[Job] = []
-        for board, result in zip(boards, results):
-            if isinstance(result, Exception):
-                logger.warning("[{}] Feed '{}' failed: {}", self.name, board.slug, result)
-                continue
-            all_jobs.extend(result)
+        all_jobs = self._consume_component_results(
+            boards, results, lambda board: f"board:{board.slug}"
+        )
 
         logger.info(
             "[{}] Fetched {} jobs from {} companies",

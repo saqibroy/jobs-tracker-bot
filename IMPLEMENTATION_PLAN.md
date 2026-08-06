@@ -249,20 +249,20 @@ Before editing, audit all source adapters for `_map_bounded`, `asyncio.gather(..
 
 ## Tasks
 
-- [ ] Add a bounded per-attempt component-issue collector to `BaseSource` using the Phase 1A status/error contracts.
-- [ ] Record the total component-failure count while retaining no more than five sanitized issue summaries in memory and persisting only bounded diagnostic text.
-- [ ] Instrument each relevant multi-board, multi-page, and multi-query adapter so board/page/query exceptions are recorded without discarding successful jobs from other components.
-- [ ] Classify outcomes consistently:
+- [x] Add a bounded per-attempt component-issue collector to `BaseSource` using the Phase 1A status/error contracts.
+- [x] Record the total component-failure count while retaining no more than five sanitized issue summaries in memory and persisting only bounded diagnostic text.
+- [x] Instrument each relevant multi-board, multi-page, and multi-query adapter so board/page/query exceptions are recorded without discarding successful jobs from other components.
+- [x] Classify outcomes consistently:
   - jobs and no component failures → `healthy`
   - no jobs and no component failures → `zero_results`
-  - jobs and one or more component failures → `partial_success`
-  - no jobs and component failures → the dominant concrete failure status (`rate_limited`, `blocked`, `parse_error`, `network_error`, or `unknown_error`)
-- [ ] Keep `last_usable_at` advancing for `partial_success`; do not advance `last_fully_successful_at` for partial runs.
-- [ ] Treat a component as a complete board, page, or query fetch/parse unit. Continue logging/skipping an isolated malformed listing without marking the entire source partial.
-- [ ] Preserve source failure isolation and all usable jobs when sibling components fail.
-- [ ] Do not add requests, retries, concurrency, retained response bodies, dependencies, or production browser support.
-- [ ] Add adapter-specific mocked tests for all-success, mixed success/failure, all-failed, rate-limited/blocked, and routine malformed-listing cases.
-- [ ] Add integration tests proving a partial source persists/displayed status and timestamp semantics correctly alongside healthy and failed sources.
+  - one or more successful components plus one or more component failures → `partial_success`, even when the successful components returned no jobs
+  - no successfully completed component → the dominant concrete failure status (`rate_limited`, `blocked`, `parse_error`, `network_error`, or `unknown_error`)
+- [x] Keep `last_usable_at` advancing for `partial_success`; do not advance `last_fully_successful_at` for partial runs.
+- [x] Treat a component as a complete board, page, or query fetch/parse unit. Continue logging/skipping an isolated malformed listing without marking the entire source partial.
+- [x] Preserve source failure isolation and all usable jobs when sibling components fail.
+- [x] Do not add requests, retries, concurrency, retained response bodies, dependencies, or production browser support.
+- [x] Add adapter-specific mocked tests for all-success, mixed success/failure, all-failed, rate-limited/blocked, and routine malformed-listing cases.
+- [x] Add integration tests proving a partial source persists/displayed status and timestamp semantics correctly alongside healthy and failed sources.
 
 ## Acceptance criteria
 
@@ -1029,11 +1029,25 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 1B — Multi-board and multi-request partial-success reporting
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-06
+- Commit: `feat: report partial success from multi-board sources` (this Phase 1B commit)
 - Tests:
-- Peak memory:
+  - Phase 1A regression: `python -m pytest tests/v2/test_observability.py -q` — 40 passed in 0.73s.
+  - Phase 1B focused: `python -m pytest tests/v2/test_partial_source_outcomes.py -q` — 30 passed in 0.63s.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 104 passed in 1.12s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 104 passed in 1.20s.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 981 passed, 104 failed, 10 warnings in 7.97s. A JUnit node-ID comparison confirmed the 104 failures exactly match the Phase 0 baseline, with no new or missing failing node IDs.
+- Peak memory: 325.2 MiB / 512 MiB (63.51%), 5.5 MiB above Phase 0, 2.7 MiB above Phase 1A, 104.8 MiB below the 430 MiB target.
 - Notes:
+  - Added one shared per-attempt collector that counts every failed component, retains at most five sanitized issue details, strips URL queries/fragments and secrets, and applies deterministic complete-failure precedence: rate limited, blocked, network, parse, unknown.
+  - Instrumented all scoped/default multi-unit adapters: Greenhouse, Ashby, Personio, Lever, Workable, JSON-LD, StepStone, Remotive, Himalayas, Idealist, and LinkedIn. Existing request/page concurrency, normalization, deduplication, filters, queries, retries, and endpoint behavior were preserved.
+  - Requested live dry scans: Greenhouse `healthy` / 6,190 jobs / 0 issues; Ashby `healthy` / 3,114 / 0; Personio `partial_success` / 1,399 / 1; Lever `healthy` / 475 / 0; Workable `healthy` / 9 / 0; JSON-LD `zero_results` / 0 / 0; StepStone `unknown_error` / 0 / 5.
+  - The Personio `pitch` board redirects to `https://personio.com` and is the live partial failure. The configured ResearchGate, Beroe, Sunhat, Velio, Getsafe, and Xayn XML URLs return 404 but their HTML fallbacks currently succeed, so those boards remain successful components. StepStone's five unchanged query requests all return HTTP 404 and correctly aggregate to complete failure rather than partial success.
+  - The all-default `--explain` dry scan completed with 11,595 raw jobs and 39 accepted. Other multi-unit default outcomes were Remotive `healthy` / 34 / 0, Himalayas `healthy` / 21 / 0, Idealist `healthy` / 36 / 0, and LinkedIn `healthy` / 42 / 0.
+  - Final image: `job-bot:phase1b`, `sha256:73c9966987ac88a4a8f381003e8ad89ebeb2df1099a092635235af2a766f4ddc`, 373,713,042 bytes.
+  - The isolated 512 MiB service used a temporary database/log tree, no `.env`, disabled notifications/Zoho, and loopback-only `127.0.0.1:18081`. Its startup scan completed in 53.9 seconds with 11,595 raw, 40 accepted/unseen/saved, 8 immediate, 32 digest, and 0 diagnostic jobs.
+  - `/health`, `--stats`, and daily status expose compact source status, total issue count, bounded sanitized summary, `last_usable_at`, and diagnostic `last_fully_successful_at`; no per-board detail list is exposed. Live Personio advanced `last_usable_at` but had no fully-successful timestamp, while complete-failure StepStone advanced neither usable timestamp.
+  - No database migration or dependency was needed. External board/query repair and non-default optional multi-unit adapters remain deferred; Phase 2 was not started.
 
 ## Phase 2
 

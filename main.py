@@ -584,18 +584,28 @@ async def _show_stats() -> None:
     if source_health:
         print(f"\n  {'─'*50}")
         print("  🩺  Latest source health:")
-        print("      source             status           raw  accepted  saved  last usable")
+        print(
+            "      source             status          issues   raw  accepted  saved  "
+            "last usable      last full"
+        )
         for item in source_health[:20]:
             source = str(item.get("source", "unknown"))[:18]
             status = str(item.get("status", "unknown_error"))[:15]
             last_usable = item.get("last_usable_at") or "never"
             if last_usable != "never":
                 last_usable = str(last_usable).replace("+00:00", "Z")[:16]
+            last_full = item.get("last_fully_successful_at") or "never"
+            if last_full != "never":
+                last_full = str(last_full).replace("+00:00", "Z")[:16]
             print(
                 f"      {source:<18s} {status:<15s} "
+                f"{int(item.get('issue_count', 0)):>6d} "
                 f"{int(item.get('raw', 0)):>5d} {int(item.get('accepted', 0)):>9d} "
-                f"{int(item.get('saved', 0)):>6d}  {last_usable}"
+                f"{int(item.get('saved', 0)):>6d}  {last_usable:<16s} {last_full}"
             )
+            issue_summary = sanitize_source_error(item.get("sanitized_error"))
+            if issue_summary:
+                print(f"          issue: {issue_summary[:160]}")
 
     if top_companies:
         print(f"\n  {'─'*50}")
@@ -1192,13 +1202,22 @@ def _daily_status_details(summary: dict) -> tuple[str, str]:
 
     source_health = summary.get("source_health", {}) or {}
     degraded = sorted(
-        str(name)
+        (str(name), item)
         for name, item in source_health.items()
         if isinstance(item, dict)
         and item.get("status") not in {"healthy", "zero_results"}
     )
     displayed = degraded[:5]
-    degraded_text = " · ".join(f"`{name[:50]}`" for name in displayed)
+    degraded_lines = []
+    for name, item in displayed:
+        status = str(item.get("status") or "unknown_error")[:30]
+        issue_count = max(0, int(item.get("issue_count", 0) or 0))
+        line = f"`{name[:50]}` {status} · {issue_count} issue(s)"
+        issue_summary = sanitize_source_error(item.get("sanitized_error"))
+        if issue_summary:
+            line += f" · {issue_summary[:100]}"
+        degraded_lines.append(line)
+    degraded_text = "\n".join(degraded_lines)
     if len(degraded) > 5:
         degraded_text += f" · +{len(degraded) - 5} more"
     return rejection_text[:1000], (degraded_text or "None")[:1000]

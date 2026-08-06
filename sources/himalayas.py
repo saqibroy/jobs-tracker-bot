@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from models.job import Job
+from models.scan import sanitize_source_error
 from sources.base import BaseSource
 
 _API_URL = "https://himalayas.app/jobs/api"
@@ -68,21 +69,24 @@ class HimalayasSource(BaseSource):
 
         for page in range(_MAX_PAGES):
             offset = page * _PAGE_SIZE
+            component = f"page:offset={offset}"
             try:
                 resp = await self._get(
                     _API_URL,
                     params={"limit": _PAGE_SIZE, "offset": offset},
                 )
+                self._require_component_response(resp)
+                data = resp.json()
+                jobs_data = data.get("jobs") or []
             except Exception as exc:
-                logger.error("[{}] API request failed (offset={}): {}", self.name, offset, exc)
+                self._record_component_issue(component, exc)
+                logger.error(
+                    "[{}] API request failed (offset={}): {}",
+                    self.name, offset, sanitize_source_error(exc),
+                )
                 break
 
-            if resp.status_code != 200:
-                logger.warning("[{}] API returned {} at offset {}", self.name, resp.status_code, offset)
-                break
-
-            data = resp.json()
-            jobs_data = data.get("jobs") or []
+            self._record_component_success()
             if not jobs_data:
                 break
 

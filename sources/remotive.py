@@ -36,16 +36,10 @@ class RemotiveSource(BaseSource):
 
     async def _fetch_category(self, category: str) -> list[Job]:
         """Fetch and parse jobs from a single Remotive category."""
-        try:
-            resp = await self._get(
-                _API_URL, params={"category": category, "limit": 100}
-            )
-        except Exception as exc:
-            logger.warning("[{}] Failed to fetch category {}: {}", self.name, category, exc)
-            return []
-
-        if resp.status_code == 429:
-            return []
+        resp = await self._get(
+            _API_URL, params={"category": category, "limit": 100}
+        )
+        self._require_component_response(resp)
 
         data = resp.json()
         raw_jobs = data.get("jobs", [])
@@ -96,18 +90,17 @@ class RemotiveSource(BaseSource):
         """Fetch all categories in parallel and deduplicate by URL."""
         tasks = [self._fetch_category(cat) for cat in _CATEGORIES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        category_jobs = self._consume_component_results(
+            _CATEGORIES, results, lambda category: f"category:{category}"
+        )
 
         all_jobs: list[Job] = []
         seen_urls: set[str] = set()
 
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning("[{}] Category fetch failed: {}", self.name, result)
-                continue
-            for job in result:
-                if job.url not in seen_urls:
-                    seen_urls.add(job.url)
-                    all_jobs.append(job)
+        for job in category_jobs:
+            if job.url not in seen_urls:
+                seen_urls.add(job.url)
+                all_jobs.append(job)
 
         logger.info(
             "[{}] Fetched {} unique jobs from {} categories",

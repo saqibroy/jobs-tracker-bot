@@ -14,6 +14,7 @@ from aiohttp import web
 from loguru import logger
 
 import config
+from models.scan import sanitize_source_error
 
 # ── Module-level state (updated by main.py) ────────────────────────────────
 _start_time: float = time.monotonic()
@@ -109,11 +110,15 @@ def set_scan_summary(summary: dict) -> None:
                     "raw",
                     "accepted",
                     "saved",
+                    "issue_count",
                     "last_completed_at",
                     "last_usable_at",
                     "last_fully_successful_at",
                 )
             }
+            clean_health[str(name)[:80]]["sanitized_error"] = sanitize_source_error(
+                item.get("sanitized_error")
+            )
     compact["source_health"] = clean_health
     _scan_summary = compact
 

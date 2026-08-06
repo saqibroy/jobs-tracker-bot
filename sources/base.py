@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 import httpx
 from loguru import logger
@@ -19,10 +20,14 @@ from loguru import logger
 import config
 from models.job import Job
 from models.scan import (
+    MAX_COMPONENT_ISSUE_DETAILS,
     SanitizedSourceIssue,
+    SourceComponentError,
     SourceFetchOutcome,
     SourceStatus,
     classify_source_exception,
+    dominant_failure_status,
+    sanitize_component_identifier,
     sanitize_source_error,
     utc_now,
 )
@@ -36,20 +41,88 @@ class BaseSource(ABC):
     def __init__(self) -> None:
         self._timeout = httpx.Timeout(config.HTTP_TIMEOUT)
         self._last_request_issue: SanitizedSourceIssue | None = None
+        self._component_success_count = 0
+        self._component_issue_count = 0
+        self._component_issues: list[SanitizedSourceIssue] = []
+        self._component_failure_statuses: set[SourceStatus] = set()
 
     def _remember_request_issue(
         self,
         error: BaseException | str,
         status: SourceStatus | None = None,
     ) -> None:
-        """Remember one complete-request issue for Phase 1A classification.
-
-        Component-level issue collection and partial-success reporting remain a
-        Phase 1B concern. Phase 1A uses this only when the source returns no
-        usable jobs at all.
-        """
+        """Remember one request issue for list-returning adapter compatibility."""
 
         self._last_request_issue = SanitizedSourceIssue.from_error(error, status)
+
+    def _record_component_success(self) -> None:
+        """Record one board, endpoint, page, or query that completed."""
+
+        self._component_success_count += 1
+
+    def _record_component_issue(
+        self,
+        component: object,
+        error: BaseException | str,
+        status: SourceStatus | None = None,
+    ) -> None:
+        """Count a failed component and retain at most five safe summaries."""
+
+        resolved = status or (
+            classify_source_exception(error)
+            if isinstance(error, BaseException)
+            else SourceStatus.UNKNOWN_ERROR
+        )
+        self._component_issue_count += 1
+        self._component_failure_statuses.add(resolved)
+        if len(self._component_issues) < MAX_COMPONENT_ISSUE_DETAILS:
+            self._component_issues.append(
+                SanitizedSourceIssue.from_error(error, resolved, component)
+            )
+
+    def _consume_component_results(
+        self,
+        items: list,
+        results: list,
+        component_identifier: Callable[[object], object],
+    ) -> list[Job]:
+        """Merge successful list results and record each failed sibling unit."""
+
+        jobs: list[Job] = []
+        for item, result in zip(items, results):
+            if isinstance(result, Exception):
+                identifier = component_identifier(item)
+                self._record_component_issue(identifier, result)
+                logger.warning(
+                    "[{}] Component '{}' failed: {}",
+                    self.name,
+                    sanitize_component_identifier(identifier),
+                    sanitize_source_error(result),
+                )
+                continue
+            if not isinstance(result, list):
+                self._record_component_issue(
+                    component_identifier(item),
+                    TypeError("component fetch result is not a list"),
+                )
+                continue
+            self._record_component_success()
+            jobs.extend(result)
+        return jobs
+
+    @staticmethod
+    def _require_component_response(response: httpx.Response) -> httpx.Response:
+        """Raise for the 429 response that the retry wrapper returns directly."""
+
+        if int(getattr(response, "status_code", 200)) >= 400:
+            response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _fail_component(status: SourceStatus, explanation: str) -> None:
+        """Raise a bounded status-aware component failure without response data."""
+
+        raise SourceComponentError(status, explanation)
 
     async def _map_bounded(self, items: list, worker) -> list:
         """Run per-board requests with the configured concurrency ceiling."""
@@ -241,6 +314,10 @@ class BaseSource(ABC):
         """Fetch jobs and preserve whether an empty list was healthy or failed."""
 
         self._last_request_issue = None
+        self._component_success_count = 0
+        self._component_issue_count = 0
+        self._component_issues = []
+        self._component_failure_statuses = set()
         started_at = utc_now()
         started_clock = time.perf_counter()
         try:
@@ -249,18 +326,34 @@ class BaseSource(ABC):
                 raise TypeError("source fetch result is not a list")
 
             issue = self._last_request_issue
-            if jobs:
-                # Existing multi-request adapters can swallow component errors.
-                # Accurate partial-success status is intentionally Phase 1B.
+            if self._component_issue_count:
+                issues = tuple(self._component_issues)
+                if self._component_success_count or jobs:
+                    status = SourceStatus.PARTIAL_SUCCESS
+                else:
+                    status = dominant_failure_status(
+                        SanitizedSourceIssue(item, item.value)
+                        for item in self._component_failure_statuses
+                    )
+            elif self._component_success_count:
+                status = SourceStatus.HEALTHY if jobs else SourceStatus.ZERO_RESULTS
+                issues = ()
+            elif jobs:
                 status = SourceStatus.HEALTHY
-                issues: tuple[SanitizedSourceIssue, ...] = ()
+                issues = ()
             elif issue is not None:
                 status = issue.status
                 issues = (issue,)
             else:
                 status = SourceStatus.ZERO_RESULTS
                 issues = ()
-            logger.info("[{}] Fetched {} raw jobs ({})", self.name, len(jobs), status.value)
+            logger.info(
+                "[{}] Fetched {} raw jobs ({}, {} component issues)",
+                self.name,
+                len(jobs),
+                status.value,
+                self._component_issue_count,
+            )
         except Exception as exc:
             status = classify_source_exception(exc)
             issue = SanitizedSourceIssue.from_error(exc, status)
@@ -277,4 +370,5 @@ class BaseSource(ABC):
             completed_at=completed_at,
             duration_ms=max(0, round((time.perf_counter() - started_clock) * 1000)),
             issues=issues,
+            component_issue_count=self._component_issue_count,
         )

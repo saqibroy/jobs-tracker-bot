@@ -16,6 +16,10 @@ import httpx
 from models.job import Job
 
 
+MAX_COMPONENT_ISSUE_DETAILS = 5
+MAX_COMPONENT_IDENTIFIER_LENGTH = 120
+
+
 class SourceStatus(str, Enum):
     """Stable source-attempt outcomes persisted in scan metrics."""
 
@@ -27,6 +31,14 @@ class SourceStatus(str, Enum):
     PARSE_ERROR = "parse_error"
     NETWORK_ERROR = "network_error"
     UNKNOWN_ERROR = "unknown_error"
+
+
+class SourceComponentError(RuntimeError):
+    """A component failure whose source status is known without an HTTP code."""
+
+    def __init__(self, status: SourceStatus, explanation: str) -> None:
+        super().__init__(explanation)
+        self.status = status
 
 
 class RejectionCode(str, Enum):
@@ -101,9 +113,20 @@ def sanitize_source_error(value: BaseException | str | None, limit: int = 300) -
     return text[: max(0, limit)]
 
 
+def sanitize_component_identifier(value: object) -> str:
+    """Return a short non-sensitive board, page, endpoint, or query label."""
+
+    return (
+        sanitize_source_error(str(value), limit=MAX_COMPONENT_IDENTIFIER_LENGTH)
+        or "unknown_component"
+    )
+
+
 def classify_source_exception(exc: BaseException) -> SourceStatus:
     """Classify a complete-source exception without exposing its contents."""
 
+    if isinstance(exc, SourceComponentError):
+        return exc.status
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 429:
@@ -122,25 +145,62 @@ def classify_source_exception(exc: BaseException) -> SourceStatus:
     return SourceStatus.UNKNOWN_ERROR
 
 
+_COMPLETE_FAILURE_PRECEDENCE = (
+    SourceStatus.RATE_LIMITED,
+    SourceStatus.BLOCKED,
+    SourceStatus.NETWORK_ERROR,
+    SourceStatus.PARSE_ERROR,
+    SourceStatus.UNKNOWN_ERROR,
+)
+
+
+def dominant_failure_status(
+    issues: Iterable["SanitizedSourceIssue"],
+) -> SourceStatus:
+    """Choose a deterministic status when every attempted component failed.
+
+    Actionable external causes take precedence: rate limiting, blocking,
+    networking, parsing, then an unknown failure.
+    """
+
+    statuses = {issue.status for issue in issues}
+    for status in _COMPLETE_FAILURE_PRECEDENCE:
+        if status in statuses:
+            return status
+    return SourceStatus.UNKNOWN_ERROR
+
+
 @dataclass(frozen=True, slots=True)
 class SanitizedSourceIssue:
     """A bounded, already-sanitized source issue."""
 
     status: SourceStatus
     explanation: str
+    component: str = ""
 
     @classmethod
     def from_error(
         cls,
         error: BaseException | str,
         status: SourceStatus | None = None,
+        component: object | None = None,
     ) -> "SanitizedSourceIssue":
         resolved = status or (
             classify_source_exception(error)
             if isinstance(error, BaseException)
             else SourceStatus.UNKNOWN_ERROR
         )
-        return cls(resolved, sanitize_source_error(error) or resolved.value)
+        return cls(
+            resolved,
+            sanitize_source_error(error) or resolved.value,
+            sanitize_component_identifier(component) if component is not None else "",
+        )
+
+    @property
+    def summary(self) -> str:
+        if not self.component:
+            return self.explanation
+        return f"{self.component} [{self.status.value}]: {self.explanation}"
 
 
 @dataclass(slots=True)
@@ -154,6 +214,7 @@ class SourceFetchOutcome:
     completed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     duration_ms: int = 0
     issues: tuple[SanitizedSourceIssue, ...] = ()
+    component_issue_count: int = 0
 
     @property
     def raw_count(self) -> int:
@@ -161,13 +222,13 @@ class SourceFetchOutcome:
 
     @property
     def issue_count(self) -> int:
-        return len(self.issues)
+        return max(self.component_issue_count, len(self.issues))
 
     @property
     def sanitized_error(self) -> str | None:
         if not self.issues:
             return None
-        return sanitize_source_error("; ".join(issue.explanation for issue in self.issues))
+        return sanitize_source_error("; ".join(issue.summary for issue in self.issues))
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +396,8 @@ class ScanSummary:
                     "raw": metrics.raw_count,
                     "accepted": metrics.accepted_count,
                     "saved": metrics.saved_count,
+                    "issue_count": metrics.issue_count,
+                    "sanitized_error": sanitize_source_error(metrics.sanitized_error),
                     "last_completed_at": metrics.completed_at.isoformat(),
                     "last_usable_at": (
                         metrics.completed_at.isoformat()
@@ -357,6 +420,8 @@ class ScanSummary:
                         "raw",
                         "accepted",
                         "saved",
+                        "issue_count",
+                        "sanitized_error",
                         "last_completed_at",
                         "last_usable_at",
                         "last_fully_successful_at",

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from loguru import logger
+from pydantic import ValidationError
 
 from models.job import Job
 from sources.ats_common import clean_html, country_codes_from_text, infer_workplace, regions_from_text
@@ -22,45 +21,48 @@ class LeverSource(BaseSource):
             params={"mode": "json"},
             headers={"Accept": "application/json"},
         )
+        self._require_component_response(response)
         jobs = []
         for item in response.json():
-            categories = item.get("categories") or {}
-            locations = categories.get("allLocations") or [categories.get("location", "")]
-            location = ", ".join(value for value in locations if value) or "Unspecified"
-            description = clean_html(
-                " ".join([
-                    item.get("descriptionPlain") or item.get("description") or "",
-                    item.get("additionalPlain") or item.get("additional") or "",
-                ])
-            )
-            workplace = infer_workplace(f"{location} {item.get('workplaceType', '')}")
-            jobs.append(Job(
-                title=item.get("text") or "",
-                company=board.company,
-                location=location,
-                is_remote=workplace in ("remote", "hybrid"),
-                workplace_type=workplace,
-                eligible_countries=country_codes_from_text(location),
-                eligible_regions=regions_from_text(location),
-                url=item.get("hostedUrl") or item.get("applyUrl") or "",
-                description=description,
-                tags=[
-                    value for value in (
-                        categories.get("team"), categories.get("department"),
-                        categories.get("commitment"), item.get("workplaceType"),
-                    ) if value
-                ],
-                source=self.name,
-            ))
+            try:
+                categories = item.get("categories") or {}
+                locations = categories.get("allLocations") or [categories.get("location", "")]
+                location = ", ".join(value for value in locations if value) or "Unspecified"
+                description = clean_html(
+                    " ".join([
+                        item.get("descriptionPlain") or item.get("description") or "",
+                        item.get("additionalPlain") or item.get("additional") or "",
+                    ])
+                )
+                workplace = infer_workplace(f"{location} {item.get('workplaceType', '')}")
+                jobs.append(Job(
+                    title=item.get("text") or "",
+                    company=board.company,
+                    location=location,
+                    is_remote=workplace in ("remote", "hybrid"),
+                    workplace_type=workplace,
+                    eligible_countries=country_codes_from_text(location),
+                    eligible_regions=regions_from_text(location),
+                    url=item.get("hostedUrl") or item.get("applyUrl") or "",
+                    description=description,
+                    tags=[
+                        value for value in (
+                            categories.get("team"), categories.get("department"),
+                            categories.get("commitment"), item.get("workplaceType"),
+                        ) if value
+                    ],
+                    source=self.name,
+                ))
+            except (ValidationError, KeyError, TypeError, AttributeError) as exc:
+                logger.debug(
+                    "[{}] Skipping malformed listing for '{}': {}",
+                    self.name, board.slug, exc,
+                )
         return jobs
 
     async def fetch(self) -> list[Job]:
         boards = boards_for(self.name)
         results = await self._map_bounded(boards, self._fetch_board)
-        jobs: list[Job] = []
-        for board, result in zip(boards, results):
-            if isinstance(result, Exception):
-                logger.warning("[{}] Board {} failed: {}", self.name, board.slug, result)
-            else:
-                jobs.extend(result)
-        return jobs
+        return self._consume_component_results(
+            boards, results, lambda board: f"board:{board.slug}"
+        )

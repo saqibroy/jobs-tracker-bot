@@ -28,6 +28,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from models.job import Job
+from models.scan import SourceStatus
 from sources.base import BaseSource
 
 _BASE_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
@@ -97,20 +98,15 @@ class LinkedInSource(BaseSource):
             "start": "0",
         }
 
-        try:
-            resp = await self._get(_BASE_URL, params=params, headers=_HEADERS)
-        except Exception as exc:
-            logger.warning("[{}] Request failed for '{}': {}", self.name, query["keywords"], exc)
-            return []
-
-        if resp.status_code == 429:
-            logger.warning("[{}] Rate limited — skipping", self.name)
-            return []
+        resp = await self._get(_BASE_URL, params=params, headers=_HEADERS)
+        self._require_component_response(resp)
 
         # Check for login redirect (LinkedIn blocks guest access sometimes)
         if "login" in resp.text[:500].lower() or resp.status_code in (301, 302, 403):
-            logger.warning("[{}] LinkedIn redirected to login — guest API blocked", self.name)
-            return []
+            self._fail_component(
+                SourceStatus.BLOCKED,
+                "LinkedIn guest API redirected to login",
+            )
 
         return self._parse_html(resp.text, workplace_type=query["workplace_type"])
 
@@ -199,18 +195,22 @@ class LinkedInSource(BaseSource):
         """Fetch all search queries in parallel and deduplicate by URL."""
         tasks = [self._fetch_query(q) for q in _SEARCH_QUERIES]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        query_jobs = self._consume_component_results(
+            _SEARCH_QUERIES,
+            results,
+            lambda query: (
+                f"query:{query['keywords']}@{query['location']}/"
+                f"{query['workplace_type']}"
+            ),
+        )
 
         all_jobs: list[Job] = []
         seen_urls: set[str] = set()
 
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning("[{}] Query failed: {}", self.name, result)
-                continue
-            for job in result:
-                if job.url not in seen_urls:
-                    seen_urls.add(job.url)
-                    all_jobs.append(job)
+        for job in query_jobs:
+            if job.url not in seen_urls:
+                seen_urls.add(job.url)
+                all_jobs.append(job)
 
         logger.info(
             "[{}] Fetched {} unique jobs from {} queries",
