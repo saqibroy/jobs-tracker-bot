@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 from loguru import logger
 
 import config
 from models.job import Job
+from models.scan import ScanSummary, sanitize_source_error
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -50,6 +51,67 @@ _CREATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_content_hash ON jobs(content_hash);
 """
 
+_CREATE_SOURCE_SCAN_RUNS = """
+CREATE TABLE IF NOT EXISTS source_scan_runs (
+    scan_id          TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    started_at       TEXT NOT NULL,
+    completed_at     TEXT NOT NULL,
+    duration_ms      INTEGER NOT NULL DEFAULT 0,
+    status           TEXT NOT NULL,
+    raw_count        INTEGER NOT NULL DEFAULT 0,
+    accepted_count   INTEGER NOT NULL DEFAULT 0,
+    unseen_count     INTEGER NOT NULL DEFAULT 0,
+    saved_count      INTEGER NOT NULL DEFAULT 0,
+    rejection_counts TEXT NOT NULL DEFAULT '{}',
+    routing_counts   TEXT NOT NULL DEFAULT '{}',
+    issue_count      INTEGER NOT NULL DEFAULT 0,
+    sanitized_error  TEXT,
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (scan_id, source)
+);
+"""
+
+_CREATE_SOURCE_SCAN_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_completed "
+    "ON source_scan_runs(completed_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_source_completed "
+    "ON source_scan_runs(source, completed_at DESC);",
+)
+
+_SOURCE_HEALTH_QUERY = """
+SELECT
+    current.source,
+    current.status,
+    current.raw_count,
+    current.accepted_count,
+    current.saved_count,
+    current.issue_count,
+    current.sanitized_error,
+    current.completed_at AS last_completed_at,
+    (
+        SELECT MAX(usable.completed_at)
+        FROM source_scan_runs AS usable
+        WHERE usable.source = current.source
+          AND usable.status IN ('healthy', 'zero_results', 'partial_success')
+    ) AS last_usable_at,
+    (
+        SELECT MAX(successful.completed_at)
+        FROM source_scan_runs AS successful
+        WHERE successful.source = current.source
+          AND successful.status IN ('healthy', 'zero_results')
+    ) AS last_fully_successful_at
+FROM source_scan_runs AS current
+WHERE current.rowid = (
+    SELECT latest.rowid
+    FROM source_scan_runs AS latest
+    WHERE latest.source = current.source
+    ORDER BY latest.completed_at DESC, latest.created_at DESC
+    LIMIT 1
+)
+ORDER BY current.source
+"""
+
 # Migration: add match_score column for existing databases
 _ADD_MATCH_SCORE_COL = """
 ALTER TABLE jobs ADD COLUMN match_score INTEGER DEFAULT 0;
@@ -80,6 +142,9 @@ async def init_db() -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(_CREATE_TABLE)
         await db.execute(_CREATE_INDEX)
+        await db.execute(_CREATE_SOURCE_SCAN_RUNS)
+        for statement in _CREATE_SOURCE_SCAN_INDEXES:
+            await db.execute(statement)
         # Migration: add match_score column if it doesn't exist
         try:
             await db.execute(_ADD_MATCH_SCORE_COL)
@@ -131,14 +196,16 @@ async def filter_unseen(jobs: list[Job]) -> list[Job]:
     return unseen
 
 
-async def save_jobs(jobs: list[Job]) -> None:
-    """Persist a batch of jobs to the database."""
+async def save_jobs(jobs: list[Job]) -> list[Job]:
+    """Persist a batch and return only rows actually inserted by SQLite."""
+
     if not jobs:
-        return
+        return []
     path = await _db_path()
+    inserted: list[Job] = []
     async with aiosqlite.connect(path) as db:
         for job in jobs:
-            await db.execute(
+            cursor = await db.execute(
                 """
                 INSERT OR IGNORE INTO jobs
                     (id, content_hash, title, company, location, is_remote,
@@ -176,8 +243,198 @@ async def save_jobs(jobs: list[Job]) -> None:
                     job.fetched_at.isoformat(),
                 ),
             )
+            if cursor.rowcount == 1:
+                inserted.append(job)
         await db.commit()
-    logger.info("Saved {} jobs to database", len(jobs))
+    logger.info("Saved {} jobs to database", len(inserted))
+    return inserted
+
+
+async def persist_scan_metrics(summary: ScanSummary, retention_days: int = 30) -> None:
+    """Persist one bounded metrics row per source and prune expired history."""
+
+    summary.validate_accounting()
+    path = await _db_path()
+    created_at = datetime.now(timezone.utc)
+    rows = [
+        (
+            summary.scan_id,
+            metrics.source,
+            metrics.started_at.isoformat(),
+            metrics.completed_at.isoformat(),
+            max(0, metrics.duration_ms),
+            metrics.status.value,
+            metrics.raw_count,
+            metrics.accepted_count,
+            metrics.unseen_count,
+            metrics.saved_count,
+            metrics.rejection_counts_json(),
+            metrics.routing_counts_json(),
+            max(0, metrics.issue_count),
+            sanitize_source_error(metrics.sanitized_error),
+            created_at.isoformat(),
+        )
+        for metrics in summary.sources.values()
+    ]
+    cutoff = (created_at - timedelta(days=retention_days)).isoformat()
+    async with aiosqlite.connect(path) as db:
+        await db.executemany(
+            """
+            INSERT OR REPLACE INTO source_scan_runs (
+                scan_id, source, started_at, completed_at, duration_ms, status,
+                raw_count, accepted_count, unseen_count, saved_count,
+                rejection_counts, routing_counts, issue_count, sanitized_error,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        # Cleanup occurs only after all metrics inserts above have succeeded.
+        await db.execute("DELETE FROM source_scan_runs WHERE created_at < ?", (cutoff,))
+        await db.commit()
+
+
+async def cleanup_scan_metrics(retention_days: int = 30) -> int:
+    """Delete expired metrics rows and return the affected-row count."""
+
+    path = await _db_path()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            "DELETE FROM source_scan_runs WHERE created_at < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        return max(0, cursor.rowcount)
+
+
+def _decode_counts(value: str | None) -> dict[str, int]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        str(key): int(count)
+        for key, count in parsed.items()
+        if isinstance(count, (int, float))
+    }
+
+
+def _source_health_rows(rows: list[aiosqlite.Row]) -> list[dict]:
+    return [
+        {
+            "source": row["source"],
+            "status": row["status"],
+            "raw": row["raw_count"],
+            "accepted": row["accepted_count"],
+            "saved": row["saved_count"],
+            "issue_count": row["issue_count"],
+            "sanitized_error": sanitize_source_error(row["sanitized_error"]),
+            "last_completed_at": row["last_completed_at"],
+            "last_usable_at": row["last_usable_at"],
+            "last_fully_successful_at": row["last_fully_successful_at"],
+        }
+        for row in rows
+    ]
+
+
+async def get_latest_source_statuses() -> list[dict]:
+    """Return each source's latest status and operational timestamps."""
+
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(_SOURCE_HEALTH_QUERY)
+        return _source_health_rows(await cursor.fetchall())
+
+
+async def get_latest_source_status(source: str) -> dict | None:
+    """Return the latest operational health record for one source."""
+
+    for item in await get_latest_source_statuses():
+        if item["source"] == source:
+            return item
+    return None
+
+
+async def get_latest_scan_summary() -> dict | None:
+    """Restore the latest completed production scan in health-payload shape."""
+
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT scan_id
+            FROM source_scan_runs
+            GROUP BY scan_id
+            ORDER BY MAX(completed_at) DESC, MAX(created_at) DESC
+            LIMIT 1
+            """
+        )
+        latest = await cursor.fetchone()
+        if latest is None:
+            return None
+        cursor = await db.execute(
+            "SELECT * FROM source_scan_runs WHERE scan_id = ? ORDER BY source",
+            (latest["scan_id"],),
+        )
+        rows = await cursor.fetchall()
+
+    raw = accepted = unseen = saved = 0
+    rejection_counts: dict[str, int] = {}
+    routing_counts = {"immediate": 0, "digest": 0, "diagnostic": 0}
+    source_counts: dict[str, int] = {}
+    completed_at: str | None = None
+    for row in rows:
+        raw += row["raw_count"]
+        accepted += row["accepted_count"]
+        unseen += row["unseen_count"]
+        saved += row["saved_count"]
+        source_counts[row["source"]] = row["raw_count"]
+        completed_at = max(completed_at or row["completed_at"], row["completed_at"])
+        for code, count in _decode_counts(row["rejection_counts"]).items():
+            rejection_counts[code] = rejection_counts.get(code, 0) + count
+        for route, count in _decode_counts(row["routing_counts"]).items():
+            if route in routing_counts:
+                routing_counts[route] += count
+
+    source_health = await get_latest_source_statuses()
+    return {
+        "scan_id": latest["scan_id"],
+        "completed_at": completed_at,
+        "raw": raw,
+        "eligible_role_matches": accepted,
+        "rejected": sum(rejection_counts.values()),
+        "immediate": routing_counts["immediate"],
+        "digest": routing_counts["digest"],
+        "diagnostic": routing_counts["diagnostic"],
+        "sources": source_counts,
+        "accepted": accepted,
+        "unseen": unseen,
+        "saved": saved,
+        "rejection_counts": rejection_counts,
+        "source_health": {
+            item["source"]: {
+                key: item.get(key)
+                for key in (
+                    "status",
+                    "raw",
+                    "accepted",
+                    "saved",
+                    "last_completed_at",
+                    "last_usable_at",
+                    "last_fully_successful_at",
+                )
+            }
+            for item in source_health
+        },
+    }
+
+
+get_latest_completed_scan = get_latest_scan_summary
 
 
 async def mark_notified(job_ids: list[str]) -> None:
@@ -237,6 +494,7 @@ async def get_stats() -> dict:
     """
     path = await _db_path()
     async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
         # Total count
         cursor = await db.execute("SELECT COUNT(*) FROM jobs")
         total = (await cursor.fetchone())[0]
@@ -282,6 +540,9 @@ async def get_stats() -> dict:
             except (ValueError, TypeError):
                 pass
 
+        cursor = await db.execute(_SOURCE_HEALTH_QUERY)
+        source_health = _source_health_rows(await cursor.fetchall())
+
         return {
             "total": total,
             "ngo_count": ngo_count,
@@ -290,6 +551,7 @@ async def get_stats() -> dict:
             "notification_tiers": notification_tiers,
             "top_companies": top_companies,
             "last_fetched_at": last_fetched_at,
+            "source_health": source_health,
         }
 
 

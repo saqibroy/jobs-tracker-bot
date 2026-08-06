@@ -10,6 +10,7 @@ The base class provides:
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 
 import httpx
@@ -17,6 +18,14 @@ from loguru import logger
 
 import config
 from models.job import Job
+from models.scan import (
+    SanitizedSourceIssue,
+    SourceFetchOutcome,
+    SourceStatus,
+    classify_source_exception,
+    sanitize_source_error,
+    utc_now,
+)
 
 
 class BaseSource(ABC):
@@ -26,6 +35,21 @@ class BaseSource(ABC):
 
     def __init__(self) -> None:
         self._timeout = httpx.Timeout(config.HTTP_TIMEOUT)
+        self._last_request_issue: SanitizedSourceIssue | None = None
+
+    def _remember_request_issue(
+        self,
+        error: BaseException | str,
+        status: SourceStatus | None = None,
+    ) -> None:
+        """Remember one complete-request issue for Phase 1A classification.
+
+        Component-level issue collection and partial-success reporting remain a
+        Phase 1B concern. Phase 1A uses this only when the source returns no
+        usable jobs at all.
+        """
+
+        self._last_request_issue = SanitizedSourceIssue.from_error(error, status)
 
     async def _map_bounded(self, items: list, worker) -> list:
         """Run per-board requests with the configured concurrency ceiling."""
@@ -60,6 +84,10 @@ class BaseSource(ABC):
 
                     # Rate limited — skip this run entirely
                     if resp.status_code == 429:
+                        self._remember_request_issue(
+                            "HTTP 429 rate limited",
+                            SourceStatus.RATE_LIMITED,
+                        )
                         logger.warning(
                             "[{}] Rate limited (429) — skipping this cycle", self.name
                         )
@@ -69,38 +97,46 @@ class BaseSource(ABC):
                     # migration. They are permanent for this scan and must not
                     # be followed into an unrelated marketing page.
                     if 300 <= resp.status_code < 400:
-                        raise httpx.HTTPStatusError(
+                        exc = httpx.HTTPStatusError(
                             f"unexpected redirect to {resp.headers.get('location', '')}",
                             request=resp.request,
                             response=resp,
                         )
+                        self._remember_request_issue(exc)
+                        raise exc
                     resp.raise_for_status()
                     return resp
 
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
+                self._remember_request_issue(exc)
                 status = exc.response.status_code
                 if status < 500 and status != 429:
                     logger.warning(
                         "[{}] Permanent HTTP {} for {} — not retrying",
-                        self.name, status, exc.request.url,
+                        self.name, status, sanitize_source_error(str(exc.request.url)),
                     )
                     raise
-                wait = min(2 ** attempt, 8)
-                logger.warning(
-                    "[{}] Attempt {}/{} failed: {} — retrying in {}s",
-                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
-                )
-                await asyncio.sleep(wait)
-            except httpx.RequestError as exc:
-                last_exc = exc
                 wait = min(2 ** attempt, 8)
                 logger.warning(
                     "[{}] Attempt {}/{} failed: {} — retrying in {}s",
                     self.name,
                     attempt,
                     config.HTTP_MAX_RETRIES,
-                    exc,
+                    sanitize_source_error(exc),
+                    wait,
+                )
+                await asyncio.sleep(wait)
+            except httpx.RequestError as exc:
+                last_exc = exc
+                self._remember_request_issue(exc)
+                wait = min(2 ** attempt, 8)
+                logger.warning(
+                    "[{}] Attempt {}/{} failed: {} — retrying in {}s",
+                    self.name,
+                    attempt,
+                    config.HTTP_MAX_RETRIES,
+                    sanitize_source_error(exc),
                     wait,
                 )
                 await asyncio.sleep(wait)
@@ -126,41 +162,57 @@ class BaseSource(ABC):
                     resp = await client.post(url, json=json_body, headers=headers, params=params)
 
                     if resp.status_code == 429:
+                        self._remember_request_issue(
+                            "HTTP 429 rate limited",
+                            SourceStatus.RATE_LIMITED,
+                        )
                         logger.warning(
                             "[{}] Rate limited (429) — skipping this cycle", self.name
                         )
                         return resp
 
                     if 300 <= resp.status_code < 400:
-                        raise httpx.HTTPStatusError(
+                        exc = httpx.HTTPStatusError(
                             f"unexpected redirect to {resp.headers.get('location', '')}",
                             request=resp.request,
                             response=resp,
                         )
+                        self._remember_request_issue(exc)
+                        raise exc
                     resp.raise_for_status()
                     return resp
 
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
+                self._remember_request_issue(exc)
                 status = exc.response.status_code
                 if status < 500 and status != 429:
                     logger.warning(
                         "[{}] Permanent HTTP {} for {} — not retrying",
-                        self.name, status, exc.request.url,
+                        self.name, status, sanitize_source_error(str(exc.request.url)),
                     )
                     raise
                 wait = min(2 ** attempt, 8)
                 logger.warning(
                     "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
-                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
+                    self.name,
+                    attempt,
+                    config.HTTP_MAX_RETRIES,
+                    sanitize_source_error(exc),
+                    wait,
                 )
                 await asyncio.sleep(wait)
             except httpx.RequestError as exc:
                 last_exc = exc
+                self._remember_request_issue(exc)
                 wait = min(2 ** attempt, 8)
                 logger.warning(
                     "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
-                    self.name, attempt, config.HTTP_MAX_RETRIES, exc, wait,
+                    self.name,
+                    attempt,
+                    config.HTTP_MAX_RETRIES,
+                    sanitize_source_error(exc),
+                    wait,
                 )
                 await asyncio.sleep(wait)
 
@@ -183,10 +235,46 @@ class BaseSource(ABC):
     async def safe_fetch(self) -> list[Job]:
         """Wrapper around fetch() that catches all exceptions so one
         broken source never crashes the whole scan cycle."""
+        return (await self.fetch_outcome()).jobs
+
+    async def fetch_outcome(self) -> SourceFetchOutcome:
+        """Fetch jobs and preserve whether an empty list was healthy or failed."""
+
+        self._last_request_issue = None
+        started_at = utc_now()
+        started_clock = time.perf_counter()
         try:
             jobs = await self.fetch()
-            logger.info("[{}] Fetched {} raw jobs", self.name, len(jobs))
-            return jobs
+            if not isinstance(jobs, list):
+                raise TypeError("source fetch result is not a list")
+
+            issue = self._last_request_issue
+            if jobs:
+                # Existing multi-request adapters can swallow component errors.
+                # Accurate partial-success status is intentionally Phase 1B.
+                status = SourceStatus.HEALTHY
+                issues: tuple[SanitizedSourceIssue, ...] = ()
+            elif issue is not None:
+                status = issue.status
+                issues = (issue,)
+            else:
+                status = SourceStatus.ZERO_RESULTS
+                issues = ()
+            logger.info("[{}] Fetched {} raw jobs ({})", self.name, len(jobs), status.value)
         except Exception as exc:
-            logger.error("[{}] Fetch failed: {}", self.name, exc)
-            return []
+            status = classify_source_exception(exc)
+            issue = SanitizedSourceIssue.from_error(exc, status)
+            issues = (issue,)
+            jobs = []
+            logger.error("[{}] Fetch failed ({}): {}", self.name, status.value, issue.explanation)
+
+        completed_at = utc_now()
+        return SourceFetchOutcome(
+            source=self.name,
+            jobs=jobs,
+            status=status,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_ms=max(0, round((time.perf_counter() - started_clock) * 1000)),
+            issues=issues,
+        )

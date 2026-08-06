@@ -23,6 +23,15 @@ _jobs_tracked: int = 0
 _paused: bool = False
 _scan_summary: dict = {}
 
+_LEGACY_SUMMARY_KEYS = (
+    "raw",
+    "eligible_role_matches",
+    "rejected",
+    "immediate",
+    "digest",
+    "diagnostic",
+)
+
 
 def set_last_scan(dt: datetime) -> None:
     """Record when the last scan completed."""
@@ -55,8 +64,58 @@ def is_paused() -> bool:
 
 def set_scan_summary(summary: dict) -> None:
     """Publish non-sensitive counts from the most recent completed scan."""
+
     global _scan_summary
-    _scan_summary = summary
+    compact: dict = {
+        key: max(0, int(summary.get(key, 0) or 0))
+        for key in _LEGACY_SUMMARY_KEYS
+    }
+    compact["accepted"] = max(
+        0,
+        int(summary.get("accepted", compact["eligible_role_matches"]) or 0),
+    )
+    compact["unseen"] = max(0, int(summary.get("unseen", 0) or 0))
+    compact["saved"] = max(0, int(summary.get("saved", 0) or 0))
+
+    sources = summary.get("sources", {})
+    if isinstance(sources, dict):
+        compact["sources"] = {
+            str(name)[:80]: max(0, int(count or 0))
+            for name, count in list(sources.items())[:50]
+        }
+    else:
+        compact["sources"] = {}
+
+    rejection_counts = summary.get("rejection_counts", {})
+    compact["rejection_counts"] = (
+        {
+            str(code)[:80]: max(0, int(count or 0))
+            for code, count in list(rejection_counts.items())[:20]
+        }
+        if isinstance(rejection_counts, dict)
+        else {}
+    )
+
+    source_health = summary.get("source_health", {})
+    clean_health: dict[str, dict] = {}
+    if isinstance(source_health, dict):
+        for name, item in list(source_health.items())[:50]:
+            if not isinstance(item, dict):
+                continue
+            clean_health[str(name)[:80]] = {
+                key: item.get(key)
+                for key in (
+                    "status",
+                    "raw",
+                    "accepted",
+                    "saved",
+                    "last_completed_at",
+                    "last_usable_at",
+                    "last_fully_successful_at",
+                )
+            }
+    compact["source_health"] = clean_health
+    _scan_summary = compact
 
 
 def get_scan_summary() -> dict:

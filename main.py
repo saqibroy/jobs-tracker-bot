@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
 import signal
 import sys
+import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,13 +27,26 @@ from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
 import config
-from filters.language import passes_language_filter
-from filters.location import passes_location_filter
-from filters.match import compute_match_score
-from filters.ngo import classify_ngo
-from filters.role import passes_role_filter
-from filters.stack import passes_stack_filter
+from filters.pipeline import (
+    MAX_JOBS_PER_COMPANY,
+    passes_company_blocklist,
+    passes_salary_filter,
+    passes_senior_filter,
+    rejection_pairs,
+    run_filter_pipeline,
+)
 from models.job import Job
+from models.scan import (
+    FilterRunSummary,
+    SanitizedSourceIssue,
+    ScanSummary,
+    SourceFetchOutcome,
+    SourceFunnelMetrics,
+    SourceStatus,
+    classify_source_exception,
+    sanitize_source_error,
+    utc_now,
+)
 from notifiers.discord_notifier import DiscordNotifier
 from notifiers.telegram_notifier import TelegramNotifier
 from sources.arbeitnow import ArbeitnowSource
@@ -60,16 +74,20 @@ from sources.techjobsforgood import TechJobsForGoodSource
 from sources.themuse import TheMuseSource
 from sources.weworkremotely import WeWorkRemotelySource
 from sources.workable import WorkableSource
+from sources.base import BaseSource
 from storage.database import (
     backfill_match_scores,
     filter_unseen,
     get_recent_unnotified,
+    get_latest_scan_summary,
+    get_latest_source_statuses,
     get_stats,
     get_total_count,
     get_weekly_general_count,
     get_weekly_ngo_jobs,
     init_db,
     mark_notified,
+    persist_scan_metrics,
     save_jobs,
 )
 
@@ -81,7 +99,7 @@ log_dir.mkdir(parents=True, exist_ok=True)
 logger.add(config.LOG_FILE, level="DEBUG", rotation="10 MB", retention="7 days")
 
 # Max jobs per company in a single scan to avoid one employer flooding results
-_MAX_JOBS_PER_COMPANY = 2
+_MAX_JOBS_PER_COMPANY = MAX_JOBS_PER_COMPANY
 
 # ── Source registry ────────────────────────────────────────────────────────
 ALL_SOURCES = {
@@ -121,14 +139,6 @@ DEFAULT_SOURCE_NAMES = (
     "remoteok", "idealist", "linkedin",
 )
 
-# ── Senior-only title keywords ────────────────────────────────────────────
-_SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
-_SENIOR_REJECT = {"junior", "mid-level", "mid level", "entry-level", "entry level", "intern"}
-
-# ── Salary parsing regex ──────────────────────────────────────────────────
-_SALARY_NUM_RE = re.compile(r"[\d,.]+")
-
-
 def _get_sources(source_name: str | None) -> list:
     """Return source instances to run — all or a single one."""
     if source_name:
@@ -142,70 +152,21 @@ def _get_sources(source_name: str | None) -> list:
 
 
 def _passes_company_blocklist(job: Job) -> bool:
-    """Return True if the job's company is NOT on the blocklist."""
-    if not config.COMPANY_BLOCKLIST:
-        return True
-    company_lower = job.company.lower().strip()
-    for blocked in config.COMPANY_BLOCKLIST:
-        if blocked in company_lower:
-            return False
-    return True
+    """Compatibility wrapper for older tests and callers."""
+
+    return passes_company_blocklist(job, config)
 
 
 def _passes_senior_filter(job: Job) -> bool:
-    """Return True if the job passes the senior-only filter.
+    """Compatibility wrapper for older tests and callers."""
 
-    When FILTER_SENIOR_ONLY is enabled:
-    - Accept if title contains a senior keyword
-    - Accept if title has NO seniority mention at all (assume senior)
-    - Reject if title explicitly mentions junior/mid-level
-    """
-    if not config.FILTER_SENIOR_ONLY:
-        return True
-
-    title_lower = job.title.lower()
-
-    # Check for senior keywords (accept)
-    for kw in _SENIOR_ACCEPT:
-        if kw in title_lower:
-            return True
-
-    # Check for junior/mid-level keywords (reject)
-    for kw in _SENIOR_REJECT:
-        if kw in title_lower:
-            return False
-
-    # No seniority mention → assume senior, accept
-    return True
+    return passes_senior_filter(job, config)
 
 
 def _passes_salary_filter(job: Job) -> bool:
-    """Return True if the job passes the minimum salary filter.
+    """Compatibility wrapper for older tests and callers."""
 
-    When MIN_SALARY_EUR > 0 and the job has a salary field:
-    - Try to parse the first number from the salary string
-    - Reject if the parsed value is below MIN_SALARY_EUR
-    - Accept if salary can't be parsed (benefit of the doubt)
-    """
-    if config.MIN_SALARY_EUR <= 0:
-        return True
-    if not job.salary:
-        return True  # no salary listed → accept
-
-    # Try to parse numbers from the salary string
-    nums = _SALARY_NUM_RE.findall(job.salary.replace(",", ""))
-    if not nums:
-        return True  # can't parse → accept
-
-    try:
-        # Take the first number as the salary
-        salary_val = float(nums[0])
-        # If it looks like a monthly salary (< 10000), annualize
-        if salary_val < 10000:
-            salary_val *= 12
-        return salary_val >= config.MIN_SALARY_EUR
-    except (ValueError, IndexError):
-        return True  # can't parse → accept
+    return passes_salary_filter(job, config)
 
 
 def _apply_filters(
@@ -213,146 +174,18 @@ def _apply_filters(
     max_age_days: int | None = None,
     verbose: bool = False,
 ) -> list[Job]:
-    """Run all filters on a list of jobs. Returns only accepted jobs.
+    """Compatibility wrapper around the extracted global filter pipeline."""
 
-    Also performs:
-      - In-memory content-hash dedup
-      - Per-company cap (max 2 per scan)
-      - Arbeitnow on-site rejection (is_remote=False + germany scope)
-      - Arbeitnow unknown→germany scope defaulting
-
-    When *verbose* is True, prints rejection reasons to stdout (for debugging).
-    """
-    accepted: list[Job] = []
-    rejected: list[tuple[Job, str]] = []  # (job, reason) for verbose output
-    seen_content_hashes: set[str] = set()
-    company_counts: defaultdict[str, int] = defaultdict(int)
-
-    # Sort by posted_at descending so per-company cap keeps most recent
-    def _sort_key(j: Job) -> datetime:
-        dt = j.posted_at or j.fetched_at
-        # Normalize to UTC-aware to avoid naive vs aware comparison errors
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-
-    jobs_sorted = sorted(jobs, key=_sort_key, reverse=True)
-
-    for job in jobs_sorted:
-        # Helper to record a rejection reason for verbose output
-        def _reject(job: Job, reason: str) -> None:
-            if verbose:
-                rejected.append((job, reason))
-
-        # 0. In-memory content dedup (title+company+location)
-        if job.content_hash in seen_content_hashes:
-            logger.debug("Dedup SKIP (in-memory): {}", job.title)
-            _reject(job, "dedup (content hash)")
-            continue
-
-        # 1. Company blocklist — checked before eligibility evaluation.
-        if not _passes_company_blocklist(job):
-            logger.info("[{}] Rejected: {} at {} (company blocklist)", job.source, job.title, job.company)
-            _reject(job, f"company blocklist: '{job.company}'")
-            continue
-
-        # 2. Hard Germany/Berlin eligibility. Source-provided legacy scopes
-        # never bypass this evaluator.
-        if not passes_location_filter(job):
-            _reject(job, f"eligibility: {'; '.join(job.eligibility_reasons)}")
-            continue
-
-        # 3. Role filter
-        if not passes_role_filter(job):
-            _reject(job, f"role: no dev keyword in title '{job.title}'")
-            continue
-
-        # 3b. Stack compatibility filter — reject pure incompatible-stack roles
-        if not passes_stack_filter(job):
-            _reject(job, f"stack: incompatible stack in '{job.title}'")
-            continue
-
-        # 4. Language filter
-        if not passes_language_filter(job):
-            _reject(job, "language: non-English content detected")
-            continue
-
-        # 4b. Senior-only compatibility filter (the profile gate already
-        # rejects junior/entry-level roles).
-        if not _passes_senior_filter(job):
-            _reject(job, f"senior filter: title '{job.title}' has junior/mid-level")
-            continue
-
-        # 4c. Salary filter (optional, off by default)
-        if not _passes_salary_filter(job):
-            _reject(job, f"salary filter: '{job.salary}' below min {config.MIN_SALARY_EUR}")
-            continue
-
-        # 5. Recency filter — reject jobs older than max_age_days
-        #    Per-source override: check SOURCE_MAX_AGE_DAYS first
-        source_max = config.SOURCE_MAX_AGE_DAYS.get(job.source)
-        if source_max is not None:
-            effective_max_age = source_max
-        elif max_age_days is not None:
-            effective_max_age = max_age_days
-        else:
-            effective_max_age = config.MAX_JOB_AGE_DAYS
-        if job.posted_at is not None:
-            posted = job.posted_at
-            if posted.tzinfo is None:
-                posted = posted.replace(tzinfo=timezone.utc)
-            age = datetime.now(timezone.utc) - posted
-            if age > timedelta(days=effective_max_age):
-                age_days = age.total_seconds() / 86400
-                logger.debug(
-                    "Recency REJECT ({:.0f}d old, max {}d): {}",
-                    age_days, effective_max_age, job.title,
-                )
-                _reject(job, f"recency: {age_days:.0f}d old (max {effective_max_age}d)")
-                continue
-
-        # 6. NGO classification (enrichment — never rejects)
-        classify_ngo(job)
-
-        # 6b. Match score (enrichment — may reject if below MINIMUM_MATCH_SCORE)
-        try:
-            job.match_score = compute_match_score(job)
-        except Exception as exc:
-            logger.warning("Match scoring failed for '{}': {} — defaulting to 0", job.title, exc)
-            job.match_score = 0
-
-        # 6c. Minimum match score filter (optional, default 0 = accept all)
-        if config.MINIMUM_MATCH_SCORE > 0 and job.match_score < config.MINIMUM_MATCH_SCORE:
-            _reject(job, f"match score: {job.match_score}% < minimum {config.MINIMUM_MATCH_SCORE}%")
-            continue
-
-        seen_content_hashes.add(job.content_hash)
-        accepted.append(job)
-
-    # Sort before applying the company cap so the strongest roles win instead
-    # of whichever two happened to be newest in an ATS feed.
-    accepted.sort(key=lambda j: j.match_score, reverse=True)
-    capped: list[Job] = []
-    for job in accepted:
-        company_key = job.company.lower().strip()
-        if company_counts[company_key] >= _MAX_JOBS_PER_COMPANY:
-            if verbose:
-                rejected.append((job, f"company cap: stronger {_MAX_JOBS_PER_COMPANY} roles kept"))
-            continue
-        company_counts[company_key] += 1
-        capped.append(job)
-    accepted = capped
-    logger.info("Filters: {} in → {} accepted", len(jobs), len(accepted))
-    logger.debug(
-        "[match] {} jobs accepted, {} with match_score set",
-        len(accepted), sum(1 for j in accepted if j.match_score is not None),
+    summary = run_filter_pipeline(
+        jobs,
+        max_age_days=max_age_days,
+        verbose=verbose,
+        settings=config,
+        max_jobs_per_company=_MAX_JOBS_PER_COMPANY,
     )
-
-    # Print verbose rejection table when requested
-    if verbose and rejected:
-        _print_rejections(rejected)
-
-    return accepted
+    if verbose and summary.verbose_rejections:
+        _print_rejections(rejection_pairs(summary))
+    return summary.accepted_jobs
 
 
 def _print_rejections(rejected: list[tuple[Job, str]]) -> None:
@@ -399,20 +232,23 @@ async def run_scan(
     memory well within Docker's 512 MB cgroup limit.
     """
 
+    scan_id = uuid.uuid4().hex
+    scan_started_at = utc_now()
     all_jobs: list[Job] = []
+    outcomes: list[SourceFetchOutcome] = []
     batch_size = config.MAX_CONCURRENT_SOURCES
-    total_raw = 0
-    source_counts: dict[str, int] = {}
 
     for i in range(0, len(sources), batch_size):
         batch_sources = sources[i : i + batch_size]
-        results = await asyncio.gather(*[s.safe_fetch() for s in batch_sources])
-        for source, batch in zip(batch_sources, results):
-            total_raw += len(batch)
-            all_jobs.extend(batch)
-            source_counts[source.name] = len(batch)
+        results = await asyncio.gather(
+            *[_fetch_source_outcome(source) for source in batch_sources]
+        )
+        for outcome in results:
+            outcomes.append(outcome)
+            all_jobs.extend(outcome.jobs)
         del results  # free HTTP response data eagerly
 
+    total_raw = len(all_jobs)
     logger.info("Total raw jobs fetched: {}", total_raw)
 
     if config.ENABLE_ATS_SNIFFING:
@@ -423,45 +259,182 @@ async def run_scan(
         except Exception:
             logger.exception("ATS sniffing failed; continuing scan")
 
-    # Apply filters
-    filtered = _apply_filters(all_jobs, max_age_days=max_age_days, verbose=verbose)
-    try:
-        from health import set_scan_summary
-        set_scan_summary({
-            "raw": total_raw,
-            "eligible_role_matches": len(filtered),
-            "rejected": total_raw - len(filtered),
-            "immediate": sum(job.notification_tier == "immediate" for job in filtered),
-            "digest": sum(job.notification_tier == "digest" for job in filtered),
-            "diagnostic": sum(job.notification_tier == "none" for job in filtered),
-            "sources": source_counts,
-        })
-    except Exception:
-        pass
+    filter_summary = run_filter_pipeline(
+        all_jobs,
+        max_age_days=max_age_days,
+        verbose=verbose,
+        settings=config,
+        max_jobs_per_company=_MAX_JOBS_PER_COMPANY,
+    )
+    if verbose and filter_summary.verbose_rejections:
+        _print_rejections(rejection_pairs(filter_summary))
+    filtered = filter_summary.accepted_jobs
+    scan_summary = _build_scan_summary(
+        scan_id=scan_id,
+        started_at=scan_started_at,
+        outcomes=outcomes,
+        filter_summary=filter_summary,
+    )
     del all_jobs  # free unfiltered list
 
     if dry_run:
         # Print results and exit — don't touch DB or send notifications
+        scan_summary.completed_at = utc_now()
+        _publish_scan_health(scan_summary)
         _print_jobs(filtered)
         return filtered
 
     # Deduplicate against DB
     await init_db()
     new_jobs = await filter_unseen(filtered)
+    for job in new_jobs:
+        metrics = scan_summary.sources.get(job.source or "unknown")
+        if metrics is not None:
+            metrics.unseen_count += 1
     del filtered  # free pre-dedup list
 
+    saved_jobs: list[Job] = []
     if new_jobs:
-        await save_jobs(new_jobs)
-        logger.info("{} new jobs saved to database", len(new_jobs))
+        saved_jobs = await save_jobs(new_jobs)
+        logger.info("{} new jobs saved to database", len(saved_jobs))
 
+        for job in saved_jobs:
+            metrics = scan_summary.sources.get(job.source or "unknown")
+            if metrics is None:
+                continue
+            metrics.saved_count += 1
+            route = (
+                job.notification_tier
+                if job.notification_tier in {"immediate", "digest"}
+                else "diagnostic"
+            )
+            metrics.routing_counts[route] += 1
+
+    scan_summary.completed_at = utc_now()
+    scan_summary.validate_accounting()
+    await persist_scan_metrics(scan_summary)
+    source_health = await get_latest_source_statuses()
+    _publish_scan_health(scan_summary, source_health)
+
+    if saved_jobs:
         # Only strong matches alert immediately. Borderline matches stay
         # unnotified until the scheduled digest; low matches remain as
         # diagnostics and never notify.
-        await _send_notifications(new_jobs)
+        await _send_notifications(saved_jobs)
     else:
         logger.info("No new jobs this cycle")
 
-    return new_jobs
+    return saved_jobs
+
+
+async def _fetch_source_outcome(source: object) -> SourceFetchOutcome:
+    """Use typed outcomes for real sources and adapt legacy list-only mocks."""
+
+    if isinstance(source, BaseSource):
+        try:
+            return await source.fetch_outcome()
+        except Exception as exc:
+            # BaseSource.fetch_outcome is defensive, but retaining this guard
+            # keeps a broken implementation isolated from sibling sources.
+            name = getattr(source, "name", source.__class__.__name__.lower())
+            now = utc_now()
+            status = classify_source_exception(exc)
+            issue = SanitizedSourceIssue.from_error(exc, status)
+            return SourceFetchOutcome(name, [], status, now, now, 0, (issue,))
+
+    name = str(getattr(source, "name", source.__class__.__name__.lower()))
+    started_at = utc_now()
+    started_clock = time.perf_counter()
+    try:
+        safe_fetch = getattr(source, "safe_fetch")
+        jobs = await safe_fetch()
+        if not isinstance(jobs, list):
+            raise TypeError("legacy source safe_fetch result is not a list")
+        status = SourceStatus.HEALTHY if jobs else SourceStatus.ZERO_RESULTS
+        issues = ()
+    except Exception as exc:
+        status = classify_source_exception(exc)
+        issue = SanitizedSourceIssue.from_error(exc, status)
+        issues = (issue,)
+        jobs = []
+        logger.error("[{}] Legacy fetch failed ({}): {}", name, status.value, issue.explanation)
+    completed_at = utc_now()
+    return SourceFetchOutcome(
+        source=name,
+        jobs=jobs,
+        status=status,
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=max(0, round((time.perf_counter() - started_clock) * 1000)),
+        issues=issues,
+    )
+
+
+def _build_scan_summary(
+    *,
+    scan_id: str,
+    started_at: datetime,
+    outcomes: list[SourceFetchOutcome],
+    filter_summary: FilterRunSummary,
+) -> ScanSummary:
+    """Merge fetch outcomes with the counts from the single global filter pass."""
+
+    metrics_by_source: dict[str, SourceFunnelMetrics] = {}
+    for outcome in outcomes:
+        filtered = filter_summary.per_source.get(outcome.source)
+        metrics_by_source[outcome.source] = SourceFunnelMetrics(
+            source=outcome.source,
+            started_at=outcome.started_at,
+            completed_at=outcome.completed_at,
+            duration_ms=outcome.duration_ms,
+            status=outcome.status,
+            raw_count=filtered.raw_count if filtered else 0,
+            accepted_count=filtered.accepted_count if filtered else 0,
+            rejection_counts=(
+                dict(filtered.rejection_counts) if filtered else {}
+            ),
+            issue_count=outcome.issue_count,
+            sanitized_error=sanitize_source_error(outcome.sanitized_error),
+        )
+
+    # Job.source is the attribution authority. Normally it matches the source
+    # instance name; this fallback preserves accounting for legacy adapters.
+    for source, filtered in filter_summary.per_source.items():
+        if source in metrics_by_source:
+            continue
+        metrics_by_source[source] = SourceFunnelMetrics(
+            source=source,
+            started_at=started_at,
+            completed_at=utc_now(),
+            duration_ms=0,
+            status=SourceStatus.HEALTHY,
+            raw_count=filtered.raw_count,
+            accepted_count=filtered.accepted_count,
+            rejection_counts=dict(filtered.rejection_counts),
+        )
+
+    summary = ScanSummary(
+        scan_id=scan_id,
+        started_at=started_at,
+        completed_at=utc_now(),
+        sources=metrics_by_source,
+    )
+    summary.validate_accounting()
+    return summary
+
+
+def _publish_scan_health(
+    summary: ScanSummary,
+    source_health: list[dict] | None = None,
+) -> None:
+    """Publish only bounded, sanitized counts to the in-process health state."""
+
+    try:
+        from health import set_scan_summary
+
+        set_scan_summary(summary.to_health_dict(source_health))
+    except Exception:
+        logger.exception("Failed to publish scan health summary")
 
 
 async def _send_notifications(jobs: list[Job]) -> None:
@@ -563,6 +536,7 @@ async def _show_stats() -> None:
     notification_tiers = stats.get("notification_tiers", {})
     top_companies = stats["top_companies"]
     last_fetched = stats["last_fetched_at"]
+    source_health = stats.get("source_health", [])
 
     # Last scan age
     if last_fetched:
@@ -606,6 +580,22 @@ async def _show_stats() -> None:
         for src, count in sources.items():
             bar = "█" * min(count, 40)
             print(f"      {src:<20s} {count:>4d}  {bar}")
+
+    if source_health:
+        print(f"\n  {'─'*50}")
+        print("  🩺  Latest source health:")
+        print("      source             status           raw  accepted  saved  last usable")
+        for item in source_health[:20]:
+            source = str(item.get("source", "unknown"))[:18]
+            status = str(item.get("status", "unknown_error"))[:15]
+            last_usable = item.get("last_usable_at") or "never"
+            if last_usable != "never":
+                last_usable = str(last_usable).replace("+00:00", "Z")[:16]
+            print(
+                f"      {source:<18s} {status:<15s} "
+                f"{int(item.get('raw', 0)):>5d} {int(item.get('accepted', 0)):>9d} "
+                f"{int(item.get('saved', 0)):>6d}  {last_usable}"
+            )
 
     if top_companies:
         print(f"\n  {'─'*50}")
@@ -737,10 +727,32 @@ def main():
 
 # ── Async entry point — single event loop for everything ────────────────
 
+async def _restore_persisted_health_state() -> None:
+    """Restore the latest persisted production scan into in-memory health."""
+
+    try:
+        persisted = await get_latest_scan_summary()
+        if not persisted:
+            return
+        completed_at = persisted.pop("completed_at", None)
+        persisted.pop("scan_id", None)
+        from health import set_last_scan, set_scan_summary
+
+        set_scan_summary(persisted)
+        if completed_at:
+            set_last_scan(datetime.fromisoformat(str(completed_at).replace("Z", "+00:00")))
+        logger.info("Restored persisted scan health from {}", completed_at)
+    except Exception:
+        logger.exception("Failed to restore persisted scan health; continuing startup")
+
 async def _async_main(sources: list) -> None:
     """Run scheduler, Discord bot, health server all in one event loop."""
     # Initialize DB
     await init_db()
+
+    # Restore the most recent completed production scan before the first new
+    # startup scan finishes, so /health remains informative during startup.
+    await _restore_persisted_health_state()
 
     # Start health HTTP server
     health_runner = None
@@ -1160,6 +1172,37 @@ async def _scheduled_health_check() -> None:
 
 # ── Daily status summary ──────────────────────────────────────────────────
 
+def _daily_status_details(summary: dict) -> tuple[str, str]:
+    """Return bounded rejection and degraded-source text for daily status."""
+
+    rejection_counts = summary.get("rejection_counts", {}) or {}
+    top_rejections = sorted(
+        (
+            (str(code).replace("_", " "), int(count))
+            for code, count in rejection_counts.items()
+            if int(count) > 0
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )[:5]
+    rejection_text = (
+        " · ".join(f"`{name}` {count}" for name, count in top_rejections)
+        if top_rejections
+        else "None recorded"
+    )
+
+    source_health = summary.get("source_health", {}) or {}
+    degraded = sorted(
+        str(name)
+        for name, item in source_health.items()
+        if isinstance(item, dict)
+        and item.get("status") not in {"healthy", "zero_results"}
+    )
+    displayed = degraded[:5]
+    degraded_text = " · ".join(f"`{name[:50]}`" for name in displayed)
+    if len(degraded) > 5:
+        degraded_text += f" · +{len(degraded) - 5} more"
+    return rejection_text[:1000], (degraded_text or "None")[:1000]
+
 async def send_daily_status_summary() -> None:
     """Send one lightweight Discord status embed per day.
 
@@ -1193,7 +1236,9 @@ async def send_daily_status_summary() -> None:
             last_scan_text = "No successful scan recorded yet"
 
         raw = summary.get("raw", 0)
-        accepted = summary.get("eligible_role_matches", 0)
+        accepted = summary.get("accepted", summary.get("eligible_role_matches", 0))
+        unseen = summary.get("unseen", 0)
+        saved = summary.get("saved", 0)
         rejected = summary.get("rejected", 0)
         immediate = summary.get("immediate", 0)
         digest = summary.get("digest", 0)
@@ -1202,6 +1247,7 @@ async def send_daily_status_summary() -> None:
         source_counts = summary.get("sources", {}) or {}
         top_sources = sorted(source_counts.items(), key=lambda item: item[1], reverse=True)[:8]
         source_lines = [f"`{name}` {count}" for name, count in top_sources]
+        rejection_text, degraded_text = _daily_status_details(summary)
 
         webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
         embed = DiscordEmbed(
@@ -1219,6 +1265,8 @@ async def send_daily_status_summary() -> None:
             value=(
                 f"`{raw}` raw\n"
                 f"`{accepted}` accepted\n"
+                f"`{unseen}` unseen\n"
+                f"`{saved}` saved\n"
                 f"`{rejected}` rejected"
             ),
             inline=True,
@@ -1246,6 +1294,16 @@ async def send_daily_status_summary() -> None:
                 value=" · ".join(source_lines),
                 inline=False,
             )
+        embed.add_embed_field(
+            name="Top rejection reasons",
+            value=rejection_text,
+            inline=False,
+        )
+        embed.add_embed_field(
+            name="Failed / partial sources",
+            value=degraded_text,
+            inline=False,
+        )
         embed.set_footer(text="Job Tracker Bot · Daily Status")
         embed.set_timestamp(datetime.now(timezone.utc).isoformat())
         webhook.add_embed(embed)

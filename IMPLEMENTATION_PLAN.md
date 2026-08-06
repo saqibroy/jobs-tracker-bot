@@ -163,24 +163,24 @@ Notifier modules and provider-specific adapters are not expected to change in Ph
 
 ## Tasks
 
-- [ ] Add the typed scan contracts and stable enum values above without adding a production dependency.
-- [ ] Add a `BaseSource` outcome method that categorizes complete-source results and exceptions while preserving the existing list-returning `fetch()` and `safe_fetch()` compatibility paths.
-- [ ] Adapt `run_scan()` to consume typed outcomes for real sources and synthesize outcomes for legacy/mock sources that only provide `safe_fetch()`.
-- [ ] Extract filter orchestration to `filters/pipeline.py`; keep compatibility wrappers in `main.py` for existing callers and tests.
-- [ ] Emit exactly one primary rejection result per raw job while preserving filter order, human-readable `--verbose`/`--explain` output, eligibility behavior, scoring, and the company cap.
-- [ ] Aggregate raw, rejection, accepted, unseen, saved, and routing counts overall and per source without retaining rejected `Job` objects unless verbose output is enabled.
-- [ ] Change `save_jobs()` to return the jobs actually inserted; callers that ignore the return value remain compatible, and scan accounting/notifications use only inserted rows.
-- [ ] Add an idempotent `source_scan_runs` table keyed by a shared scan identifier and source, with timestamps, duration, status, stage counts, JSON rejection/routing counts, component-error count, and a sanitized bounded error message.
-- [ ] Add indexes for latest-run/source lookups and delete history older than 30 days after successful metric persistence.
-- [ ] Keep dry-run behavior read-only: no job rows, scan-history rows, or notification state may be written.
-- [ ] Add storage queries for the latest overall scan, latest source attempts, and all three timestamp semantics.
-- [ ] Restore the latest persisted health summary during scheduler startup before the first new scan completes.
-- [ ] Expand `/health` additively while preserving existing keys used by deployment: `last_scan_summary.raw`, `eligible_role_matches`, `rejected`, `immediate`, `digest`, and `diagnostic`.
-- [ ] Add compact `unseen`, `saved`, rejection totals, and per-source operational health using `last_usable_at`; retain diagnostic timestamps without exposing secrets.
-- [ ] Extend `--stats` with a bounded latest-source health table.
-- [ ] Extend the daily Discord status with aggregate funnel counts, top rejection reasons, and at most five failed/partial source names.
-- [ ] Sanitize persisted/displayed exception text by removing URL query/fragment data, redacting sensitive key/value patterns, collapsing control characters, and truncating to 300 characters.
-- [ ] Add focused tests for contracts, complete-source status classification, compatibility, every rejection code, per-source accounting, insert counts, migration idempotency, cleanup, dry-run immutability, health restoration/compatibility, stats output, and bounded daily status output.
+- [x] Add the typed scan contracts and stable enum values above without adding a production dependency.
+- [x] Add a `BaseSource` outcome method that categorizes complete-source results and exceptions while preserving the existing list-returning `fetch()` and `safe_fetch()` compatibility paths.
+- [x] Adapt `run_scan()` to consume typed outcomes for real sources and synthesize outcomes for legacy/mock sources that only provide `safe_fetch()`.
+- [x] Extract filter orchestration to `filters/pipeline.py`; keep compatibility wrappers in `main.py` for existing callers and tests.
+- [x] Emit exactly one primary rejection result per raw job while preserving filter order, human-readable `--verbose`/`--explain` output, eligibility behavior, scoring, and the company cap.
+- [x] Aggregate raw, rejection, accepted, unseen, saved, and routing counts overall and per source without retaining rejected `Job` objects unless verbose output is enabled.
+- [x] Change `save_jobs()` to return the jobs actually inserted; callers that ignore the return value remain compatible, and scan accounting/notifications use only inserted rows.
+- [x] Add an idempotent `source_scan_runs` table keyed by a shared scan identifier and source, with timestamps, duration, status, stage counts, JSON rejection/routing counts, component-error count, and a sanitized bounded error message.
+- [x] Add indexes for latest-run/source lookups and delete history older than 30 days after successful metric persistence.
+- [x] Keep dry-run behavior read-only: no job rows, scan-history rows, or notification state may be written.
+- [x] Add storage queries for the latest overall scan, latest source attempts, and all three timestamp semantics.
+- [x] Restore the latest persisted health summary during scheduler startup before the first new scan completes.
+- [x] Expand `/health` additively while preserving existing keys used by deployment: `last_scan_summary.raw`, `eligible_role_matches`, `rejected`, `immediate`, `digest`, and `diagnostic`.
+- [x] Add compact `unseen`, `saved`, rejection totals, and per-source operational health using `last_usable_at`; retain diagnostic timestamps without exposing secrets.
+- [x] Extend `--stats` with a bounded latest-source health table.
+- [x] Extend the daily Discord status with aggregate funnel counts, top rejection reasons, and at most five failed/partial source names.
+- [x] Sanitize persisted/displayed exception text by removing URL query/fragment data, redacting sensitive key/value patterns, collapsing control characters, and truncating to 300 characters.
+- [x] Add focused tests for contracts, complete-source status classification, compatibility, every rejection code, per-source accounting, insert counts, migration idempotency, cleanup, dry-run immutability, health restoration/compatibility, stats output, and bounded daily status output.
 
 ## Acceptance criteria
 
@@ -1011,11 +1011,21 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 1A — Core source and funnel observability
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-06
+- Commit: `feat: add core source scan observability` (this Phase 1A commit)
 - Tests:
-- Peak memory:
+  - Focused: `python -m pytest tests/v2/test_observability.py -q` — 40 passed.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 74 passed.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 74 passed.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30 --tb=no` — 951 passed, 104 failed, 10 warnings; the failing node IDs exactly match the Phase 0 baseline, with no new failures.
+- Peak memory: 322.5 MiB / 512 MiB (62.98%), 2.8 MiB above the 319.7 MiB Phase 0 baseline and 107.5 MiB below the 430 MiB target.
 - Notes:
+  - Final image: `job-bot:phase1a`, `sha256:14a52974e9378b1700f7738471d9b387e9649e05eefec218b1b62f11cb32b778`, 373,528,164 bytes.
+  - Final isolated startup scan completed in 57.2 seconds: 11,592 raw, 39 accepted, 39 unseen, 39 actually saved, 8 immediate, 31 digest, and 0 diagnostic. Overall and all 13 per-source accounting invariants passed.
+  - Live source outcomes distinguished JSON-LD's healthy zero results from StepStone's complete-source `unknown_error`; the remaining default sources returned usable results. Detailed mixed board/page/query partial-success instrumentation remains deferred to Phase 1B.
+  - Dry-run proof used both an absent database and an existing sentinel database. The absent file was not created, and the existing file's SHA-256 and mtime remained unchanged after both Arbeitnow and all-source `--explain` scans.
+  - `/health` retained all deployment-facing fields and added accepted/unseen/saved, rejection totals, and compact source health. A seeded restart restored the persisted summary and operational timestamps before the startup scan completed.
+  - The source-health `--stats` table and bounded daily status formatting were verified; stored/displayed diagnostics are sanitized and limited to 300 characters.
 
 ## Phase 1B — Multi-board and multi-request partial-success reporting
 
