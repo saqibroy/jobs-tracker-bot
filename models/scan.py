@@ -47,6 +47,7 @@ class RejectionCode(str, Enum):
     DUPLICATE_IN_MEMORY = "duplicate_in_memory"
     COMPANY_BLOCKLIST = "company_blocklist"
     LOCATION = "location"
+    EMPLOYMENT_RELATIONSHIP = "employment_relationship"
     ROLE = "role"
     STACK = "stack"
     LANGUAGE = "language"

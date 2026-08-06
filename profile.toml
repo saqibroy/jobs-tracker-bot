@@ -8,8 +8,7 @@ accepted_languages = ["en"]
 primary = ["full stack", "fullstack", "full-stack", "frontend", "front-end", "front end"]
 secondary = ["backend", "back-end", "back end", "software engineer", "software developer", "web engineer", "web developer", "product engineer"]
 reject = [
-  "intern", "internship", "working student", "werkstudent", "junior", "associate",
-  "entry level", "ai training",
+  "junior", "associate", "entry level", "ai training",
   "engineering manager", "technical program manager", "product manager", "project manager",
   "mobile engineer", "ios", "android", "devops", "site reliability", "sre",
   "security engineer", "security lead", "data scientist", "data engineer",
@@ -17,6 +16,14 @@ reject = [
   "qa engineer", "test engineer", "embedded", "firmware", "desktop application",
   "desktop applications", "sales", "marketing", "recruiter"
 ]
+
+[employment]
+accepted_relationships = ["employee", "contract_employee", "freelance", "unknown"]
+rejected_relationships = ["working_student", "internship"]
+accepted_schedules = ["full_time", "part_time", "unknown"]
+freelance_permission_required = true
+preferred_weekly_hours_min = 15
+preferred_weekly_hours_max = 40
 
 [stack]
 core = [

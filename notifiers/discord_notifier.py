@@ -9,6 +9,7 @@ from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
 from loguru import logger
 
 import config
+from filters.employment import employment_display_lines
 from models.job import Job
 from filters.match import match_score_bar
 from notifiers.base import BaseNotifier
@@ -211,6 +212,8 @@ class DiscordNotifier(BaseNotifier):
 
         if job.eligibility_reasons:
             desc_lines.append(f"✅  {job.eligibility_reasons[0]}")
+
+        desc_lines.extend(employment_display_lines(job))
 
         # Salary (if available)
         if job.salary:

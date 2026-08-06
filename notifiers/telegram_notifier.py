@@ -19,6 +19,7 @@ from telegram.error import RetryAfter, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 import config
+from filters.employment import employment_display_lines
 from models.job import Job
 from filters.match import match_score_bar
 from notifiers.base import BaseNotifier
@@ -253,6 +254,8 @@ class TelegramNotifier(BaseNotifier):
 
         if job.salary:
             lines.append(f"💰 {_escape_html(job.salary)}")
+
+        lines.extend(_escape_html(line) for line in employment_display_lines(job))
 
         bar = match_score_bar(job.match_score)
         lines.append(f"📊 {job.match_score}% match {bar}")

@@ -27,6 +27,10 @@ from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
 import config
+from filters.employment import (
+    employment_display_lines,
+    persisted_employment_display_lines,
+)
 from filters.pipeline import (
     MAX_JOBS_PER_COMPANY,
     passes_company_blocklist,
@@ -213,6 +217,10 @@ def _print_rejections(rejected: list[tuple[Job, str]]) -> None:
         print(f"  ❌ [{i}] {job.title}")
         print(f"      🏢  {job.company}")
         print(f"      📍  {job.location} (scope={job.remote_scope or 'unknown'})")
+        for line in employment_display_lines(job):
+            print(f"      {line}")
+        if job.employment_reasons:
+            print(f"      🔎  {'; '.join(job.employment_reasons[:4])}")
         print(f"      📅  {age_str}  |  🌍  {job.source}")
         print(f"      ⛔  Reason: {reason}")
         print()
@@ -281,7 +289,7 @@ async def run_scan(
         # Print results and exit — don't touch DB or send notifications
         scan_summary.completed_at = utc_now()
         _publish_scan_health(scan_summary)
-        _print_jobs(filtered)
+        _print_jobs(filtered, explain=verbose)
         return filtered
 
     # Deduplicate against DB
@@ -486,7 +494,7 @@ def _format_age(posted_at: datetime | None) -> str:
     return f"{days}d ago"
 
 
-def _print_jobs(jobs: list[Job]) -> None:
+def _print_jobs(jobs: list[Job], *, explain: bool = False) -> None:
     """Pretty-print jobs to stdout (for --dry-run)."""
     if not jobs:
         print("\n  No jobs matched your filters.\n")
@@ -507,6 +515,10 @@ def _print_jobs(jobs: list[Job]) -> None:
         print(f"      🏢  {job.company}")
         print(f"      📍  {job.location} ({job.remote_scope or 'unknown'})")
         print(f"      🧭  {job.workplace_type} · {job.notification_tier}")
+        for line in employment_display_lines(job):
+            print(f"      {line}")
+        if explain and job.employment_reasons:
+            print(f"      🔎  {'; '.join(job.employment_reasons[:4])}")
         if job.eligibility_reasons:
             print(f"      ✅  {'; '.join(job.eligibility_reasons)}")
         if job.match_score > 0:
@@ -1103,10 +1115,14 @@ async def _scheduled_digest() -> None:
                     }.get(r.get("source", ""), "🌐")
                     score = r.get("match_score", 0)
                     workplace = r.get("workplace_type", "unknown")
+                    employment_lines = persisted_employment_display_lines(r)
+                    employment_text = "".join(
+                        f"\n> {line}" for line in employment_lines
+                    )
                     job_lines.append(
                         f"{source_icon} **[{r['title']}]({r['url']})**\n"
                         f"> 🏢 {r['company']}  ·  `{r['source']}`  ·  "
-                        f"📊 {score}%  ·  🧭 {workplace}"
+                        f"📊 {score}%  ·  🧭 {workplace}{employment_text}"
                     )
 
                 description = "\n\n".join(job_lines)

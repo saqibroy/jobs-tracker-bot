@@ -402,14 +402,14 @@ Add `employment_relationship` as a stable `RejectionCode` and insert one employm
 
 ## Tasks
 
-- [ ] Add the independent `Job` fields, typed literals/validators, and shared classifier with structured-over-heuristic inputs ready for Phase 2B.
-- [ ] Add the `[employment]` profile section, configuration validation, derived freelance-permission marker, and the single employment compatibility gate/rejection code described above.
-- [ ] Add deterministic English/German relationship, schedule, term, hours, duration, and rate heuristics without a new dependency.
-- [ ] Add explicit, idempotent SQLite columns for all persisted Phase 2A fields; JSON-encode `employment_reasons`; update every save/deserialization/query path that reconstructs jobs; give old rows safe unknown/`None`/false defaults.
-- [ ] Show known employment dimensions, weekly hours, and the freelance-permission marker in normal CLI job output and explain output, Discord job formatting, and Telegram job formatting. Keep output compact and omit unknown/empty values.
-- [ ] Preserve existing `none`/`digest`/`immediate` tier calculation, database notification state, channel selection, send timing, and delivery behavior. Phase 2A must not separately route or suppress freelance jobs.
-- [ ] Add focused model, classifier, policy, pipeline-accounting, migration, persistence, CLI, Discord, Telegram, and notification-routing regression tests.
-- [ ] Update only the Phase 2A checklist and progress entry after all Phase 2A verification passes; commit as `feat: classify employment relationships and schedules` and stop for review.
+- [x] Add the independent `Job` fields, typed literals/validators, and shared classifier with structured-over-heuristic inputs ready for Phase 2B.
+- [x] Add the `[employment]` profile section, configuration validation, derived freelance-permission marker, and the single employment compatibility gate/rejection code described above.
+- [x] Add deterministic English/German relationship, schedule, term, hours, duration, and rate heuristics without a new dependency.
+- [x] Add explicit, idempotent SQLite columns for all persisted Phase 2A fields; JSON-encode `employment_reasons`; update every save/deserialization/query path that reconstructs jobs; give old rows safe unknown/`None`/false defaults.
+- [x] Show known employment dimensions, weekly hours, and the freelance-permission marker in normal CLI job output and explain output, Discord job formatting, and Telegram job formatting. Keep output compact and omit unknown/empty values.
+- [x] Preserve existing `none`/`digest`/`immediate` tier calculation, database notification state, channel selection, send timing, and delivery behavior. Phase 2A must not separately route or suppress freelance jobs.
+- [x] Add focused model, classifier, policy, pipeline-accounting, migration, persistence, CLI, Discord, Telegram, and notification-routing regression tests.
+- [x] Update only the Phase 2A checklist and progress entry after all Phase 2A verification passes; commit as `feat: classify employment relationships and schedules` and stop for review.
 
 ## Acceptance criteria
 
@@ -1166,11 +1166,26 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 2A — Employment model and classification
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-07
+- Commit: `feat: classify employment relationships and schedules` (this Phase 2A commit)
 - Tests:
-- Peak memory:
+  - Focused: `python -m pytest tests/v2/test_employment.py tests/v2/test_employment_storage_presentation.py -q` — 85 passed.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 189 passed.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 189 passed.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 1,066 passed, 104 failed; a JUnit node-ID comparison against the recorded Phase 0 list found 0 new and 0 missing failing IDs.
+- Peak memory: 335.3 MiB / 512 MiB (65.49%), 10.1 MiB above the 325.2 MiB Phase 1B reference and 94.7 MiB below the 430 MiB target.
 - Notes:
+  - Files changed: `models/job.py`, `models/scan.py`, `filters/employment.py`, `filters/profile.py`, `filters/pipeline.py`, `filters/role.py`, `profile.toml`, `storage/database.py`, `main.py`, `notifiers/discord_notifier.py`, `notifiers/telegram_notifier.py`, `tests/v2/test_employment.py`, `tests/v2/test_employment_storage_presentation.py`, and this progress entry.
+  - Added independent relationship, schedule, term, weekly-hours, duration, rate, bounded evidence, and freelance-permission fields. The shared classifier accepts partial structured inputs independently, preserves structured authority per dimension, uses title/tags before description, and leaves genuine heuristic conflicts unknown.
+  - Added one validated profile-driven employment policy and one terminal `employment_relationship` gate after location and before role. Student/intern terms were removed from role configuration and the pipeline's role/seniority ownership; the standalone legacy role helper remains compatible while the global pipeline uses the employment-free role profile gate.
+  - Added eight explicit idempotent SQLite columns. A representative Phase 1 database migrated twice safely; old rows reconstructed with unknown/`None`/empty/false defaults, and all independent combinations plus JSON reasons and the permission marker round-tripped.
+  - CLI normal/explain output, scheduled Discord digest rows, Discord alerts, and Telegram alerts now show compact readable employment metadata and the informational freelance-permission marker while omitting unknown/empty fields.
+  - Explicit routing tests proved otherwise identical employee/freelance jobs retain the same score and notification tier, and the permission marker does not suppress either Discord or Telegram delivery. Live startup routing remained 8 immediate, 31 digest, and 0 diagnostic.
+  - Final image: `job-bot:phase2a`, `sha256:af0f4ef004e83a35240a126b33c032c41bdba3620b6a4ceafc4de3fef198a5b4`, 373,986,067 bytes.
+  - Live Arbeitnow dry-run: 175 raw / 2 accepted. The all-default explain/diagnostic scan: 11,595 raw / 39 accepted / 11,556 rejected, including 83 employment rejections (47 internship and 36 working-student). Accepted metadata was relationship 1 freelance / 38 unknown, schedule 7 full-time / 32 unknown, and term 2 permanent / 37 unknown; 1 accepted freelance job carried the permission marker. Overall and all per-source accounting invariants passed.
+  - Dry-run proof: an absent database path remained absent. An existing 25-byte sentinel retained SHA-256 `11aceabfd45ff328287fd5323abaca4359e5fb582351b84d41954886968d74e2` and identical nanosecond mtime before/after all-source `--explain`.
+  - The isolated service used 512 MiB, temporary database/logs, no `.env`, disabled Discord/Telegram/Zoho/status sends, and loopback-only `127.0.0.1:18082`. Startup completed in approximately 51.4 seconds with 39 rows saved. `/health` retained all deployment-facing keys, exposed all funnel/source fields, reported Personio `partial_success` with one issue, StepStone complete failure with five issues, JSON-LD zero results, and 10 other healthy sources.
+  - Known limitation: Phase 2A intentionally maps no native provider fields, so cautious positive-evidence rules leave most accepted relationships/schedules/terms unknown. Provider audits and structured ATS/source mappings remain deferred to Phase 2B, which was not started.
 
 ## Phase 2B — Structured source employment metadata
 

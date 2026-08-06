@@ -10,6 +10,7 @@ import re
 
 from loguru import logger
 
+from filters.employment import classify_employment
 from filters.profile import profile_list
 from models.job import Job
 
@@ -38,7 +39,6 @@ def role_rejection_reason(job: Job) -> str | None:
     if _contains(
         seniority_text,
         [
-            "intern", "internship", "working student", "werkstudent",
             "junior", "associate", "entry level", "entry-level",
         ],
     ):
@@ -55,9 +55,25 @@ def role_rejection_reason(job: Job) -> str | None:
     return "role is not full-stack/frontend or a strongly aligned backend/web role"
 
 
-def passes_role_filter(job: Job) -> bool:
+def passes_role_profile_filter(job: Job) -> bool:
+    """Apply only role/stack-title policy, excluding employment categories."""
+
     reason = role_rejection_reason(job)
     if reason:
         logger.debug("Role REJECT ({}): {}", reason, job.title)
         return False
     return True
+
+
+def passes_role_filter(job: Job) -> bool:
+    """Compatibility wrapper for callers outside the terminal pipeline.
+
+    The global pipeline uses ``passes_role_profile_filter`` after its dedicated
+    employment gate. This wrapper preserves the historical standalone helper's
+    student/intern result without restoring role-gate ownership in the pipeline.
+    """
+
+    classify_employment(job)
+    if job.employment_relationship in {"working_student", "internship"}:
+        return False
+    return passes_role_profile_filter(job)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping
 
 import aiosqlite
 from loguru import logger
@@ -41,6 +42,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     eligibility_status TEXT DEFAULT 'unknown',
     eligibility_reasons TEXT DEFAULT '[]',
     notification_tier TEXT DEFAULT 'none',
+    employment_relationship TEXT NOT NULL DEFAULT 'unknown',
+    work_schedule TEXT NOT NULL DEFAULT 'unknown',
+    contract_term TEXT NOT NULL DEFAULT 'unknown',
+    weekly_hours INTEGER,
+    contract_duration TEXT,
+    freelance_rate TEXT,
+    employment_reasons TEXT NOT NULL DEFAULT '[]',
+    freelance_permission_required INTEGER NOT NULL DEFAULT 0,
     posted_at   TEXT,
     fetched_at  TEXT NOT NULL,
     notified    INTEGER DEFAULT 0
@@ -126,6 +135,14 @@ _NEW_COLUMNS: dict[str, str] = {
     "eligibility_status": "TEXT DEFAULT 'unknown'",
     "eligibility_reasons": "TEXT DEFAULT '[]'",
     "notification_tier": "TEXT DEFAULT 'none'",
+    "employment_relationship": "TEXT NOT NULL DEFAULT 'unknown'",
+    "work_schedule": "TEXT NOT NULL DEFAULT 'unknown'",
+    "contract_term": "TEXT NOT NULL DEFAULT 'unknown'",
+    "weekly_hours": "INTEGER",
+    "contract_duration": "TEXT",
+    "freelance_rate": "TEXT",
+    "employment_reasons": "TEXT NOT NULL DEFAULT '[]'",
+    "freelance_permission_required": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -213,8 +230,12 @@ async def save_jobs(jobs: list[Job]) -> list[Job]:
                      remote_scope, url, description, salary, tags, source,
                      is_ngo, match_score, match_breakdown, match_reasons,
                      eligibility_status, eligibility_reasons, notification_tier,
+                     employment_relationship, work_schedule, contract_term,
+                     weekly_hours, contract_duration, freelance_rate,
+                     employment_reasons, freelance_permission_required,
                      posted_at, fetched_at, notified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     job.id,
@@ -239,6 +260,14 @@ async def save_jobs(jobs: list[Job]) -> list[Job]:
                     job.eligibility_status,
                     json.dumps(job.eligibility_reasons),
                     job.notification_tier,
+                    job.employment_relationship,
+                    job.work_schedule,
+                    job.contract_term,
+                    job.weekly_hours,
+                    job.contract_duration,
+                    job.freelance_rate,
+                    json.dumps(job.employment_reasons),
+                    int(job.freelance_permission_required),
                     job.posted_at.isoformat() if job.posted_at else None,
                     job.fetched_at.isoformat(),
                 ),
@@ -320,6 +349,54 @@ def _decode_counts(value: str | None) -> dict[str, int]:
         for key, count in parsed.items()
         if isinstance(count, (int, float))
     }
+
+
+def _decode_list(value: str | None) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed]
+
+
+def _decode_dict(value: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def job_from_row(row: Mapping[str, Any]) -> Job:
+    """Reconstruct a complete Job from a current or migrated SQLite row."""
+
+    values = {
+        key: value
+        for key, value in dict(row).items()
+        if key in Job.model_fields
+    }
+    values["location"] = values.get("location") or "Remote"
+    values["source"] = values.get("source") or "unknown"
+    tags = values.get("tags")
+    if isinstance(tags, str):
+        values["tags"] = [item.strip() for item in tags.split(",") if item.strip()]
+    for key in (
+        "eligible_countries",
+        "eligible_regions",
+        "match_reasons",
+        "eligibility_reasons",
+        "employment_reasons",
+    ):
+        if key in values and isinstance(values[key], str):
+            values[key] = _decode_list(values[key])
+    if isinstance(values.get("match_breakdown"), str):
+        values["match_breakdown"] = _decode_dict(values["match_breakdown"])
+    for key in ("is_remote", "is_ngo", "freelance_permission_required"):
+        if key in values:
+            values[key] = bool(values[key])
+    return Job.model_validate(values)
 
 
 def _source_health_rows(rows: list[aiosqlite.Row]) -> list[dict]:
@@ -614,8 +691,7 @@ async def backfill_match_scores() -> int:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT id, title, company, location, is_remote, remote_scope,
-                   url, description, salary, tags, source, is_ngo
+            SELECT *
             FROM jobs
             WHERE match_score IS NULL OR match_score = 0
             """
@@ -623,22 +699,8 @@ async def backfill_match_scores() -> int:
         rows = await cursor.fetchall()
 
         for row in rows:
-            tags_str = row["tags"] or ""
-            tags_list = [t.strip() for t in tags_str.split(",") if t.strip()]
             try:
-                job = Job(
-                    title=row["title"],
-                    company=row["company"],
-                    location=row["location"] or "Remote",
-                    is_remote=bool(row["is_remote"]),
-                    remote_scope=row["remote_scope"],
-                    url=row["url"],
-                    description=row["description"],
-                    salary=row["salary"],
-                    tags=tags_list,
-                    source=row["source"] or "unknown",
-                    is_ngo=bool(row["is_ngo"]),
-                )
+                job = job_from_row(row)
             except Exception as exc:
                 logger.debug("Backfill: skip row {}: {}", row["id"], exc)
                 continue

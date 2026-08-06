@@ -4,9 +4,37 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+EmploymentRelationship: TypeAlias = Literal[
+    "employee",
+    "contract_employee",
+    "freelance",
+    "working_student",
+    "internship",
+    "unknown",
+]
+WorkSchedule: TypeAlias = Literal["full_time", "part_time", "unknown"]
+ContractTerm: TypeAlias = Literal["permanent", "fixed_term", "unknown"]
+
+EMPLOYMENT_RELATIONSHIPS = frozenset(
+    {
+        "employee",
+        "contract_employee",
+        "freelance",
+        "working_student",
+        "internship",
+        "unknown",
+    }
+)
+WORK_SCHEDULES = frozenset({"full_time", "part_time", "unknown"})
+CONTRACT_TERMS = frozenset({"permanent", "fixed_term", "unknown"})
+MAX_EMPLOYMENT_REASONS = 12
+MAX_EMPLOYMENT_REASON_LENGTH = 120
+MAX_EMPLOYMENT_DETAIL_LENGTH = 120
 
 
 class Job(BaseModel):
@@ -34,6 +62,14 @@ class Job(BaseModel):
     eligibility_status: Literal["unknown", "eligible", "ineligible"] = "unknown"
     eligibility_reasons: list[str] = Field(default_factory=list)
     notification_tier: Literal["none", "digest", "immediate"] = "none"
+    employment_relationship: EmploymentRelationship = "unknown"
+    work_schedule: WorkSchedule = "unknown"
+    contract_term: ContractTerm = "unknown"
+    weekly_hours: int | None = Field(default=None, ge=1, le=168)
+    contract_duration: str | None = None
+    freelance_rate: str | None = None
+    employment_reasons: list[str] = Field(default_factory=list)
+    freelance_permission_required: bool = False
     company_city: Optional[str] = None
     company_postal_code: Optional[str] = None
     company_country: Optional[str] = None
@@ -75,6 +111,47 @@ class Job(BaseModel):
         if isinstance(v, str):
             v = v.split(",")
         return [str(item).strip().lower() for item in v if str(item).strip()]
+
+    @field_validator(
+        "employment_relationship", "work_schedule", "contract_term", mode="before"
+    )
+    @classmethod
+    def default_unknown_employment_literals(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "unknown"
+        return v
+
+    @field_validator("weekly_hours", mode="before")
+    @classmethod
+    def validate_weekly_hours(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError("weekly_hours must be an integer from 1 to 168 or None")
+        return v
+
+    @field_validator("contract_duration", "freelance_rate", mode="before")
+    @classmethod
+    def bound_employment_detail(cls, v):
+        if v is None:
+            return None
+        normalized = " ".join(str(v).split())
+        return normalized[:MAX_EMPLOYMENT_DETAIL_LENGTH] or None
+
+    @field_validator("employment_reasons", mode="before")
+    @classmethod
+    def normalize_employment_reasons(cls, v):
+        if v is None:
+            return []
+        values = [v] if isinstance(v, str) else v
+        reasons: list[str] = []
+        for value in values:
+            reason = " ".join(str(value).split())[:MAX_EMPLOYMENT_REASON_LENGTH]
+            if reason and reason not in reasons:
+                reasons.append(reason)
+            if len(reasons) >= MAX_EMPLOYMENT_REASONS:
+                break
+        return reasons
 
     def __hash__(self) -> int:
         return hash(self.id)

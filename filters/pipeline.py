@@ -10,12 +10,14 @@ from typing import Any
 from loguru import logger
 
 import config as default_config
+from filters.employment import classify_employment, employment_rejection_reason
 from filters.language import passes_language_filter
 from filters.location import passes_location_filter
 from filters.match import compute_match_score
 from filters.ngo import classify_ngo
-from filters.role import passes_role_filter
+from filters.role import passes_role_profile_filter as passes_role_filter
 from filters.stack import passes_stack_filter
+from filters.profile import EmploymentPolicy, load_employment_policy
 from models.job import Job
 from models.scan import (
     FilterRejection,
@@ -29,7 +31,7 @@ from models.scan import (
 
 MAX_JOBS_PER_COMPANY = 2
 SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
-SENIOR_REJECT = {"junior", "mid-level", "mid level", "entry-level", "entry level", "intern"}
+SENIOR_REJECT = {"junior", "mid-level", "mid level", "entry-level", "entry level"}
 SALARY_NUM_RE = re.compile(r"[\d,.]+")
 
 
@@ -96,6 +98,7 @@ def run_filter_pipeline(
     *,
     settings: Any = default_config,
     max_jobs_per_company: int = MAX_JOBS_PER_COMPANY,
+    employment_policy: EmploymentPolicy | None = None,
 ) -> FilterRunSummary:
     """Run the existing global filter order and count one terminal result/job."""
 
@@ -106,6 +109,7 @@ def run_filter_pipeline(
     rejection_counts: Counter[RejectionCode] = Counter()
     per_source: dict[str, SourceFunnelMetrics] = {}
     now = utc_now()
+    current_employment_policy = employment_policy or load_employment_policy()
 
     for job in jobs:
         source = job.source or "unknown"
@@ -146,6 +150,18 @@ def run_filter_pipeline(
                 job,
                 RejectionCode.LOCATION,
                 f"eligibility: {'; '.join(job.eligibility_reasons)}",
+            )
+            continue
+
+        classify_employment(job)
+        employment_reason = employment_rejection_reason(
+            job, current_employment_policy
+        )
+        if employment_reason:
+            reject(
+                job,
+                RejectionCode.EMPLOYMENT_RELATIONSHIP,
+                f"employment: {employment_reason}",
             )
             continue
 
