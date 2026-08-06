@@ -90,24 +90,27 @@ Create a trustworthy before-state and reconcile the documented test command with
 
 ## Tasks
 
-- [ ] Create a feature branch or worktree, for example:
-  - `feat/coverage-and-employment-types`
-- [ ] Record Python and dependency versions.
-- [ ] Run:
+- [x] Confirm the current feature branch/worktree (`v-2`).
+- [x] Build a tagged production image from the current repository.
+- [x] Record the branch, commit, Python version, installed dependency versions, and image size.
+- [x] Run the blocking test commands in the Docker Python 3.11 environment:
   - `python -m pytest tests/v2 -q`
   - `python -m pytest -q --timeout=30`
-- [ ] Record any pre-existing failures without changing unrelated behavior.
-- [ ] Run representative dry scans:
+- [x] Mount the complete historical `tests/` directory read-only and run the non-blocking compatibility diagnostic:
+  - `python -m pytest tests -q --timeout=30`
+  - The mount is required because `.dockerignore` includes `tests/v2` but excludes the other historical tests.
+- [x] Record every pre-existing failure without changing unrelated behavior.
+- [x] Run representative isolated dry scans:
   - `python main.py --dry-run --source arbeitnow`
   - `python main.py --dry-run --source remotive`
   - `python main.py --dry-run --source himalayas`
   - `python main.py --dry-run --source linkedin`
   - `python main.py --dry-run --explain`
-- [ ] Build the production image.
-- [ ] Run the production Compose service with current settings.
-- [ ] Record baseline container memory with `docker stats --no-stream`.
-- [ ] Record baseline `/health` output.
-- [ ] Document whether `README.md` and `.github/workflows/deploy.yml` disagree about which tests form the CI gate.
+- [x] Run an isolated ephemeral service with temporary database/log mounts, no real `.env`, notifications and Zoho disabled, a 512 MB limit, and the health port bound to `127.0.0.1` only.
+- [x] Record startup scan duration and baseline container memory with `docker stats --no-stream`.
+- [x] Record baseline `/health` output.
+- [x] Remove the ephemeral container and temporary runtime files after measurement.
+- [x] Document whether `README.md` and `.github/workflows/deploy.yml` disagree about which tests form the CI gate.
 
 ## Definition of done
 
@@ -664,14 +667,225 @@ Codex must report:
 
 ## Baseline
 
-- Date:
-- Branch/worktree:
-- Commit:
+- Date: 2026-08-06
+- Branch/worktree: `v-2` in `/home/saqib/projects/job-tracker/job-bot`
+- Commit: baseline started from `3de1db0d20b909f405af51405a1cdd90fcb5d2b4`
 - Existing test result:
+  - Blocking: `python -m pytest tests/v2 -q` — 34 passed in 0.59s.
+  - Blocking/CI-equivalent: `python -m pytest -q --timeout=30` — 34 passed in 0.60s; `pyproject.toml` makes this the same `tests/v2` gate.
+  - Non-blocking historical diagnostic: `python -m pytest tests -q --timeout=30` with the complete host `tests/` directory mounted read-only — 911 passed, 104 failed, 8 warnings in 9.40s.
+  - A compact `--tb=no` repeat captured the exact same 104 failing node IDs — 911 passed, 104 failed, 10 warnings in 7.84s.
 - Docker build:
-- Peak memory:
-- Health output summary:
+  - Tag: `job-bot:phase0-baseline-3de1db0`
+  - Image: `sha256:b78ea9875a5f96df2836241821181b2260c642a442fcb18e0758c3bcc69a2ce0`
+  - Size: 373,050,932 bytes (`docker image ls`: 373 MB)
+  - Authoritative runtime: Python 3.11.15
+- Peak memory: best observed startup-scan sample was 319.7 MiB / 512 MiB (62.44%); below the 430 MiB target. Nine `docker stats --no-stream` samples ranged from 255.4 to 319.7 MiB.
+- Health output summary: `status=ok`, uptime 52s, startup scan completed at `2026-08-06T19:29:04.517623+00:00`, 39 jobs tracked, 11,583 raw, 39 eligible, 11,544 rejected, 8 immediate, 31 digest, 0 diagnostic. Startup scan duration was approximately 50.0s from scheduled-scan start to health completion.
+- Captured `/health` payload:
+
+  ```json
+  {
+    "status": "ok",
+    "uptime_seconds": 52,
+    "last_scan": "2026-08-06T19:29:04.517623+00:00",
+    "jobs_tracked": 39,
+    "next_scan_in_seconds": 2700,
+    "last_scan_summary": {
+      "raw": 11583,
+      "eligible_role_matches": 39,
+      "rejected": 11544,
+      "immediate": 8,
+      "digest": 31,
+      "diagnostic": 0,
+      "sources": {
+        "greenhouse": 6186,
+        "ashby": 3109,
+        "personio": 1399,
+        "lever": 475,
+        "workable": 9,
+        "jsonld": 0,
+        "arbeitnow": 175,
+        "stepstone": 0,
+        "remotive": 34,
+        "himalayas": 21,
+        "remoteok": 100,
+        "idealist": 35,
+        "linkedin": 40
+      }
+    }
+  }
+  ```
+
 - Notes:
+  - Isolation: direct `docker run` was used without Compose or the real `.env`; database and logs used a newly created `/tmp` tree; Discord, Telegram, daily/weekly status, and Zoho were explicitly disabled; memory was limited to 512 MB; host binding was `127.0.0.1:18080`; the container and temporary tree were removed after measurement.
+  - Source dry scans: Arbeitnow 175 raw / 2 accepted in 3s; Remotive 34 / 0 in 3s; Himalayas 21 / 0 in 4s; LinkedIn 39 / 12 in 3s. All commands exited 0.
+  - All-default `--explain`: 11,584 raw / 39 accepted in 63s; routing was 8 immediate and 31 digest. Accepted sources were Greenhouse 16, LinkedIn 12, Personio 5, Ashby 4, and Arbeitnow 2.
+  - All-default raw counts: Greenhouse 6,186; Ashby 3,109; Personio 1,399; Lever 475; Arbeitnow 175; RemoteOK 100; LinkedIn 41; Idealist 35; Remotive 34; Himalayas 21; Workable 9; JSON-LD 0; Stepstone 0.
+  - Explain rejection counts: eligibility 10,203; role 1,191; recency 95; language 30; company cap 16; in-memory content hash duplicate 6; stack 4.
+  - Pre-existing live-source issues: all five Stepstone queries returned HTTP 404; Personio boards for `researchgate`, `beroe-inc`, `sunhat`, `velio`, `getsafe`, and `xayn` returned 404, while `pitch` redirected to Personio; RemoteOK retried once and recovered. Source failures remained isolated.
+  - CI/documentation: `.github/workflows/deploy.yml` runs `python -m pytest -v --tb=short --timeout=30`, which selects only `tests/v2` through `pyproject.toml`. The README opening states this accurately, but its later testing/CI section still claims the entire historical suite is the gate.
+  - Installed direct dependency versions: httpx 0.28.1; feedparser 6.0.14; beautifulsoup4 4.15.0; APScheduler 3.11.3; aiosqlite 0.22.1; langdetect 1.0.9; discord-webhook 1.4.1; discord.py 2.7.1; python-telegram-bot 22.8; python-dotenv 1.2.2; pydantic 2.13.4; loguru 0.7.3; aiohttp 3.14.3; pytest 9.1.1; pytest-asyncio 1.4.0; pytest-timeout 2.4.0. `tomli` was not installed because Python is 3.11.
+
+  <details>
+  <summary>Complete Docker `pip freeze`</summary>
+
+  ```text
+  aiohappyeyeballs==2.7.1
+  aiohttp==3.14.3
+  aiosignal==1.4.0
+  aiosqlite==0.22.1
+  annotated-types==0.8.0
+  anyio==4.14.2
+  APScheduler==3.11.3
+  attrs==26.1.0
+  beautifulsoup4==4.15.0
+  certifi==2026.7.22
+  charset-normalizer==3.4.9
+  discord-webhook==1.4.1
+  discord.py==2.7.1
+  feedparser==6.0.14
+  feedparser-sgmllib==2.1.0
+  frozenlist==1.8.0
+  h11==0.16.0
+  httpcore==1.0.9
+  httpx==0.28.1
+  idna==3.18
+  iniconfig==2.3.0
+  langdetect==1.0.9
+  loguru==0.7.3
+  multidict==6.7.1
+  packaging==26.3
+  pluggy==1.6.0
+  propcache==0.5.2
+  pydantic==2.13.4
+  pydantic_core==2.46.4
+  Pygments==2.20.0
+  pytest==9.1.1
+  pytest-asyncio==1.4.0
+  pytest-timeout==2.4.0
+  python-dotenv==1.2.2
+  python-telegram-bot==22.8
+  requests==2.34.2
+  six==1.17.0
+  soupsieve==2.9.1
+  typing-inspection==0.4.2
+  typing_extensions==4.16.0
+  tzlocal==5.4.4
+  urllib3==2.7.0
+  yarl==1.24.5
+  ```
+
+  </details>
+
+### Historical compatibility failures (non-blocking)
+
+The following 104 failing node IDs are the recorded pre-existing historical-test baseline:
+
+- `tests/test_database.py::TestDigestNotification::test_recent_unnotified_returns_new_jobs`
+- `tests/test_database.py::TestDigestNotification::test_mark_notified_excludes_from_digest`
+- `tests/test_database.py::TestDigestNotification::test_digest_does_not_repeat_after_mark`
+- `tests/test_database.py::TestDigestNotification::test_recent_unnotified_respects_limit`
+- `tests/test_filters.py::TestLocationFilter::test_reject_berlin_onsite`
+- `tests/test_filters.py::TestLocationFilter::test_accept_berlin_remote`
+- `tests/test_filters.py::TestLocationFilter::test_accept_berlin_home_office`
+- `tests/test_filters.py::TestLocationFilter::test_reject_berlin_in_office`
+- `tests/test_filters.py::TestLocationFilter::test_reject_tampa_fl`
+- `tests/test_filters.py::TestLocationFilter::test_accept_pre_classified_worldwide`
+- `tests/test_filters.py::TestLocationFilter::test_accept_pre_classified_eu`
+- `tests/test_filters.py::TestLocationFilter::test_accept_pre_classified_germany`
+- `tests/test_filters.py::TestLocationFilter::test_arbeitnow_worldwide_no_corroboration_defaults_germany`
+- `tests/test_filters.py::TestLocationFilter::test_arbeitnow_worldwide_with_description_corroboration`
+- `tests/test_filters.py::TestRemoteScopeClassification::test_germany_beats_worldwide_in_description`
+- `tests/test_filters.py::TestRemoteScopeClassification::test_spain_scope`
+- `tests/test_filters.py::TestRemoteScopeClassification::test_portugal_scope`
+- `tests/test_filters.py::TestRemoteScopeClassification::test_dach_scope`
+- `tests/test_filters.py::TestRemoteScopeClassification::test_residency_eu_scope`
+- `tests/test_filters.py::TestRoleFilter::test_accept_software_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_python_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_backend`
+- `tests/test_filters.py::TestRoleFilter::test_accept_internal_tools_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_react_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_nextjs_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_vue_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_django_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_fastapi_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_docker_in_description`
+- `tests/test_filters.py::TestRoleFilter::test_accept_llm_ai_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_seo_engineer_not_rejected`
+- `tests/test_filters.py::TestRoleFilter::test_accept_laravel_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_api_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_api_developer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_integration_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_technical_lead`
+- `tests/test_filters.py::TestRoleFilter::test_accept_staff_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_principal_engineer`
+- `tests/test_filters.py::TestRoleFilter::test_accept_application_developer`
+- `tests/test_filters.py::TestMatchScore::test_partial_match`
+- `tests/test_filters.py::TestMatchScore::test_no_match`
+- `tests/test_main_fixes.py::TestArbeitnowGermanyDefault::test_arbeitnow_unknown_scope_defaults_germany`
+- `tests/test_main_fixes.py::TestPerCompanyCap::test_max_two_per_company`
+- `tests/test_main_fixes.py::TestPerCompanyCap::test_different_companies_not_capped`
+- `tests/test_main_fixes.py::TestPerCompanyCap::test_cap_keeps_most_recent`
+- `tests/test_main_fixes.py::TestArbeitnowOnSiteRejection::test_arbeitnow_remote_germany_accepted`
+- `tests/test_main_fixes.py::TestArbeitnowOnSiteRejection::test_arbeitnow_onsite_worldwide_with_corroboration_accepted`
+- `tests/test_main_fixes.py::TestPreClassifiedScope::test_idealist_worldwide_preserved`
+- `tests/test_main_fixes.py::TestPreClassifiedScope::test_idealist_eu_preserved`
+- `tests/test_main_fixes.py::TestPreClassifiedScope::test_non_preclassified_still_reclassified`
+- `tests/test_main_fixes.py::TestRecencyFilter::test_recent_job_accepted`
+- `tests/test_main_fixes.py::TestRecencyFilter::test_custom_max_age_accepts_within_range`
+- `tests/test_main_fixes.py::TestRecencyFilter::test_no_posted_at_accepted`
+- `tests/test_main_fixes.py::TestRecencyFilter::test_exactly_at_boundary`
+- `tests/test_main_fixes.py::TestRecencyFilter::test_naive_datetime_handled`
+- `tests/test_main_fixes.py::TestPerSourceMaxAge::test_reliefweb_uses_30_day_default`
+- `tests/test_main_fixes.py::TestPerSourceMaxAge::test_cli_max_age_does_not_override_source`
+- `tests/test_main_fixes.py::TestVerboseRejections::test_verbose_shows_recency_rejection`
+- `tests/test_new_sources.py::TestSourceRegistration::test_all_sources_registered`
+- `tests/test_new_sources.py::TestSourceRegistration::test_source_count_is_twenty`
+- `tests/test_new_sources.py::TestSourceRegistration::test_get_sources_all`
+- `tests/test_new_sources.py::TestUnknownScopeDefaults::test_hours80k_unknown_scope_defaults_worldwide`
+- `tests/test_new_sources.py::TestUnknownScopeDefaults::test_idealist_unknown_scope_defaults_worldwide`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_techjobsforgood_worldwide_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_techjobsforgood_europe_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_eurobrussels_berlin_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_goodjobs_germany_remote_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_devex_worldwide_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_hours80k_worldwide_accepted`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_multiple_new_sources_in_batch`
+- `tests/test_new_sources.py::TestNewSourcesFilterIntegration::test_company_cap_applies_to_new_sources`
+- `tests/test_v13_features.py::TestCompanyBlocklist::test_blocklist_in_filter_pipeline`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_platform_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_internal_tools_engineer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_technical_lead`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_software_engineer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_react_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_backend_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_web_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_python_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_django_developer`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_ai_engineer_llm`
+- `tests/test_v15_filters.py::TestRoleFilterV15RejectPatterns::test_accept_wordpress_support_engineer`
+- `tests/test_v15_filters.py::TestMatchScoreV15::test_ngo_react_very_high_score`
+- `tests/test_v15_filters.py::TestMatchScoreV15::test_python_fastapi_moderate_score`
+- `tests/test_v15_filters.py::TestMatchScoreV15::test_vue_nuxt_high_score`
+- `tests/test_v15_filters.py::TestMatchScoreV15::test_langchain_rag_bonus`
+- `tests/test_v15_filters.py::TestMatchScoreV15::test_generic_title_no_stack_zero`
+- `tests/test_v15_filters.py::TestOnsiteGermanyRejection::test_accept_onsite_germany_when_enabled`
+- `tests/test_v15_filters.py::TestOnsiteGermanyRejection::test_accept_remote_germany_regardless`
+- `tests/test_v15_filters.py::TestMinimumMatchScore::test_minimum_score_zero_accepts_all`
+- `tests/test_v15_filters.py::TestMinimumMatchScore::test_minimum_score_accepts_high_match`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_reject_electrodynamics_engineer`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_reject_cad_engineering`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_accept_python_developer_backend`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_accept_senior_software_engineer`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_accept_backend_developer`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_accept_junior_backend_engineer`
+- `tests/test_v15_filters.py::TestFilterPipelineRealJobs::test_accept_software_engineer_ios_core_product`
+- `tests/test_v15_sources.py::TestSourceRegistrationV15::test_total_source_count`
+- `tests/test_weekly_digest.py::TestWeeklyDigestCli::test_run_weekly_digest_cli_calls_digest`
+- `tests/test_weekly_digest.py::TestBackfillMatchScores::test_returns_zero_when_no_keywords_match`
+- `tests/test_weekly_digest.py::TestBackfillMatchScores::test_returns_count_of_updated`
+- `tests/test_weekly_digest.py::TestBackfillCli::test_run_backfill_cli_calls_backfill`
 
 ## Phase 1
 
