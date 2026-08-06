@@ -120,74 +120,196 @@ Create a trustworthy before-state and reconcile the documented test command with
 
 ---
 
-# Phase 1 — Pipeline observability and source health
+# Phase 1A — Core source and funnel observability
 
 ## Objective
 
-Make it obvious whether a platform returned no jobs, failed, was blocked, or returned jobs that were later rejected.
+Add the core contracts, accounting, persistence, and presentation needed to explain where jobs disappear without changing source-specific parsing, eligibility decisions, scoring, or notification routing.
 
-## Design
+Detailed multi-board and multi-request partial-failure instrumentation is explicitly deferred to Phase 1B. In Phase 1A, existing adapters may report a complete-source outcome through the compatibility layer.
 
-Introduce lightweight per-source scan metrics. Avoid a monitoring framework.
+## Contracts and metric semantics
 
-Minimum metrics per source and scan:
+Add stable enums and typed result objects in `models/scan.py`:
 
-- source name
-- started_at / finished_at
-- duration_ms
-- status: `healthy`, `zero_results`, `rate_limited`, `blocked`, `parse_error`, `network_error`, `unknown_error`
-- raw count
-- rejected by:
-  - duplicate_in_memory
-  - company_blocklist
-  - location
-  - role
-  - stack
-  - language
-  - seniority
-  - salary
-  - recency
-  - minimum_score
-  - company_cap
-- accepted count
-- unseen count
-- saved count
-- immediate count
-- digest count
-- explore count
-- no-notification count
-- short error message, with no secrets or email content
+- `SourceStatus`: `healthy`, `zero_results`, `partial_success`, `rate_limited`, `blocked`, `parse_error`, `network_error`, `unknown_error`
+- `RejectionCode`: `duplicate_in_memory`, `company_blocklist`, `location`, `role`, `stack`, `language`, `seniority`, `salary`, `recency`, `minimum_score`, `company_cap`
+- `SourceFetchOutcome`, `FilterRejection`, filter-run summary, and per-source scan summary dataclasses
+
+Every raw job must terminate in exactly one result: accepted or one primary `RejectionCode`. Count pipeline stages as follows:
+
+- `raw`: jobs returned by a source
+- `accepted`: jobs remaining after all filters and the company cap, before database deduplication
+- `unseen`: accepted jobs remaining after URL/content database deduplication
+- `saved`: rows actually inserted into SQLite
+- routing: saved jobs assigned to the existing `immediate`, `digest`, or `none` tier
+
+Timestamp semantics apply to Phase 1A and Phase 1B:
+
+- `last_completed_at` advances after every completed source attempt, regardless of outcome.
+- `last_usable_at` advances for `healthy`, `zero_results`, and `partial_success`.
+- `last_fully_successful_at` advances only for `healthy` and `zero_results`.
+- Normal operational health displays use `last_usable_at`; `last_fully_successful_at` remains available for diagnostics.
+
+## Expected files and modules
+
+- New: `models/scan.py`
+- New: `filters/pipeline.py`
+- Update: `sources/base.py`, `main.py`, `storage/database.py`, `health.py`
+- New focused tests: `tests/v2/test_observability.py`
+- Progress only: `IMPLEMENTATION_PLAN.md`
+
+Notifier modules and provider-specific adapters are not expected to change in Phase 1A. The daily status renderer currently lives in `main.py`.
 
 ## Tasks
 
-- [ ] Define typed result objects, preferably dataclasses, for:
-  - source fetch outcome
-  - filter outcome/rejection reason
-  - scan summary
-- [ ] Replace the current “exception becomes empty list” ambiguity with a result that preserves the error category while still isolating the source.
-- [ ] Keep a compatibility path for existing tests and source classes where practical.
-- [ ] Refactor filtering so each rejection has a stable machine-readable reason code and human-readable explanation.
-- [ ] Preserve current `--verbose` output.
-- [ ] Add a SQLite `source_scan_runs` table or an equally lightweight persisted structure.
-- [ ] Keep only a bounded history, such as 14–30 days, through periodic cleanup.
-- [ ] Extend `/health` with:
-  - latest overall scan summary
-  - latest status per source
-  - last successful scan time per source
-  - counts at every pipeline stage
-- [ ] Extend `--stats` with a compact source-health section.
-- [ ] Extend the daily Discord status with source failures and funnel counts, but do not flood the channel.
-- [ ] Add tests for zero-results vs failure, rejection reason accounting, persistence, health output, and cleanup.
-- [ ] Ensure exception text is sanitized and bounded.
+- [ ] Add the typed scan contracts and stable enum values above without adding a production dependency.
+- [ ] Add a `BaseSource` outcome method that categorizes complete-source results and exceptions while preserving the existing list-returning `fetch()` and `safe_fetch()` compatibility paths.
+- [ ] Adapt `run_scan()` to consume typed outcomes for real sources and synthesize outcomes for legacy/mock sources that only provide `safe_fetch()`.
+- [ ] Extract filter orchestration to `filters/pipeline.py`; keep compatibility wrappers in `main.py` for existing callers and tests.
+- [ ] Emit exactly one primary rejection result per raw job while preserving filter order, human-readable `--verbose`/`--explain` output, eligibility behavior, scoring, and the company cap.
+- [ ] Aggregate raw, rejection, accepted, unseen, saved, and routing counts overall and per source without retaining rejected `Job` objects unless verbose output is enabled.
+- [ ] Change `save_jobs()` to return the jobs actually inserted; callers that ignore the return value remain compatible, and scan accounting/notifications use only inserted rows.
+- [ ] Add an idempotent `source_scan_runs` table keyed by a shared scan identifier and source, with timestamps, duration, status, stage counts, JSON rejection/routing counts, component-error count, and a sanitized bounded error message.
+- [ ] Add indexes for latest-run/source lookups and delete history older than 30 days after successful metric persistence.
+- [ ] Keep dry-run behavior read-only: no job rows, scan-history rows, or notification state may be written.
+- [ ] Add storage queries for the latest overall scan, latest source attempts, and all three timestamp semantics.
+- [ ] Restore the latest persisted health summary during scheduler startup before the first new scan completes.
+- [ ] Expand `/health` additively while preserving existing keys used by deployment: `last_scan_summary.raw`, `eligible_role_matches`, `rejected`, `immediate`, `digest`, and `diagnostic`.
+- [ ] Add compact `unseen`, `saved`, rejection totals, and per-source operational health using `last_usable_at`; retain diagnostic timestamps without exposing secrets.
+- [ ] Extend `--stats` with a bounded latest-source health table.
+- [ ] Extend the daily Discord status with aggregate funnel counts, top rejection reasons, and at most five failed/partial source names.
+- [ ] Sanitize persisted/displayed exception text by removing URL query/fragment data, redacting sensitive key/value patterns, collapsing control characters, and truncating to 300 characters.
+- [ ] Add focused tests for contracts, complete-source status classification, compatibility, every rejection code, per-source accounting, insert counts, migration idempotency, cleanup, dry-run immutability, health restoration/compatibility, stats output, and bounded daily status output.
+
+## Acceptance criteria
+
+- A complete-source failure is distinguishable from a successful source returning zero jobs, while one failed source cannot abort the scan.
+- Overall and per-source `raw == accepted + sum(primary rejection counts)` before database deduplication.
+- Every raw job contributes to exactly one accepted/rejected terminal result.
+- `unseen`, actual `saved`, and routing counts match their documented stages.
+- `source_scan_runs` is created idempotently on a pre-existing database and retains no rows older than 30 days after cleanup.
+- `last_completed_at`, `last_usable_at`, and `last_fully_successful_at` advance according to the documented status sets.
+- `/health` remains backward compatible, restores the latest persisted summary after restart, and uses `last_usable_at` for normal source-health display.
+- `--stats` and the daily status remain compact; stored/displayed errors contain no credentials, email bodies, query secrets, or unbounded text.
+- Existing Germany/Berlin eligibility, match scoring, CLI behavior, deduplication, and notification thresholds/channels remain unchanged.
+- Phase 1A does not claim accurate partial component reporting for existing multi-board/multi-request adapters; that remains Phase 1B.
+
+## Verification
+
+Run in this order:
+
+```bash
+python -m pytest tests/v2/test_observability.py -q
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase1a .
+python main.py --dry-run --source arbeitnow
+python main.py --dry-run --explain
+```
+
+- The explicit historical suite remains a non-blocking diagnostic: compare against the Phase 0 baseline of 911 passed and 104 failures, and introduce no additional failures.
+- Run the image as an isolated ephemeral service using temporary database/log mounts, no real `.env`, notifications and Zoho disabled, a 512 MB limit, and a loopback-only health port.
+- Validate startup restoration, the completed startup scan, backward-compatible `/health`, and `docker stats --no-stream`.
+
+## Memory criteria
+
+- Peak observed container memory must remain below 430 MiB under the same startup-scan measurement method used in Phase 0 (baseline: 319.7 MiB).
+- Non-verbose scans must aggregate rejection counts without retaining rejected jobs or response bodies.
+- Persist at most one row per attempted source per scan, retain 30 days, and keep stored error text at or below 300 characters.
 
 ## Definition of done
 
-- A source that fails is distinguishable from a healthy source returning zero jobs.
-- Every rejected job increments exactly one primary rejection reason.
-- The sum of accepted plus primary rejection counts equals the raw count before database deduplication.
-- `/health` exposes enough data to diagnose missing results.
-- Existing notification behavior remains unchanged in this phase.
-- Full tests pass.
+- All Phase 1A tasks and acceptance criteria are verified and recorded.
+- Focused and blocking v2 tests pass; historical compatibility has no new failures.
+- Docker build, representative dry scans, isolated `/health`, and memory verification pass.
+- Only Phase 1A checklist/progress entries are marked complete; Phase 1B remains not started.
+- Commit the phase as `feat: add core source scan observability` and stop for review.
+
+---
+
+# Phase 1B — Multi-board and multi-request partial-success reporting
+
+## Objective
+
+Make `partial_success` accurate for adapters that can return usable jobs while one or more employer boards, pages, or queries fail, without turning routine malformed individual listings into source-health incidents.
+
+Phase 1B builds on the contracts, persistence, timestamp semantics, and presentation implemented in Phase 1A. It must not change filters, scoring, routing, schedules, or concurrency settings.
+
+## Expected files and modules
+
+- Shared instrumentation: `sources/base.py`, and `models/scan.py` only if the approved Phase 1A contract needs a compatible extension
+- Multi-board adapters: `sources/greenhouse.py`, `sources/ashby.py`, `sources/personio.py`, `sources/lever.py`, `sources/workable.py`, `sources/jsonld.py`
+- Default multi-page/query adapters where applicable: `sources/stepstone.py`, `sources/remotive.py`, `sources/himalayas.py`, `sources/idealist.py`, `sources/linkedin.py`
+- New focused tests: `tests/v2/test_partial_source_outcomes.py`
+- Progress only: `IMPLEMENTATION_PLAN.md`
+
+Before editing, audit all source adapters for `_map_bounded`, `asyncio.gather(..., return_exceptions=True)`, and page/query loops. Add any additional adapter with the same component-failure behavior to this phase; do not instrument unrelated single-request adapters speculatively.
+
+## Tasks
+
+- [ ] Add a bounded per-attempt component-issue collector to `BaseSource` using the Phase 1A status/error contracts.
+- [ ] Record the total component-failure count while retaining no more than five sanitized issue summaries in memory and persisting only bounded diagnostic text.
+- [ ] Instrument each relevant multi-board, multi-page, and multi-query adapter so board/page/query exceptions are recorded without discarding successful jobs from other components.
+- [ ] Classify outcomes consistently:
+  - jobs and no component failures → `healthy`
+  - no jobs and no component failures → `zero_results`
+  - jobs and one or more component failures → `partial_success`
+  - no jobs and component failures → the dominant concrete failure status (`rate_limited`, `blocked`, `parse_error`, `network_error`, or `unknown_error`)
+- [ ] Keep `last_usable_at` advancing for `partial_success`; do not advance `last_fully_successful_at` for partial runs.
+- [ ] Treat a component as a complete board, page, or query fetch/parse unit. Continue logging/skipping an isolated malformed listing without marking the entire source partial.
+- [ ] Preserve source failure isolation and all usable jobs when sibling components fail.
+- [ ] Do not add requests, retries, concurrency, retained response bodies, dependencies, or production browser support.
+- [ ] Add adapter-specific mocked tests for all-success, mixed success/failure, all-failed, rate-limited/blocked, and routine malformed-listing cases.
+- [ ] Add integration tests proving a partial source persists/displayed status and timestamp semantics correctly alongside healthy and failed sources.
+
+## Acceptance criteria
+
+- A multi-component source returning usable jobs plus at least one failed component is persisted and displayed as `partial_success` with correct counts.
+- Usable jobs from successful components continue through filtering, deduplication, saving, and existing notification routing.
+- A fully successful source and a legitimate zero-result source are not mislabeled partial.
+- A malformed individual listing that is safely skipped does not by itself produce `partial_success`; failure of a complete board/page/query unit does.
+- Component issue storage is bounded, sanitized, and contains no response bodies, credentials, OAuth data, webhook URLs, or email content.
+- `last_completed_at`, `last_usable_at`, and `last_fully_successful_at` retain the Phase 1A semantics for partial and failed runs.
+- Source-level and per-component concurrency remain at their existing configured bounds.
+- Existing filtering, notification behavior, CLI output, SQLite compatibility, and Phase 1A health fields remain backward compatible.
+
+## Verification
+
+Run in this order:
+
+```bash
+python -m pytest tests/v2/test_partial_source_outcomes.py -q
+python -m pytest tests/v2/test_observability.py -q
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase1b .
+python main.py --dry-run --source greenhouse
+python main.py --dry-run --source personio
+python main.py --dry-run --source remotive
+python main.py --dry-run --source himalayas
+python main.py --dry-run --explain
+```
+
+- The explicit historical suite remains non-blocking and must add no failures to the Phase 0 baseline.
+- Use mocked HTTP for automated tests. Live dry scans validate current behavior but do not determine unit-test success.
+- Run an isolated 512 MB service and confirm `/health` reports partial/failed sources without losing successful source results.
+
+## Memory criteria
+
+- Peak observed container memory must remain below 430 MiB using the Phase 0 measurement method.
+- Keep at most five component issue summaries per source attempt and each persisted error message at or below 300 characters.
+- Do not increase `MAX_CONCURRENT_SOURCES`, per-board concurrency, page sizes, or the number of simultaneous source groups.
+
+## Definition of done
+
+- All identified multi-board and relevant multi-request adapters report component failures through the shared bounded mechanism.
+- Adapter-specific and integration tests prove accurate `partial_success` behavior and non-partial malformed-listing behavior.
+- Focused and blocking v2 tests pass; historical compatibility has no new failures.
+- Docker build, representative live dry scans, isolated health validation, and memory verification pass.
+- Commit the phase as `feat: report partial success from multi-board sources` and stop for review.
 
 ---
 
@@ -887,7 +1009,15 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 - `tests/test_weekly_digest.py::TestBackfillMatchScores::test_returns_count_of_updated`
 - `tests/test_weekly_digest.py::TestBackfillCli::test_run_backfill_cli_calls_backfill`
 
-## Phase 1
+## Phase 1A — Core source and funnel observability
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 1B — Multi-board and multi-request partial-success reporting
 
 - Status: Not started
 - Commit:
