@@ -313,21 +313,21 @@ python main.py --dry-run --explain
 
 ---
 
-# Phase 2 — Employment type and contract metadata
+# Phase 2A — Employment model and classification
 
 ## Objective
 
-Support more work arrangements without weakening role or location relevance.
+Represent employment relationship, work schedule, and contract term independently, then classify and persist those dimensions without weakening existing location, language, scoring, or notification behavior.
 
-## Model changes
+Phase 2A owns the shared model, deterministic heuristic fallback, compatibility policy, persistence, and presentation. Native source mappings are deferred to Phase 2B; source adapters may change in Phase 2A only when a compatibility adjustment is required by the new `Job` defaults.
 
-Add normalized fields to `Job`:
+## Domain model
+
+Add these normalized fields to `Job`:
 
 ```python
-employment_type: Literal[
-    "full_time",
-    "part_time",
-    "fixed_term",
+employment_relationship: Literal[
+    "employee",
     "contract_employee",
     "freelance",
     "working_student",
@@ -335,64 +335,178 @@ employment_type: Literal[
     "unknown",
 ] = "unknown"
 
+work_schedule: Literal[
+    "full_time",
+    "part_time",
+    "unknown",
+] = "unknown"
+
+contract_term: Literal[
+    "permanent",
+    "fixed_term",
+    "unknown",
+] = "unknown"
+
 weekly_hours: int | None = None
 contract_duration: str | None = None
 freelance_rate: str | None = None
-employment_type_reasons: list[str] = Field(default_factory=list)
+employment_reasons: list[str] = Field(default_factory=list)
+freelance_permission_required: bool = False
 ```
 
-Do not use `is_part_time` and `is_freelance` booleans in parallel with the enum.
+The first three fields are independent: combinations such as part-time fixed-term employee, full-time fixed-term employee, full-time contract employee, and part-time freelance must round-trip unchanged. Do not add parallel `is_part_time`, `is_fixed_term`, `is_contract_employee`, or `is_freelance` flags. `freelance_permission_required` is a derived profile-policy marker, not a second freelance classification or a routing field; it is true only when `employment_relationship == "freelance"` and the profile setting is enabled.
 
-## Classification policy
+Validators must accept only the documented literals, normalize missing values to safe unknown/`None` defaults, reject invalid `weekly_hours` values outside 1–168, and keep optional reason/duration/rate text bounded. Existing rows and adapters that omit every field must continue to validate as completely unknown metadata.
 
-Use structured source fields first. Use title/tags/description heuristics only when structured data is absent.
+## Classification and precedence
 
-Examples:
+Implement one shared, typed employment classifier that can accept optional normalized structured values per dimension. Run it before employment compatibility filtering. Precedence is evaluated independently for relationship, schedule, contract term, weekly hours, contract duration, and freelance rate:
 
-- `Teilzeit`, `part-time`, `20 hours/week`, `32h` → `part_time`
-- `Vollzeit`, `full-time` → `full_time`
-- `befristet`, `fixed term`, `12-month contract` → `fixed_term`
-- Arbeitnehmerüberlassung or an employment contract through an agency → `contract_employee`
-- `Freelance`, `Freiberuflich`, `B2B`, `contractor`, day rate → `freelance`
-- `Werkstudent` → `working_student`
-- `Internship`, `Praktikum` → `internship`
+1. A supported, successfully normalized structured source value is authoritative for that dimension.
+2. Heuristics may fill another unknown dimension and may add non-conflicting evidence, but cannot replace an authoritative structured value.
+3. Title and tags are searched before description text; all heuristic matches are deterministic and recorded with stable, bounded entries in `employment_reasons`.
+4. Contradictory heuristic matches leave that dimension `unknown` unless a deterministic specific signal resolves them. Absence of evidence never implies `employee`, `permanent`, or `full_time`.
 
-Avoid classifying every English use of “contract” as freelance.
+Classification rules must include:
 
-## Profile changes
+- `Teilzeit`, `part-time`, and explicit sub-full-time weekly hours → `work_schedule="part_time"`.
+- `Vollzeit` and `full-time` → `work_schedule="full_time"`.
+- `unbefristet` and `permanent` → `contract_term="permanent"`.
+- `befristet`, `fixed-term`, and explicit duration phrases such as `12-month contract` → `contract_term="fixed_term"`, with bounded `contract_duration` when the duration itself is explicit.
+- Ordinary employee wording may set `employment_relationship="employee"` only when positive employee evidence exists.
+- `Arbeitnehmerüberlassung`, temporary-agency employment, or employment through a staffing agency → `employment_relationship="contract_employee"`.
+- `freelance`, `freelancer`, `freiberuflich`, `selbstständig`, `B2B`, or an explicit day/hourly freelance rate → `employment_relationship="freelance"` and bounded `freelance_rate` when present.
+- `Werkstudent` or `working student` → `employment_relationship="working_student"`.
+- `Praktikum` or `internship` → `employment_relationship="internship"`.
+- The bare English word `contract` is insufficient to classify freelance or contract-employee relationship; surrounding explicit employment, agency, B2B, or self-employment evidence is required.
 
-Add to `profile.toml`:
+Weekly-hours parsing must be unit- and context-bound. Support `20h/week`, `20 h/week`, `20 hours per week`, `20 Stunden/Woche`, `30–32 hours/week`, `32 Std./Woche`, and compact schedule labels such as `32h`. For a range, persist its upper bound as the conservative normalized `weekly_hours` value (`30–32` becomes `32`) and retain a stable range-evidence reason. An explicit value of 1–32 weekly hours is part-time evidence; 33 or more hours remains schedule-unknown unless an explicit full-time/part-time label resolves it. Lack of hours is never full-time evidence. Regexes must require an hours/schedule context and must not capture salaries, vacation days, years of experience, dates, percentages, or a `12-month` contract duration.
+
+## Profile policy and terminal rejection ownership
+
+Add:
 
 ```toml
 [employment]
-accepted = ["full_time", "part_time", "fixed_term", "contract_employee", "freelance"]
-reject = ["working_student", "internship"]
+accepted_relationships = ["employee", "contract_employee", "freelance", "unknown"]
+rejected_relationships = ["working_student", "internship"]
+accepted_schedules = ["full_time", "part_time", "unknown"]
 freelance_permission_required = true
 preferred_weekly_hours_min = 15
 preferred_weekly_hours_max = 40
 ```
 
-The values above are configuration, not hardcoded logic.
+Validate configured values against the model literals. Accepted and rejected relationship sets must be disjoint; configuration loading fails clearly if they overlap. The gate rejects a relationship explicitly listed in `rejected_relationships` or a known relationship absent from `accepted_relationships`, and rejects a known schedule absent from `accepted_schedules`. `unknown` remains accepted in both default lists to preserve jobs with no employment evidence. The preferred weekly-hours keys are optional advisory bounds: omission disables that bound, values must be within 1–168, and minimum cannot exceed maximum. In Phase 2A the preferred range is exposed for explanation/presentation only and does not create a terminal rejection. Contract term is not a gate because permanent and fixed-term work are both accepted.
+
+Add `employment_relationship` as a stable `RejectionCode` and insert one employment compatibility gate after location and before the existing role gate. It is the sole owner of terminal working-student/internship and configured relationship/schedule rejection. Remove `intern`, `internship`, `working student`, and `werkstudent` from `[roles].reject` and remove the equivalent hardcoded role/seniority checks; the employment classifier and gate must still recognize those title terms. Do not duplicate the same decision in the role gate. Jobs rejected earlier by the existing ordered gates retain that earlier single terminal result, and every raw job must continue to satisfy `raw == accepted + sum(primary rejection counts)` overall and per source.
 
 ## Tasks
 
-- [ ] Add model fields and validators.
-- [ ] Add a shared employment classifier.
-- [ ] Update native source adapters to pass structured employment data when available.
-- [ ] Add backward-compatible database columns and JSON serialization.
-- [ ] Include employment type and hours in CLI output and notifications.
-- [ ] Add a clear marker for `freelance_permission_required`.
-- [ ] Do not reject freelance solely because permission may be required; route it separately.
-- [ ] Continue rejecting working-student and internship roles through profile configuration.
-- [ ] Add tests for English and German terminology, ambiguous “contract”, hours parsing, migrations, and notifier formatting.
+- [ ] Add the independent `Job` fields, typed literals/validators, and shared classifier with structured-over-heuristic inputs ready for Phase 2B.
+- [ ] Add the `[employment]` profile section, configuration validation, derived freelance-permission marker, and the single employment compatibility gate/rejection code described above.
+- [ ] Add deterministic English/German relationship, schedule, term, hours, duration, and rate heuristics without a new dependency.
+- [ ] Add explicit, idempotent SQLite columns for all persisted Phase 2A fields; JSON-encode `employment_reasons`; update every save/deserialization/query path that reconstructs jobs; give old rows safe unknown/`None`/false defaults.
+- [ ] Show known employment dimensions, weekly hours, and the freelance-permission marker in normal CLI job output and explain output, Discord job formatting, and Telegram job formatting. Keep output compact and omit unknown/empty values.
+- [ ] Preserve existing `none`/`digest`/`immediate` tier calculation, database notification state, channel selection, send timing, and delivery behavior. Phase 2A must not separately route or suppress freelance jobs.
+- [ ] Add focused model, classifier, policy, pipeline-accounting, migration, persistence, CLI, Discord, Telegram, and notification-routing regression tests.
+- [ ] Update only the Phase 2A checklist and progress entry after all Phase 2A verification passes; commit as `feat: classify employment relationships and schedules` and stop for review.
+
+## Acceptance criteria
+
+Automated tests must cover at least:
+
+- full-time employee; part-time employee; part-time fixed-term employee; full-time fixed-term employee; and permanent part-time employee
+- freelance with full-time or unspecified schedule; part-time freelance; contract employee; working student; internship; and completely unknown metadata
+- English and German terminology; ambiguous bare `contract`; explicit employee evidence; and conflicting heuristic evidence
+- every listed weekly-hours form; range normalization; and rejection of salary, vacation-day, experience-year, date, percentage, and contract-duration false positives
+- per-dimension structured-over-heuristic precedence through the shared Phase 2B-ready API, including structured schedule plus heuristic contract term and structured/heuristic conflict
+- literal and hours validation; optional/bounded strings and reasons; profile validation; and the derived freelance-permission marker
+- migration from a representative Phase 1 database, idempotent repeated initialization, safe defaults on old rows, and complete save/read round trips
+- one-terminal-rejection accounting when the employment gate rejects, including overall and per-source counts
+- compact CLI/explain, Discord, and Telegram formatting, including the freelance-permission marker
+- unchanged notification tiers and delivery selection for otherwise identical employee and freelance jobs
+
+Existing location eligibility, role/stack evaluation apart from the transferred student/intern ownership, language behavior, scoring, company caps, deduplication, and notification behavior must remain unchanged. No native source adapter is required to populate any new field in Phase 2A.
+
+## Verification and memory
+
+Run focused Phase 2A tests first, then:
+
+```bash
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase2a .
+python main.py --dry-run --source arbeitnow
+python main.py --dry-run --explain
+```
+
+The blocking v2 suite must pass. The historical diagnostic must introduce no failures beyond the verified 104 pre-existing failures. Run an isolated ephemeral 512 MiB service with temporary database/log mounts, notifications and Zoho disabled, and loopback-only health binding; validate `/health`, unchanged routing totals, and peak memory using the Phase 0 method. Peak observed memory must remain below 430 MiB (Phase 1B reference: 325.2 MiB). Classification must use lightweight rules/regexes and existing packages only; do not add ML/NLP models or a heavyweight dependency.
 
 ## Definition of done
 
-- Part-time, fixed-term, contract-employment, and freelance roles can be identified.
-- The distinction between employment contract and self-employed freelance is visible.
-- Existing database files migrate automatically.
-- No source adapter is required to provide every new field.
-- Full tests pass.
+- Every independent combination in scope is representable, classified deterministically, persisted, and displayed.
+- Working-student/internship incompatibility has one profile-driven terminal gate and stable rejection code without duplicate role-gate ownership.
+- Freelance permission is visible but does not affect routing or delivery.
+- Focused and blocking tests, historical compatibility, Docker build, dry scans, `/health`, and memory verification pass and are recorded.
+- Commit Phase 2A separately and stop before Phase 2B.
+
+---
+
+# Phase 2B — Structured source employment metadata
+
+## Objective
+
+Map employment metadata that source providers genuinely expose, giving supported structured values higher authority than Phase 2A text heuristics while preserving source isolation and partial-success reporting.
+
+Prioritize enabled/default sources and direct ATS adapters: Greenhouse, Ashby, Personio, Lever, Workable, and JSON-LD first, followed by default aggregator adapters with saved evidence. Do not require every adapter to populate every dimension and do not infer a value merely because another provider exposes a similarly named field.
+
+## Mapping and precedence policy
+
+- Audit current provider API responses and saved fixtures before editing each adapter. In the Phase 2B progress entry, record source by source the raw field, observed values, normalized dimension/value, fixture or diagnostic evidence, and unsupported dimensions.
+- Map only documented or repeatedly observed structured fields. For example, evaluate Personio `employmentType`/`schedule`, Lever `categories.commitment`, Workable `employment_type`, JSON-LD `employmentType`, and any equivalent actual fields found during the audit; their presence in current tags is not by itself proof of complete semantics.
+- Normalize provider values through shared mapping helpers into the Phase 2A domain literals. Keep provider-specific raw-field interpretation inside the adapter and shared employment semantics inside the classifier; do not duplicate heuristic dictionaries across sources.
+- Apply precedence independently per dimension: a supported structured value replaces a conflicting heuristic value for that dimension, while heuristics may enrich dimensions the source did not supply. Unsupported, empty, malformed, or unknown provider values fall back to Phase 2A heuristics and add no invented classification.
+- Preserve bounded `employment_reasons` that identify structured versus heuristic evidence without storing full response bodies or sensitive content.
+- Keep malformed individual listings non-partial and keep board/page/query failures integrated with the Phase 1B bounded component-outcome mechanism. Employment mapping failure for one listing must not discard other usable listings or crash a source.
+
+## Tasks
+
+- [ ] Audit default/direct ATS response shapes, documentation where available, and saved/live fixtures; add the source-by-source evidence table to this phase's progress log.
+- [ ] Add normalized structured mappings only to adapters with verified native fields, in the priority order above.
+- [ ] Add or update sanitized saved fixtures and adapter tests for every mapping; mock external HTTP in automated tests.
+- [ ] Test structured precedence, partial structured enrichment, unknown-value fallback, malformed-value isolation, and heuristic fallback when the native field is absent.
+- [ ] Run focused adapter/integration tests, the complete verification sequence, representative live diagnostic dry scans for mapped default sources, isolated `/health`, and memory measurement.
+- [ ] Update only the Phase 2B checklist and progress entry after verification; commit as `feat: map structured employment metadata from job sources` and stop for review.
+
+## Acceptance criteria
+
+- The progress log documents which structured employment fields each audited source actually exposes and which dimensions remain unsupported.
+- Every mapped value is backed by provider data and a saved-fixture test; no source-specific value is invented and no adapter is required to fill every field.
+- Structured data wins only for its own dimension; other unknown dimensions retain deterministic heuristic fallback.
+- Fixture tests cover structured/heuristic conflicts, structured enrichment plus fallback, absent/unknown native values, and malformed listing isolation.
+- Existing source status and component issue counts remain correct, usable results survive sibling failures, and no regression is introduced in partial-success reporting.
+- Blocking v2 tests pass, the historical diagnostic adds no failures beyond the verified 104, live diagnostics remain non-blocking, and peak memory remains below 430 MiB with no meaningful regression from the Phase 2A measurement.
+
+## Verification and definition of done
+
+Run mapped-adapter fixture tests first, then:
+
+```bash
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase2b .
+python main.py --dry-run --source greenhouse
+python main.py --dry-run --source ashby
+python main.py --dry-run --source personio
+python main.py --dry-run --source lever
+python main.py --dry-run --source workable
+python main.py --dry-run --source jsonld
+python main.py --dry-run --explain
+```
+
+Add or remove individual live diagnostic commands to match the adapters proven to contain structured mappings; do not make live platforms part of automated test success. Run the same isolated 512 MiB `/health` and memory check used for Phase 2A. Phase 2B is complete only when the audit, supported mappings, fixture tests, full verification, source-outcome regression checks, and progress entry pass. Commit Phase 2B separately and stop before Phase 3.
 
 ---
 
@@ -1050,7 +1164,15 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - `/health`, `--stats`, and daily status expose compact source status, total issue count, bounded sanitized summary, `last_usable_at`, and diagnostic `last_fully_successful_at`; no per-board detail list is exposed. Live Personio advanced `last_usable_at` but had no fully-successful timestamp, while complete-failure StepStone advanced neither usable timestamp.
   - No database migration or dependency was needed. External board/query repair and non-default optional multi-unit adapters remain deferred; Phase 2 was not started.
 
-## Phase 2
+## Phase 2A — Employment model and classification
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 2B — Structured source employment metadata
 
 - Status: Not started
 - Commit:
