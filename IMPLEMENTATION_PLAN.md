@@ -1126,17 +1126,75 @@ Record files changed, the complete simulation table and selected defaults, thres
 
 ---
 
-# Phase 5 — Source groups, schedules, and 512 MB operation
+# Phase 5A — Grouped Scheduler, Locking, Health, and Bounded Source HTTP
+
+**Status:** Not started
 
 ## Objective
 
-Use appropriate scan intervals and enable existing useful lightweight sources without raising peak memory risk.
+Replace the single immediate all-source scheduler job with measured, staggered source groups and one coordinated production scan lifecycle. Make source-fetch concurrency predictable without serializing large ATS board sets, keep the service ready while source refreshes run asynchronously, preserve Phase 1–4 behavior, and remain below 430 MiB.
 
-## Proposed source groups
+Phase 5A must not enable impact sources, repair StepStone, change hard eligibility, add a cross-scan company quota, or begin Phase 6. Stop for review after the Phase 5A commit and verification.
 
-### Group A — direct employer boards
+## Verified planning baseline and source economics
 
-Run every 60 minutes:
+Start from the verified Phase 4B reference:
+
+- blocking v2: 394 passed
+- historical diagnostic: 1,271 passed and 104 known failures
+- peak memory: 344.2 MiB, below the 430 MiB hard target
+- current-network all-source startup scan: approximately 206 seconds
+- paired unchanged Phase 4A under the same network conditions: approximately 191 seconds
+- Phase 4B increase itself: 7.9%
+- one scheduled all-source scan every 45 minutes, started immediately
+- outer scan batching and most inner board fan-out both use `MAX_CONCURRENT_SOURCES=3`
+- several adapters have independent or nested query/detail fan-out, so the setting is not a unified request ceiling
+
+A bounded live planning audit on 2026-08-07 produced the following aggregate evidence. No descriptions or provider payloads were persisted or committed. Default-source final counts use the current combined all-source company cap; impact-source final counts use the candidate impact set.
+
+| Source | Status | Raw | Hard-eligible pre-cap | Final accepted | Duration | Fan-out / issue | Phase 5 decision |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| Greenhouse | healthy | 6,216 | 19 | 15 | 48.7s | 38 boards; one recovered transient request | Group A |
+| Ashby | healthy | 3,069 | 16 | 4 | 18.7s | 78 boards | Group A |
+| Personio | partial_success | 1,397 | 8 | 7 | 7.0s | 72 boards plus nested HTML-detail fan-out; one Pitch redirect issue | Group A |
+| Lever | healthy | 472 | 1 | 1 | 6.7s | 8 boards | Group A |
+| Workable | healthy | 9 | 0 | 0 | 0.3s | 3 boards | Group A |
+| JSON-LD | zero_results | 0 | 0 | 0 | <0.1s | no configured live board; negligible scan cost | Group A |
+| Arbeitnow | healthy | 175 | 1 | 1 | 1.0s | one request | Group B |
+| StepStone | blocked | 0 | 0 | 0 | 0.6s | all five queries failed with HTTP 403; prior phases had five HTTP 404 failures | manual-only / suspended |
+| Remotive | healthy | 33 | 0 | 0 | 1.1s | three category requests | Group B |
+| Himalayas | healthy | 17 | 0 | 0 | 2.1s | up to ten sequential pages | Group B |
+| RemoteOK | healthy | 100 | 0 | 0 | 1.0s | one request | Group B |
+| Idealist | healthy | 35 | 0 | 0 | 0.7s | two Algolia queries; current direct `httpx` path requires budgeting | Group B |
+| LinkedIn | healthy | 38 | 30 | 27 | 0.7s | nine guest queries | Group B |
+| GoodJobs | zero_results | 0 | 0 | 0 | 0.8s | approximately 750 KB of HTML produced no parsed jobs | Phase 5B manual-only baseline |
+| ReliefWeb | healthy | 28 | 0 | 0 | 1.2s | three feeds; all 28 rejected on location | Phase 5B manual-only baseline |
+| Devex | healthy | 20 | 0 | 0 | 0.9s | up to two pages; 19 location and one role rejection | Phase 5B manual-only baseline |
+| EuroBrussels | healthy | 29 | 0 | 0 | 1.1s | two pages; all 29 rejected on location | Phase 5B manual-only baseline |
+| 80,000 Hours | healthy | 44 | 0 | 0 | 0.7s | three pages after 255 adapter-prefilter exclusions; 37 location and seven role rejections | Phase 5B manual-only baseline |
+| Tech Jobs for Good | blocked | 0 | 0 | 0 | 0.2s | Cloudflare HTTP 403 | Phase 5B manual-only baseline |
+
+The default audit returned 11,561 raw jobs, 75 hard-eligible pre-cap jobs, and 55 final accepted jobs. LinkedIn contributed 30 of 75 pre-cap and 27 of 55 final jobs, so it remains scheduled while its guest source stays healthy. The impact candidates returned 121 raw jobs and no hard-eligible jobs.
+
+Measured raw content-hash overlap was Ashby/Lever 32, Ashby/Arbeitnow 24, and Ashby/RemoteOK one; no URL-ID overlap was found. Applying the existing scan-local company cap separately to Groups A and B selected the same 55 jobs as the combined scan, introduced no selected cross-group duplicates, added no jobs, and left every company at no more than two selections. The planning diagnostic peaked at approximately 341 MiB, while the Phase 4B production-like 344.2 MiB result remains the authoritative memory reference.
+
+## Source catalog and group configuration
+
+Add one focused source catalog separate from the existing employer-board registry. `sources/registry.py` already owns `companies.toml` board definitions and must not import adapter classes; use a distinct focused module such as `sources/catalog.py` to avoid circular imports.
+
+The catalog must expose:
+
+- source name to adapter class
+- scheduled group or manual-only state
+- stable group ID, cadence, and startup delay
+- the deterministic union of enabled scheduled sources used by manual all-source production scans
+- any reviewed exception to the shared source HTTP budget, with a required bounded rationale
+
+Scheduled membership:
+
+### Group A — direct employer / ATS boards
+
+Candidate cadence: 60 minutes
 
 - greenhouse
 - ashby
@@ -1145,61 +1203,345 @@ Run every 60 minutes:
 - workable
 - jsonld
 
-### Group B — Germany/remote aggregators
+### Group B — aggregators / broad discovery
 
-Run every 120 minutes:
+Candidate cadence: 120 minutes
 
 - arbeitnow
-- stepstone
 - remotive
 - himalayas
 - remoteok
 - idealist
+- linkedin
 
-LinkedIn should be audited. Prefer email alerts over fragile scraping.
+### Group C — impact / NGO discovery
 
-### Group C — impact/NGO sources
+Candidate cadence: 360 minutes, but do not register this scheduler job until Phase 5B admits at least one source.
 
-Run every 360 minutes:
+StepStone remains registered but manual-only and suspended from scheduling pending repair or Phase 6 alert ingestion. Preserve its adapter, fixture/tests, source-health support, and `python main.py --dry-run --source stepstone`. Do not repair it in Phase 5A.
 
-- goodjobs
-- reliefweb
-- devex
-- eurobrussels
-- hours80k
-- techjobsforgood only if it works without Playwright in production
+Keep all other optional adapters registered and manually addressable. A source may appear in at most one scheduled group. `python main.py --dry-run --source NAME` must continue resolving every registered adapter, and an unqualified manual production scan must run the union of enabled scheduled groups.
 
-Do not enable a source merely because an adapter exists. It must pass validation and return useful structured eligibility data.
+Make group cadences and measurement-selected startup delays configurable through scheduling-specific runtime settings rather than candidate matching fields in `profile.toml`. Do not build a generic plugin framework.
 
-## Runtime settings
+## Concurrency contracts
 
-Production target:
+Introduce three separately validated controls:
 
-```env
-MAX_CONCURRENT_SOURCES=1
-DISABLE_PLAYWRIGHT=true
+- `MAX_CONCURRENT_SOURCE_ADAPTERS`: maximum source adapters concurrently active inside one source scan
+- `MAX_CONCURRENT_SOURCE_COMPONENTS`: the per-fan-out-boundary component concurrency value
+- `MAX_CONCURRENT_HTTP_REQUESTS`: the scan-wide source HTTP request ceiling
+
+`MAX_CONCURRENT_HTTP_REQUESTS` is the authoritative absolute ceiling for simultaneous source network attempts participating in one `run_scan()` lifecycle. It is not a process-wide HTTP limit and does not govern Discord delivery, Telegram delivery, Zoho Mail, health endpoints, or other non-source integrations. Because the production scan coordinator allows only one production source scan at a time, it provides a predictable global ceiling for source-fetch requests during production scanning without constraining unrelated process HTTP.
+
+If `MAX_CONCURRENT_SOURCES` is retained for deployment compatibility, treat it only as a deprecated fallback for source-adapter concurrency. It must no longer control component fan-out or the scan-wide source HTTP budget. Do not set it to one as a production target.
+
+## Safe component fan-out and deadlock prevention
+
+Do not implement `MAX_CONCURRENT_SOURCE_COMPONENTS` as one recursively acquired semaphore shared by outer and nested component work.
+
+No component task may hold a shared component permit while awaiting nested tasks that require the same permit. In particular, Personio must never enter this deadlock shape:
+
+```text
+outer board holds shared component permit
+  -> board awaits detail tasks
+     -> detail tasks require the same exhausted permit
 ```
+
+Apply these rules:
+
+- each board, query, page, or detail fan-out boundary owns an independent local limiter or bounded worker pool
+- an outer component may await a nested boundary only when the nested boundary does not acquire the outer boundary's permits
+- use bounded batches or fixed-size workers so limiting HTTP does not create an unbounded collection of waiting tasks
+- nested fan-out remains bounded by explicit local limits
+- the scan-wide source HTTP request budget remains the final ceiling on simultaneous source network attempts across all adapters and nested boundaries
+- component and HTTP permits release on success, exception, and cancellation
+
+Refactor common bounded mapping as necessary so a large ATS list creates only bounded live worker tasks rather than one task per board waiting on a semaphore.
+
+## Scan-wide source HTTP request budget and network-path audit
+
+Create one shared source-request budget per scan and bind it to every participating source. Acquire it around each source HTTP attempt in the common GET/POST transport and release it before retry backoff. Share the same fetch orchestration between production scans and read-only notification simulation.
+
+Before claiming the ceiling is complete, audit every scheduled source for source-side network paths that bypass `BaseSource._get()` or `_post()`, including:
+
+- direct `httpx`
+- direct `aiohttp`
+- `requests`
+- `urllib`
+- feed/parser APIs given a URL rather than already-fetched content
+- adapter-specific clients or SDKs
+
+The current repository inspection found Idealist's direct `httpx.AsyncClient` path; route it through the common budgeted transport. Re-audit every scheduled adapter rather than assuming Idealist is the only bypass. Every scheduled source-side request capable of running during `run_scan()` must either participate in the shared source budget or be declared as a reviewed, bounded exception in the source catalog.
+
+Add a practical audit assertion that enumerates scheduled adapter modules and rejects known direct-network constructs outside the shared source transport unless the catalog contains a non-empty reviewed exception. This assertion must make a newly scheduled adapter's silent source-budget bypass fail tests where practical.
+
+Do not route notifier, Zoho, health, or other non-source integration HTTP through this semaphore.
+
+## Paired concurrency experiment
+
+Do not choose production concurrency values from theory. Compare two paired passes, ordered A/B/C and then C/B/A under closely matched network conditions:
+
+| Configuration | Source adapters | Components per boundary | Scan-wide source HTTP ceiling |
+| --- | ---: | ---: | ---: |
+| A — unchanged Phase 4B image | 3 | current mixed behavior | no unified ceiling |
+| B — lower bounded | 2 | 3 | 4 |
+| C — bounded parallel | 3 | 3 | 6 |
+
+For Groups A and B record:
+
+- normal/representative duration
+- observed slow/outlier duration
+- peak container memory sampled throughout the run
+- configured source HTTP ceiling and observed source-request peak for B/C
+- source failures, partial failures, retries, and rate limits
+- raw, hard-eligible pre-cap, and final accepted counts
+
+Prefer B when it stays below 430 MiB, introduces no source-health or useful-coverage regression, and representative Group A/B durations remain within 20% of the paired baseline. Otherwise select C under the same criteria. Investigate any missing high-yield source or unexplained raw-count reduction above 5%. Stop and report if neither bounded configuration qualifies.
+
+Record the selected production values only after this experiment.
+
+## Grouped APScheduler jobs and startup staggering
+
+Replace the single scheduled job `scan` with stable group IDs such as `source_group_a`, `source_group_b`, and conditional `source_group_c`.
+
+Set every non-empty source-group job explicitly to:
+
+- `max_instances=1`
+- `coalesce=True`
+- bounded `misfire_grace_time`
+- a non-immediate initial trigger
+
+Do not use `next_run_time=now` for every group. Select exact startup offsets after the concurrency experiment using representative normal durations plus a reasonable safety buffer:
+
+- Group A: first non-zero whole minute after core readiness
+- Group B: a bounded later offset based on representative Group A duration plus approximately two minutes
+- Group C: similarly staggered after Group B when enabled
+
+Validate that configured offsets are non-zero, distinct, inside their group's cadence, and useful for normal-operation staggering. Do not derive offsets from one pathological timeout/retry run, require that offsets prevent every possible wall-clock overlap, or reject an otherwise valid schedule because an outlier lasted longer than its offset. Record both representative and slow/outlier durations.
+
+The production scan coordinator is authoritative overlap protection. If Group A overruns into Group B's trigger, Group B waits once; no concurrent production scan starts. `max_instances=1` and coalescing prevent repeated instances of the same group from accumulating.
+
+## Production scan coordinator and overlap semantics
+
+Add one shared in-process coordinator covering the complete non-dry production `run_scan()` lifecycle:
+
+- source fetching
+- ATS discovery
+- filtering and scan-local company cap
+- database deduplication and persistence
+- source metrics and health publication
+- pending immediate delivery after persistence
+
+Scheduled groups wait FIFO for the coordinator. Because each group has `max_instances=1`, at most one instance per different group can wait or run; later same-group triggers do not create an unbounded queue. After a long provider outage, the active scan completes and each already-waiting different group runs once.
+
+Discord and Telegram manual production scans do not queue. They return a clear busy response containing only the active scan scope and start time. An idle manual production scan runs the union of enabled scheduled groups with scope `manual_all`.
+
+Release coordinator state on success, exception, and cancellation. Dry-run CLI processes remain outside this in-process coordinator.
+
+## Core service readiness
+
+`ready=true` represents core local service readiness, not successful connectivity to every optional external system.
+
+Core readiness requires:
+
+1. SQLite initialized and migrated.
+2. Persisted health restored.
+3. `/health` listening.
+4. Source-group scheduler registered and started.
+5. Local notification/command workers or supervised tasks initialized or scheduled sufficiently for the process to operate.
+
+Core readiness must not wait for a successful connection or response from Discord, Telegram, Zoho, or job sources. Optional connection attempts must run through supervised background work; failures are logged and may appear as bounded operational/degraded integration state, but they do not block or reset core readiness.
+
+Use deterministic lifecycle semantics:
+
+```text
+process start -> ready=false
+local core startup completes -> ready=true
+source refresh and optional external connections continue asynchronously
+orderly shutdown -> ready=false
+```
+
+Telegram API initialization, Discord connection problems, Zoho unavailability, and source-provider failures must not leave the otherwise operational service unready indefinitely. Record time to core readiness, each group duration, and time until all enabled groups have completed one refresh.
+
+## Grouped health and SQLite migration
+
+Add an explicit, idempotent `scan_scope TEXT NOT NULL DEFAULT 'legacy_all'` column to `source_scan_runs` and an index supporting latest completion by scope. Persist stable values such as `group_a`, `group_b`, `group_c`, and `manual_all`; do not infer scope from source membership because membership can change.
+
+Preserve every deployment-facing health field. Define:
+
+- `last_scan_summary` legacy counts as the most recently completed production scope
+- additive `last_scan_summary.scope`
+- `last_scan_summary.sources` as only the sources attempted in that scope
+- compact last-completion timestamps for each scheduled group
+- per-source latest health as authoritative across every group and cadence
+- no synthetic zero, failure, stale state, or timestamp change for sources absent from the current group
+- top-level `last_scan` as the latest production completion
+- `next_scan_in_seconds` as the nearest next source-group trigger
+- additive core readiness state and timestamp without changing legacy `status` semantics
+
+Restore scope and group completion state from SQLite before a new source refresh completes. Daily status must label the latest scan scope and show compact group freshness so a Group C-only scan cannot be presented as all-source coverage. Optional integration or provider degradation must not reset core readiness.
+
+## Company cap, notification, and discovery compatibility
+
+Keep the Phase 4B company cap scan-local. Grouped scans therefore apply the cap separately. The planning audit found no additional selected jobs or company above two across separate Groups A/B, but repeat this comparison after implementation. Do not add a cross-window database quota in Phase 5A. If new evidence shows unacceptable employer flooding beyond what current batch limits control, stop and report rather than inventing a new policy.
+
+Every group production scan must continue to:
+
+- save only rows actually inserted
+- update metrics for attempted sources only
+- process pending immediate delivery afterward
+- use Phase 4A delivery receipts and Phase 4B notification policy
+- leave digest, explore, and weekly NGO cadence independent
+
+URL/content deduplication and receipts must prevent repeated persistence and delivery when multiple groups discover the same posting.
+
+Preserve ATS discovery scope and existing append deduplication. Group A direct-source jobs produce no aggregator discovery candidates; Group B may append a newly discovered candidate only once. Dry-run and notification simulation must not write jobs, metrics, receipts, health history, ATS discovery data, or mail state.
+
+Production remains free of Playwright and Chromium through dependencies, Docker architecture, and tests. Do not add a dead `DISABLE_PLAYWRIGHT` setting.
 
 ## Tasks
 
-- [ ] Introduce a simple source-group schedule configuration.
-- [ ] Avoid multiple overlapping scans with `max_instances=1` and coalescing.
-- [ ] Add a process-level scan lock if scheduler/manual commands can overlap.
-- [ ] Enable GoodJobs, ReliefWeb, and Devex after source-specific tests and live validation.
-- [ ] Audit the LinkedIn source and remove it from scheduled scans if it is blocked or unreliable.
-- [ ] Preserve manual `--source NAME` execution for all adapters.
-- [ ] Measure peak memory during startup and representative group scans.
-- [ ] Target peak container memory below 430 MiB to preserve headroom.
-- [ ] Keep production free of Playwright/Chromium execution.
-- [ ] Document source cadence and memory settings.
+- [ ] Add the focused source catalog, exact Group A/B membership, manual-only state, cadence validation, and conditional Group C omission.
+- [ ] Replace outer and component use of `MAX_CONCURRENT_SOURCES` with independently validated adapter, per-boundary component, and scan-wide source HTTP settings.
+- [ ] Add deadlock-safe local component fan-out with bounded worker/task creation, including nested Personio detail work.
+- [ ] Add the shared per-scan source HTTP budget and audit every scheduled adapter network path; route Idealist and all other unapproved bypasses through it.
+- [ ] Add the scheduled-adapter bypass assertion and explicit reviewed-exception contract.
+- [ ] Run the paired A/B/C experiment before selecting production concurrency or startup offsets.
+- [ ] Register stable, staggered group jobs with explicit `max_instances=1`, coalescing, and bounded misfire behavior.
+- [ ] Add the shared production scan coordinator with scheduled FIFO waiting and manual busy behavior.
+- [ ] Separate core readiness from group refresh and optional external connectivity.
+- [ ] Add the idempotent `scan_scope` migration and group-aware persisted/active health semantics.
+- [ ] Preserve scan-local company caps, receipts/policy, deduplication, ATS discovery dedup, and dry-run/simulation immutability.
+- [ ] Record representative/outlier durations, readiness, first full refresh, group memory, and maximum staggered-operation memory.
+
+## Test matrix
+
+Automated tests must use mocked external HTTP and cover at least:
+
+- source catalog membership, no unintended multi-group membership, manual-only resolution, and cadence validation
+- Group C omission when empty
+- stable scheduler IDs, non-zero/distinct/in-cadence startup offsets, `max_instances=1`, coalescing, and misfire grace
+- separate adapter and per-boundary component concurrency
+- nested Personio-like fan-out completing without deadlock with a small component limit
+- bounded component live-task creation
+- observed source HTTP concurrency never exceeding `MAX_CONCURRENT_HTTP_REQUESTS`
+- component and source HTTP permits released on success, exception, and cancellation
+- every scheduled source network path budgeted or explicitly excepted
+- scheduled/scheduled FIFO waiting, scheduled/manual busy behavior, and no concurrent production `run_scan()`
+- coordinator release after failure and cancellation
+- source-outcome isolation
+- readiness true before the first group scan
+- unavailable/mocked Discord and Telegram connectivity not preventing core readiness
+- source-provider failure not resetting readiness
+- deterministic `ready=false -> true -> false` across startup/shutdown and fresh restart
+- idempotent scope migration, legacy defaults, persisted restoration, and latest-scope semantics
+- per-source health/timestamps across different group cadences
+- `next_scan_in_seconds` from the nearest group trigger and daily status scope/freshness
+- notification receipt/dedup regressions across groups
+- unchanged scan-local company-cap accounting
+- ATS discovery append deduplication
+- dry-run and simulation immutability
+- no Playwright/Chromium dependency, import, process, or dead setting
+
+## Verification and performance
+
+Run focused Phase 5A tests first, then:
+
+```bash
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase5a .
+```
+
+The blocking v2 suites must pass. The historical diagnostic must introduce no failing node IDs beyond the verified 104. Run bounded live diagnostics for every Group A/B source, StepStone, and LinkedIn; live providers remain non-blocking and must not be dependencies of automated tests.
+
+Run the paired A/B/C experiment, an isolated service-readiness check, `/health` restoration, scheduled/manual overlap tests, and one staggered first refresh inside a 512 MiB container. Record:
+
+- time to core readiness
+- normal and slow/outlier Group A/B duration
+- peak memory for each group and across staggered operation
+- observed source HTTP peak and configured ceiling
+- time until all enabled groups complete one refresh
+- raw, pre-cap, final, status, issue, retry, and rate-limit comparisons
+
+Peak memory must stay below 430 MiB. Investigate any new source instability, unexplained coverage loss, recursive fan-out deadlock, unbudgeted scheduled-source network path, or meaningful latency regression before completion.
 
 ## Definition of done
 
-- Source groups run on separate schedules.
-- Scans cannot overlap and exhaust memory.
-- At least the selected lightweight impact sources are active and validated.
-- Representative production scans stay below the agreed memory target.
-- Full tests and deployment health gate pass.
+- Group A/B run on separate measured, staggered schedules; Group C is absent.
+- Only one production source scan can run, with bounded FIFO scheduled waiting and non-queued manual scans.
+- Nested component fan-out is deadlock-safe and task-bounded.
+- All scheduled source network attempts are covered by the scan-wide source HTTP ceiling or an explicit reviewed exception.
+- Core readiness is available before source refresh and independent of optional external connectivity.
+- Health remains backward compatible, group-aware, persisted, and authoritative per source.
+- Phase 1 employment/source health, Phase 2 employment, Phase 3 language, and Phase 4 policy/receipts remain intact.
+- Focused/blocking tests, historical compatibility, Docker build, live diagnostics, the concurrency experiment, readiness, `/health`, overlap, and memory checks pass.
+- Commit Phase 5A separately as `feat: group and bound production source scans` and stop for review before Phase 5B.
+
+---
+
+# Phase 5B — Impact-Source Admission
+
+**Status:** Not started
+
+## Objective
+
+Evaluate existing impact/NGO adapters under the Phase 5A scheduler, source HTTP budget, health, and memory behavior. Enable only sources that pass the admission gate. Phase 5B may complete with no sources enabled and must not begin Phase 6.
+
+## Admission gate
+
+An adapter is not scheduled merely because it exists. Each candidate must demonstrate:
+
+- technical health suitable for unattended operation
+- no browser runtime, authentication, or unsafe scraping requirement
+- bounded source HTTP behavior covered by the Phase 5A scan-wide source HTTP ceiling or an explicit reviewed exception
+- bounded component/task fan-out without recursive limiter deadlock
+- valid title, company, location, and URL normalization
+- accurate source outcome and partial-success reporting
+- useful and explicit Germany/EU/EMEA/worldwide or Berlin eligibility evidence
+- at least some plausible relevant tech/digital roles or a defensible mission-source benefit
+- acceptable scan duration and no source instability/rate-limit regression
+- acceptable memory under the shared below-430 MiB target
+- fixture-based automated tests with mocked HTTP
+
+For every candidate record `enabled` or `manual-only` with the evidence and reason. Do not weaken the eligibility invariants or invent worldwide scope to produce yield.
+
+## Current admission baseline
+
+- **GoodJobs — manual-only:** current page returned approximately 750 KB but parsed zero jobs, indicating parser drift rather than a trustworthy zero-result run.
+- **ReliefWeb — manual-only:** 28 raw jobs, all rejected on location, with insufficient Germany/Berlin remote eligibility evidence; its multi-feed outcome semantics must also pass the Phase 5A contract before admission.
+- **Devex — manual-only:** 20 raw jobs, 19 location rejections and one role rejection; no current hard-eligible yield.
+- **EuroBrussels — manual-only:** 29 raw jobs, all location-rejected; current on-site EU roles do not satisfy Berlin-only on-site eligibility.
+- **80,000 Hours — manual-only:** 44 prefiltered development-role candidates, with 37 location and seven role rejections; unknown/restricted location evidence is not sufficient for scheduling.
+- **Tech Jobs for Good — manual-only:** both current public URL attempts are blocked with HTTP 403 by Cloudflare.
+
+Do not enable GoodJobs, ReliefWeb, or Devex merely because the previous stale plan named them. Do not repair StepStone in Phase 5B. Keep every candidate manually runnable for diagnostics.
+
+## Tasks
+
+- [ ] Re-run bounded live dry diagnostics for all six candidates under the selected Phase 5A concurrency configuration.
+- [ ] Audit source-network coverage, component outcome semantics, normalization, eligibility evidence, duration, memory, and unique useful yield.
+- [ ] Record an explicit enabled/manual-only decision and reason for every candidate.
+- [ ] Add only qualifying sources to Group C; keep the Group C scheduler absent when none qualify.
+- [ ] Add or update mocked fixtures/tests only for a source that receives a justified adapter correction or production admission.
+- [ ] Preserve manual access to all candidates regardless of scheduling decision.
+
+## Verification and performance
+
+Automated tests must cover the admission decision registry, conditional Group C registration, manual-only resolution, source outcome isolation, source HTTP budgeting, and all corrected adapter behavior without live dependencies.
+
+For every candidate record live status, raw, hard-eligible pre-cap, final accepted, duration, issues, eligibility-evidence quality, and approximate unique useful yield. For any enabled Group C membership, run an isolated 512 MiB Group C scan, record peak memory/duration, verify grouped health scope, and repeat the cross-group company-cap/receipt assessment.
+
+## Definition of done
+
+- Every impact candidate has an evidence-backed enabled/manual-only decision.
+- No source is enabled solely to satisfy a checklist or source-count target.
+- Group C is registered only when at least one source passes the complete gate.
+- It is valid for Phase 5B to complete with no production source enabled.
+- Manual source execution, health support, hard eligibility, Phase 4 receipts/policy, and the below-430 MiB target remain intact.
+- Commit Phase 5B independently if implementation or admission-state changes are warranted, record results in its progress entry, and stop before Phase 6.
 
 ---
 
@@ -1842,7 +2184,15 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Temporary containers, databases, receipts, logs, live simulation output, and runtime files were removed after verification. The narrow provider-HTTP/receipt-commit at-least-once crash window remains unchanged. Live source volume and timing remain volatile; this sample had no selected explore, part-time, or freelance job, so later production evaluation should revisit recall only with new evidence.
   - Phase 5 was not started.
 
-## Phase 5
+## Phase 5A — Grouped Scheduler, Locking, Health, and Bounded Source HTTP
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 5B — Impact-Source Admission
 
 - Status: Not started
 - Commit:
