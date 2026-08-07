@@ -259,7 +259,7 @@ def empty_rejection_counts() -> dict[RejectionCode, int]:
 
 
 def empty_routing_counts() -> dict[str, int]:
-    return {"immediate": 0, "digest": 0, "diagnostic": 0}
+    return {"immediate": 0, "digest": 0, "explore": 0, "diagnostic": 0}
 
 
 @dataclass(slots=True)
@@ -374,7 +374,10 @@ class ScanSummary:
         counts: Counter[str] = Counter()
         for item in self.sources.values():
             counts.update(item.routing_counts)
-        return {name: counts.get(name, 0) for name in ("immediate", "digest", "diagnostic")}
+        return {
+            name: counts.get(name, 0)
+            for name in ("immediate", "digest", "explore", "diagnostic")
+        }
 
     @property
     def rejected_count(self) -> int:
@@ -436,6 +439,7 @@ class ScanSummary:
             "rejected": self.rejected_count,
             "immediate": routing["immediate"],
             "digest": routing["digest"],
+            "explore": routing["explore"],
             "diagnostic": routing["diagnostic"],
             "sources": {name: item.raw_count for name, item in self.sources.items()},
             "accepted": self.accepted_count,

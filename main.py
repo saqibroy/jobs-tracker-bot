@@ -29,7 +29,6 @@ from loguru import logger
 import config
 from filters.employment import (
     employment_display_lines,
-    persisted_employment_display_lines,
 )
 from filters.language import language_display_text
 from filters.pipeline import (
@@ -52,8 +51,10 @@ from models.scan import (
     sanitize_source_error,
     utc_now,
 )
-from notifiers.discord_notifier import DiscordNotifier
-from notifiers.telegram_notifier import TelegramNotifier
+from notifiers.delivery import (
+    process_pending_digest_delivery,
+    process_pending_immediate_deliveries,
+)
 from sources.arbeitnow import ArbeitnowSource
 from sources.ats_url_sniffer import append_sniffed_candidates
 from sources.ashby import AshbySource
@@ -83,7 +84,6 @@ from sources.base import BaseSource
 from storage.database import (
     backfill_match_scores,
     filter_unseen,
-    get_recent_unnotified,
     get_latest_scan_summary,
     get_latest_source_statuses,
     get_stats,
@@ -91,7 +91,6 @@ from storage.database import (
     get_weekly_general_count,
     get_weekly_ngo_jobs,
     init_db,
-    mark_notified,
     persist_scan_metrics,
     save_jobs,
 )
@@ -317,7 +316,7 @@ async def run_scan(
             metrics.saved_count += 1
             route = (
                 job.notification_tier
-                if job.notification_tier in {"immediate", "digest"}
+                if job.notification_tier in {"immediate", "digest", "explore"}
                 else "diagnostic"
             )
             metrics.routing_counts[route] += 1
@@ -328,13 +327,12 @@ async def run_scan(
     source_health = await get_latest_source_statuses()
     _publish_scan_health(scan_summary, source_health)
 
-    if saved_jobs:
-        # Only strong matches alert immediately. Borderline matches stay
-        # unnotified until the scheduled digest; low matches remain as
-        # diagnostics and never notify.
-        await _send_notifications(saved_jobs)
-    else:
+    if not saved_jobs:
         logger.info("No new jobs this cycle")
+
+    # Delivery is durable and receipt-driven. Always retry pending immediate
+    # obligations after a production scan, even if dedup saved no new rows.
+    await _send_notifications()
 
     return saved_jobs
 
@@ -449,32 +447,15 @@ def _publish_scan_health(
         logger.exception("Failed to publish scan health summary")
 
 
-async def _send_notifications(jobs: list[Job]) -> None:
-    """Send notifications for new jobs via all configured channels."""
-    immediate_jobs = [job for job in jobs if job.notification_tier == "immediate"]
-    if not immediate_jobs:
-        logger.info(
-            "Notification routing: 0 immediate, {} digest, {} diagnostic",
-            sum(job.notification_tier == "digest" for job in jobs),
-            sum(job.notification_tier == "none" for job in jobs),
-        )
-        return
+async def _send_notifications(jobs: list[Job] | None = None) -> None:
+    """Process durable immediate delivery obligations.
 
-    # Discord
-    if config.DISCORD_WEBHOOK_URL:
-        notifier = DiscordNotifier()
-        await notifier.send_jobs(immediate_jobs)
-    else:
-        logger.warning("Discord webhook URL not configured — skipping notifications")
+    The optional argument is retained for caller compatibility only. Receipt
+    state in SQLite, not a newly inserted in-memory list, is authoritative.
+    """
 
-    # Telegram
-    if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
-        notifier = TelegramNotifier()
-        await notifier.send_jobs(immediate_jobs)
-    else:
-        logger.debug("Telegram not configured — skipping")
-
-    await mark_notified([job.id for job in immediate_jobs])
+    del jobs
+    await process_pending_immediate_deliveries()
 
 
 def _format_age(posted_at: datetime | None) -> str:
@@ -590,6 +571,7 @@ async def _show_stats() -> None:
         "  Routing:             "
         f"{notification_tiers.get('immediate', 0)} immediate · "
         f"{notification_tiers.get('digest', 0)} digest · "
+        f"{notification_tiers.get('explore', 0)} explore · "
         f"{notification_tiers.get('none', 0)} diagnostic"
     )
 
@@ -1082,16 +1064,9 @@ async def _scheduled_zoho_mail_sync() -> None:
 
 
 async def _scheduled_digest() -> None:
-    """Send a digest summary of recent unnotified jobs.
-
-    Only sends if there are jobs to show OR if no scan has run
-    successfully in the last 2 hours (health alert).
-    """
+    """Send one receipt-driven Discord digest batch on the six-hour cadence."""
     try:
-        recent = await get_recent_unnotified(hours=config.DIGEST_INTERVAL_HOURS)
         total = await get_total_count()
-
-        # Check if any scan ran in the last 2 hours
         no_recent_scan = False
         try:
             from health import _last_scan_time
@@ -1104,58 +1079,15 @@ async def _scheduled_digest() -> None:
         except ImportError:
             pass
 
-        if recent:
+        result = await process_pending_digest_delivery(total_jobs=total)
+        if result.selected_count:
             logger.info(
-                "📋 Digest: {} unnotified jobs in last {} hours (total in DB: {})",
-                len(recent), config.DIGEST_INTERVAL_HOURS, total,
+                "📋 Digest: {} pending, {} included, {} delivered (total in DB: {})",
+                result.selected_count,
+                result.included_count,
+                len(result.successes),
+                total,
             )
-            # Send digest via Discord as a modern summary embed
-            if config.DISCORD_WEBHOOK_URL:
-                from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
-
-                job_lines = []
-                for r in recent[:15]:
-                    source_icon = {
-                        "remotive": "🟣", "arbeitnow": "🔴", "remoteok": "🟠",
-                        "reliefweb": "🔵", "hours80k": "⚫", "goodjobs": "🟢",
-                        "devex": "🔴", "eurobrussels": "🔵",
-                    }.get(r.get("source", ""), "🌐")
-                    score = r.get("match_score", 0)
-                    workplace = r.get("workplace_type", "unknown")
-                    employment_lines = persisted_employment_display_lines(r)
-                    employment_text = "".join(
-                        f"\n> {line}" for line in employment_lines
-                    )
-                    job_lines.append(
-                        f"{source_icon} **[{r['title']}]({r['url']})**\n"
-                        f"> 🏢 {r['company']}  ·  `{r['source']}`  ·  "
-                        f"📊 {score}%  ·  🧭 {workplace}{employment_text}"
-                    )
-
-                description = "\n\n".join(job_lines)
-                if len(recent) > 15:
-                    description += f"\n\n*…and {len(recent) - 15} more*"
-
-                webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
-                embed = DiscordEmbed(
-                    title=f"📋  Digest — {len(recent)} jobs in the last {config.DIGEST_INTERVAL_HOURS}h",
-                    description=description,
-                    color=0x8B5CF6,  # violet for digest
-                )
-                embed.add_embed_field(
-                    name="📊 Database",
-                    value=f"`{total}` total jobs tracked",
-                    inline=True,
-                )
-                embed.set_footer(text="Job Tracker Bot · Periodic Digest")
-                embed.set_timestamp(datetime.now(timezone.utc).isoformat())
-                webhook.add_embed(embed)
-                await webhook.execute()
-                logger.info("📋 Digest sent to Discord")
-
-                # Mark digest jobs as notified so they don't repeat
-                digest_job_ids = [r["id"] for r in recent if r.get("id")]
-                await mark_notified(digest_job_ids)
         elif no_recent_scan:
             # Health alert — no scan ran recently and no new jobs
             logger.warning("📋 Digest: no scans in last 2 hours — health alert")
@@ -1182,8 +1114,9 @@ async def _scheduled_digest() -> None:
                 await webhook.execute()
         else:
             logger.info(
-                "📋 Digest: no unnotified jobs in last {} hours (total in DB: {})",
-                config.DIGEST_INTERVAL_HOURS, total,
+                "📋 Digest: no pending jobs inside the 14-day delivery window "
+                "(total in DB: {})",
+                total,
             )
     except Exception:
         logger.exception("Digest task failed")
@@ -1284,6 +1217,7 @@ async def send_daily_status_summary() -> None:
         rejected = summary.get("rejected", 0)
         immediate = summary.get("immediate", 0)
         digest = summary.get("digest", 0)
+        explore = summary.get("explore", 0)
         diagnostic = summary.get("diagnostic", 0)
 
         source_counts = summary.get("sources", {}) or {}
@@ -1318,6 +1252,7 @@ async def send_daily_status_summary() -> None:
             value=(
                 f"`{immediate}` immediate\n"
                 f"`{digest}` digest\n"
+                f"`{explore}` explore\n"
                 f"`{diagnostic}` diagnostic"
             ),
             inline=True,

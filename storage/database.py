@@ -1,7 +1,7 @@
-"""SQLite-backed deduplication store.
+"""SQLite-backed job deduplication, scan metrics, and delivery receipts.
 
-Tracks which job URLs we've already seen so we only notify on new postings.
-Easy to swap for PostgreSQL later — just replace the SQL calls.
+Job rows track what has been seen; Phase 4 delivery receipts independently
+track which logical destinations accepted each notification obligation.
 """
 
 from __future__ import annotations
@@ -17,6 +17,14 @@ from loguru import logger
 import config
 from models.job import Job
 from models.scan import ScanSummary, sanitize_source_error
+from notifiers.base import (
+    DELIVERY_DESTINATIONS,
+    DELIVERY_KINDS,
+    DISCORD_DESTINATIONS,
+    DeliveryDestination,
+    DeliveryKind,
+    DeliverySuccess,
+)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -84,6 +92,23 @@ CREATE TABLE IF NOT EXISTS source_scan_runs (
     PRIMARY KEY (scan_id, source)
 );
 """
+
+_CREATE_JOB_DELIVERY_RECEIPTS = """
+CREATE TABLE IF NOT EXISTS job_delivery_receipts (
+    job_id        TEXT NOT NULL,
+    delivery_kind TEXT NOT NULL,
+    destination   TEXT NOT NULL,
+    delivered_at  TEXT NOT NULL,
+    PRIMARY KEY (job_id, delivery_kind, destination)
+);
+"""
+
+_CREATE_DELIVERY_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_jobs_pending_delivery "
+    "ON jobs(notification_tier, notified, fetched_at, match_score DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_delivery_receipts_obligation "
+    "ON job_delivery_receipts(delivery_kind, destination, job_id);",
+)
 
 _CREATE_SOURCE_SCAN_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_completed "
@@ -168,6 +193,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_TABLE)
         await db.execute(_CREATE_INDEX)
         await db.execute(_CREATE_SOURCE_SCAN_RUNS)
+        await db.execute(_CREATE_JOB_DELIVERY_RECEIPTS)
         for statement in _CREATE_SOURCE_SCAN_INDEXES:
             await db.execute(statement)
         # Migration: add match_score column if it doesn't exist
@@ -182,6 +208,10 @@ async def init_db() -> None:
                 logger.debug("Migration: added {} column", column)
             except Exception:
                 pass
+        # This jobs index depends on columns added by the compatibility
+        # migrations above, so older databases must create it last.
+        for statement in _CREATE_DELIVERY_INDEXES:
+            await db.execute(statement)
         await db.commit()
     logger.info("Database initialized at {}", path)
 
@@ -478,7 +508,12 @@ async def get_latest_scan_summary() -> dict | None:
 
     raw = accepted = unseen = saved = 0
     rejection_counts: dict[str, int] = {}
-    routing_counts = {"immediate": 0, "digest": 0, "diagnostic": 0}
+    routing_counts = {
+        "immediate": 0,
+        "digest": 0,
+        "explore": 0,
+        "diagnostic": 0,
+    }
     source_counts: dict[str, int] = {}
     completed_at: str | None = None
     for row in rows:
@@ -503,6 +538,7 @@ async def get_latest_scan_summary() -> dict | None:
         "rejected": sum(rejection_counts.values()),
         "immediate": routing_counts["immediate"],
         "digest": routing_counts["digest"],
+        "explore": routing_counts["explore"],
         "diagnostic": routing_counts["diagnostic"],
         "sources": source_counts,
         "accepted": accepted,
@@ -533,7 +569,12 @@ get_latest_completed_scan = get_latest_scan_summary
 
 
 async def mark_notified(job_ids: list[str]) -> None:
-    """Mark jobs as notified so the digest doesn't re-send them."""
+    """Legacy compatibility only: globally suppress pre-Phase-4 delivery.
+
+    ``notified=1`` means only ``legacy_suppressed``. It does not prove which
+    provider or destination received a historical job. New delivery paths must
+    persist destination receipts instead and leave ``jobs.notified`` unchanged.
+    """
     if not job_ids:
         return
     path = await _db_path()
@@ -547,7 +588,7 @@ async def mark_notified(job_ids: list[str]) -> None:
 
 
 async def get_recent_unnotified(hours: int = 6, limit: int = 15) -> list[dict]:
-    """Fetch jobs from the last N hours that haven't been notified (for digest)."""
+    """Legacy compatibility query; Phase 4 delivery uses receipt-backed pending."""
     path = await _db_path()
     cutoff = datetime.now(timezone.utc).isoformat()
     async with aiosqlite.connect(path) as db:
@@ -565,6 +606,170 @@ async def get_recent_unnotified(hours: int = 6, limit: int = 15) -> list[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+def _validate_delivery_contract(
+    delivery_kind: str,
+    destination: str,
+) -> tuple[DeliveryKind, DeliveryDestination]:
+    if delivery_kind not in DELIVERY_KINDS:
+        raise ValueError(f"unsupported delivery kind: {delivery_kind}")
+    if destination not in DELIVERY_DESTINATIONS:
+        raise ValueError(f"unsupported delivery destination: {destination}")
+    return delivery_kind, destination  # type: ignore[return-value]
+
+
+async def record_delivery_receipts(
+    delivery_kind: DeliveryKind,
+    successes: list[DeliverySuccess],
+    *,
+    delivered_at: datetime | None = None,
+) -> int:
+    """Persist exact destination successes transactionally and idempotently."""
+
+    if delivery_kind not in DELIVERY_KINDS:
+        raise ValueError(f"unsupported delivery kind: {delivery_kind}")
+    if not successes:
+        return 0
+    for success in successes:
+        _validate_delivery_contract(delivery_kind, success.destination)
+    timestamp = (delivered_at or datetime.now(timezone.utc)).isoformat()
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        before = db.total_changes
+        await db.executemany(
+            """
+            INSERT OR IGNORE INTO job_delivery_receipts
+                (job_id, delivery_kind, destination, delivered_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (success.job_id, delivery_kind, success.destination, timestamp)
+                for success in successes
+            ],
+        )
+        await db.commit()
+        inserted = db.total_changes - before
+    logger.info(
+        "Recorded {} new {} delivery receipt(s) from {} success(es)",
+        inserted,
+        delivery_kind,
+        len(successes),
+    )
+    return inserted
+
+
+async def get_pending_delivery_jobs(
+    delivery_kind: DeliveryKind,
+    destination: DeliveryDestination,
+    *,
+    limit: int = 15,
+    max_age_days: int = 14,
+    ngo_webhook_configured: bool = False,
+    now: datetime | None = None,
+) -> list[Job]:
+    """Return one deterministic bounded batch missing a destination receipt.
+
+    Historical ``notified=1`` rows are conservatively suppressed. For Discord,
+    a receipt at either logical webhook satisfies the single Discord obligation,
+    so later webhook configuration changes cannot resend an already delivered job.
+    """
+
+    delivery_kind, destination = _validate_delivery_contract(
+        delivery_kind, destination
+    )
+    if limit < 1:
+        return []
+    if max_age_days < 1:
+        raise ValueError("max_age_days must be positive")
+    if destination == "discord_ngo":
+        if delivery_kind != "immediate" or not ngo_webhook_configured:
+            return []
+
+    conditions = [
+        "j.notified = 0",
+        "j.notification_tier = ?",
+        "j.fetched_at >= ?",
+    ]
+    params: list[Any] = [
+        delivery_kind,
+        ((now or datetime.now(timezone.utc)) - timedelta(days=max_age_days)).isoformat(),
+    ]
+
+    if destination in DISCORD_DESTINATIONS:
+        conditions.append(
+            """
+            NOT EXISTS (
+                SELECT 1 FROM job_delivery_receipts AS receipt
+                WHERE receipt.job_id = j.id
+                  AND receipt.delivery_kind = ?
+                  AND receipt.destination IN ('discord_general', 'discord_ngo')
+            )
+            """
+        )
+        params.append(delivery_kind)
+        if delivery_kind == "immediate":
+            if destination == "discord_ngo":
+                conditions.append("j.is_ngo = 1")
+            elif ngo_webhook_configured:
+                conditions.append("j.is_ngo = 0")
+    else:
+        conditions.append(
+            """
+            NOT EXISTS (
+                SELECT 1 FROM job_delivery_receipts AS receipt
+                WHERE receipt.job_id = j.id
+                  AND receipt.delivery_kind = ?
+                  AND receipt.destination = ?
+            )
+            """
+        )
+        params.extend((delivery_kind, destination))
+
+    path = await _db_path()
+    query = f"""
+        SELECT j.*
+        FROM jobs AS j
+        WHERE {' AND '.join(conditions)}
+        ORDER BY
+            j.match_score DESC,
+            COALESCE(j.posted_at, j.fetched_at) DESC,
+            j.fetched_at DESC,
+            j.id ASC
+        LIMIT ?
+    """
+    params.append(min(limit, 15))
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(query, params)
+        return [job_from_row(row) for row in await cursor.fetchall()]
+
+
+async def get_delivery_receipts(job_id: str | None = None) -> list[dict[str, str]]:
+    """Return receipts for diagnostics and focused migration/delivery tests."""
+
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        db.row_factory = aiosqlite.Row
+        if job_id is None:
+            cursor = await db.execute(
+                """
+                SELECT job_id, delivery_kind, destination, delivered_at
+                FROM job_delivery_receipts
+                ORDER BY job_id, delivery_kind, destination
+                """
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT job_id, delivery_kind, destination, delivered_at
+                FROM job_delivery_receipts
+                WHERE job_id = ?
+                ORDER BY delivery_kind, destination
+                """,
+                (job_id,),
+            )
+        return [dict(row) for row in await cursor.fetchall()]
 
 
 async def get_total_count() -> int:

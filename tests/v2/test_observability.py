@@ -416,7 +416,7 @@ async def test_notifications_receive_only_actually_inserted_jobs(
     result = await main.run_scan([source], dry_run=False)
 
     assert result == [first]
-    notify.assert_awaited_once_with([first])
+    notify.assert_awaited_once_with()
     summary = persist.await_args.args[0]
     assert summary.accepted_count == 2
     assert summary.unseen_count == 2
@@ -433,6 +433,7 @@ async def test_health_payload_remains_backward_compatible() -> None:
             "rejected": 7,
             "immediate": 1,
             "digest": 1,
+            "explore": 0,
             "diagnostic": 1,
             "accepted": 3,
             "unseen": 2,
@@ -446,7 +447,7 @@ async def test_health_payload_remains_backward_compatible() -> None:
     summary = payload["last_scan_summary"]
 
     for key in (
-        "raw", "eligible_role_matches", "rejected", "immediate", "digest", "diagnostic"
+        "raw", "eligible_role_matches", "rejected", "immediate", "digest", "explore", "diagnostic"
     ):
         assert key in summary
     assert summary["accepted"] == 3
@@ -462,6 +463,7 @@ async def test_persisted_summary_restores_health_state(database: Path) -> None:
     summary.sources["alpha"].unseen_count = 1
     summary.sources["alpha"].saved_count = 1
     summary.sources["alpha"].routing_counts["digest"] = 1
+    summary.sources["alpha"].routing_counts["explore"] = 2
     await persist_scan_metrics(summary)
     health._scan_summary = {}
     health._last_scan_time = None
@@ -473,6 +475,7 @@ async def test_persisted_summary_restores_health_state(database: Path) -> None:
     assert restored["eligible_role_matches"] == 1
     assert restored["saved"] == 1
     assert restored["digest"] == 1
+    assert restored["explore"] == 2
     assert health.get_last_scan_time() is not None
 
 
@@ -501,7 +504,7 @@ async def test_stats_source_health_output_is_compact(
                 "ngo_count": 0,
                 "new_24h": 0,
                 "sources": {},
-                "notification_tiers": {},
+                "notification_tiers": {"explore": 2},
                 "top_companies": [],
                 "last_fetched_at": None,
                 "source_health": [
@@ -524,6 +527,7 @@ async def test_stats_source_health_output_is_compact(
     assert "alpha" in output
     assert "network_error" in output
     assert "never" in output
+    assert "2 explore" in output
     assert len(output) < 4000
 
 

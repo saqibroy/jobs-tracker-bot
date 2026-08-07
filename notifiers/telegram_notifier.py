@@ -22,7 +22,7 @@ import config
 from filters.employment import employment_display_lines
 from models.job import Job
 from filters.match import match_score_bar
-from notifiers.base import BaseNotifier
+from notifiers.base import BaseNotifier, DeliverySuccess
 
 # Telegram rate limit: ~30 messages per second to the same chat.
 # We use a small delay to be safe.
@@ -53,13 +53,17 @@ class TelegramNotifier(BaseNotifier):
     def name(self) -> str:
         return "telegram"
 
+    @property
+    def configured(self) -> bool:
+        return bool(self._bot_token and self._chat_id)
+
     # ── Public API ─────────────────────────────────────────────────────
 
-    async def send_jobs(self, jobs: list[Job]) -> None:
-        """Send each job as a separate HTML message."""
-        if not self._bot_token or not self._chat_id:
+    async def send_jobs(self, jobs: list[Job]) -> list[DeliverySuccess]:
+        """Send jobs separately and return only exact successful IDs."""
+        if not self.configured:
             logger.warning("Telegram bot token or chat ID not configured — skipping")
-            return
+            return []
 
         ngo_jobs = [j for j in jobs if j.is_ngo]
         general_jobs = [j for j in jobs if not j.is_ngo]
@@ -70,9 +74,9 @@ class TelegramNotifier(BaseNotifier):
         )
 
         bot = Bot(token=self._bot_token)
-        sent = 0
+        successes: list[DeliverySuccess] = []
 
-        for job in jobs:
+        for index, job in enumerate(jobs):
             try:
                 message = self._format_job(job)
                 await bot.send_message(
@@ -81,7 +85,7 @@ class TelegramNotifier(BaseNotifier):
                     parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                 )
-                sent += 1
+                successes.append(DeliverySuccess(job.id, "telegram"))
             except RetryAfter as exc:
                 logger.warning(
                     "Telegram rate limited — waiting {}s", exc.retry_after
@@ -96,17 +100,20 @@ class TelegramNotifier(BaseNotifier):
                         parse_mode=ParseMode.HTML,
                         disable_web_page_preview=True,
                     )
-                    sent += 1
-                except TelegramError:
+                    successes.append(DeliverySuccess(job.id, "telegram"))
+                except Exception:
                     logger.exception("Telegram: retry failed for '{}'", job.title)
-            except TelegramError:
+            except Exception:
                 logger.exception("Telegram: failed to send job '{}'", job.title)
 
             # Rate-limit courtesy delay
-            if sent < len(jobs):
+            if index < len(jobs) - 1:
                 await asyncio.sleep(_DELAY_BETWEEN_MESSAGES)
 
-        logger.info("Telegram: {}/{} jobs sent successfully", sent, len(jobs))
+        logger.info(
+            "Telegram: {}/{} jobs sent successfully", len(successes), len(jobs)
+        )
+        return successes
 
     async def send_test_message(self) -> None:
         """Send a simple test message to verify the bot configuration."""

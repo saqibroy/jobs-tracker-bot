@@ -30,6 +30,7 @@ _LEGACY_SUMMARY_KEYS = (
     "rejected",
     "immediate",
     "digest",
+    "explore",
     "diagnostic",
 )
 

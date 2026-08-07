@@ -12,7 +12,13 @@ import config
 from filters.employment import employment_display_lines
 from models.job import Job
 from filters.match import match_score_bar
-from notifiers.base import BaseNotifier
+from notifiers.base import (
+    BaseNotifier,
+    DeliveryDestination,
+    DeliverySuccess,
+    GroupedJobPayload,
+    resolve_discord_destination,
+)
 
 # ── Embed colours ──────────────────────────────────────────────────────────
 _NGO_COLOUR = 0x10B981    # emerald green
@@ -68,13 +74,38 @@ class DiscordNotifier(BaseNotifier):
     def name(self) -> str:
         return "discord"
 
+    @property
+    def general_configured(self) -> bool:
+        return bool(self._webhook_url)
+
+    @property
+    def ngo_configured(self) -> bool:
+        return bool(self._webhook_url_ngo)
+
+    def has_destination(self, destination: DeliveryDestination) -> bool:
+        if destination == "discord_general":
+            return self.general_configured
+        if destination == "discord_ngo":
+            return self.ngo_configured
+        return False
+
     # ── Public API ─────────────────────────────────────────────────────
 
-    async def send_jobs(self, jobs: list[Job]) -> None:
-        """Send each job as a separate embed message."""
-        if not self._webhook_url:
+    async def send_jobs(
+        self,
+        jobs: list[Job],
+        *,
+        include_batch_header: bool = True,
+    ) -> list[DeliverySuccess]:
+        """Send each job separately and return only exact successful jobs.
+
+        ``include_batch_header`` defaults to the historical public behavior.
+        Receipt-driven orchestration disables it because each logical destination
+        is already processed as an independent bounded batch.
+        """
+        if not self._webhook_url and not self._webhook_url_ngo:
             logger.warning("Discord webhook URL not configured — skipping")
-            return
+            return []
 
         ngo_jobs = [j for j in jobs if j.is_ngo]
         general_jobs = [j for j in jobs if not j.is_ngo]
@@ -85,23 +116,69 @@ class DiscordNotifier(BaseNotifier):
         )
 
         # Send a batch header when there are multiple jobs
-        if len(jobs) > 1:
-            await self._send_batch_header(jobs)
+        if include_batch_header and len(jobs) > 1 and self._webhook_url:
+            try:
+                await self._send_batch_header(jobs)
+            except Exception:
+                logger.exception("Discord: failed to send batch header")
             await asyncio.sleep(_DELAY_BETWEEN_EMBEDS)
 
-        sent = 0
-        for job in jobs:
+        successes: list[DeliverySuccess] = []
+        for index, job in enumerate(jobs):
             try:
-                await self._send_single_job(job)
-                sent += 1
+                success = await self._send_single_job(job)
+                if success is not None:
+                    successes.append(success)
             except Exception:
                 logger.exception("Discord: failed to send job '{}'", job.title)
 
             # Rate-limit courtesy delay (skip after last one)
-            if sent < len(jobs):
+            if index < len(jobs) - 1:
                 await asyncio.sleep(_DELAY_BETWEEN_EMBEDS)
 
-        logger.info("Discord: {}/{} jobs sent successfully", sent, len(jobs))
+        logger.info(
+            "Discord: {}/{} jobs sent successfully", len(successes), len(jobs)
+        )
+        return successes
+
+    async def send_grouped_digest(
+        self,
+        payload: GroupedJobPayload,
+        *,
+        total_jobs: int,
+    ) -> list[DeliverySuccess]:
+        """Send one general-channel digest and return its exact membership."""
+
+        if not self._webhook_url or not payload.jobs:
+            return []
+        try:
+            webhook = AsyncDiscordWebhook(url=self._webhook_url, content="")
+            embed = DiscordEmbed(
+                title=payload.title[:256],
+                description=payload.description,
+                color=_DIGEST_COLOUR,
+            )
+            embed.add_embed_field(
+                name="📊 Database",
+                value=f"`{total_jobs}` total jobs tracked",
+                inline=True,
+            )
+            embed.set_footer(text="Job Tracker Bot · Periodic Digest")
+            embed.set_timestamp(datetime.now(timezone.utc).isoformat())
+            webhook.add_embed(embed)
+            response = await webhook.execute()
+            if _http_response_failed(response):
+                logger.error(
+                    "Discord: digest HTTP failure status {}",
+                    getattr(response, "status_code", "unknown"),
+                )
+                return []
+        except Exception:
+            logger.exception("Discord: grouped digest delivery failed")
+            return []
+        return [
+            DeliverySuccess(job.id, "discord_general") for job in payload.jobs
+        ]
 
     async def send_test_message(self) -> None:
         """Send a simple test embed to verify the webhook works."""
@@ -153,8 +230,8 @@ class DiscordNotifier(BaseNotifier):
         )
         await webhook.execute()
 
-    async def _send_single_job(self, job: Job) -> None:
-        """Build and send a modern, visually polished embed for a job."""
+    async def _send_single_job(self, job: Job) -> DeliverySuccess | None:
+        """Build and send one embed, returning its exact logical success."""
         is_ngo = job.is_ngo
         high_match = job.match_score >= 70
 
@@ -170,11 +247,19 @@ class DiscordNotifier(BaseNotifier):
         category_badge = "🏛️ NGO / Nonprofit" if is_ngo else "💼 General"
         source_icon = _SOURCE_ICONS.get(job.source, "🌐")
 
-        # Choose webhook
-        if is_ngo and self._webhook_url_ngo:
-            url = self._webhook_url_ngo
-        else:
-            url = self._webhook_url
+        destination = resolve_discord_destination(
+            job,
+            general_configured=self.general_configured,
+            ngo_configured=self.ngo_configured,
+        )
+        if destination is None:
+            logger.debug("Discord: no configured destination for '{}'", job.title)
+            return None
+        url = (
+            self._webhook_url_ngo
+            if destination == "discord_ngo"
+            else self._webhook_url
+        )
 
         # ── Build the embed description ────────────────────────────────
         # Compact description block with key info
@@ -277,12 +362,18 @@ class DiscordNotifier(BaseNotifier):
         webhook.add_embed(embed)
         response = await webhook.execute()
 
-        if response and hasattr(response, "status_code") and response.status_code >= 400:
+        if _http_response_failed(response):
             logger.error(
                 "Discord: HTTP {} sending '{}'", response.status_code, job.title
             )
-        else:
-            logger.debug("Discord: sent '{}'", job.title)
+            return None
+        logger.debug("Discord: sent '{}'", job.title)
+        return DeliverySuccess(job.id, destination)
+
+
+def _http_response_failed(response: object) -> bool:
+    status = getattr(response, "status_code", None)
+    return isinstance(status, int) and status >= 400
 
 
 def _format_relative_time(dt: datetime) -> str:

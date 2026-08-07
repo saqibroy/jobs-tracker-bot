@@ -842,16 +842,16 @@ Do not add a production dependency or another service.
 
 ## Tasks
 
-- [ ] Add the four-value notification tier while preserving 70/45/none assignment and leaving explore disabled.
-- [ ] Add the idempotent `job_delivery_receipts` migration and typed delivery-kind/destination contracts.
-- [ ] Implement the exact general/NGO Discord selection and fallback rules with one Discord obligation per job, plus independent Telegram delivery.
-- [ ] Return exact per-job/per-destination successes from notifier sends and record only successful receipts transactionally.
-- [ ] Replace new delivery paths' global `notified` writes with receipt-based pending/retry logic; keep `notified` and `mark_notified()` legacy-only.
-- [ ] Replace the digest lookback with bounded receipt-based carry-over, deterministic ordering, and 14-day staleness.
-- [ ] Record grouped digest receipts for exactly the jobs included in a successful payload and keep overflow pending.
-- [ ] Add explore routing counts additively across metrics, persistence restoration, health, stats, and daily status.
-- [ ] Preserve dry-run immutability, current routing thresholds, Discord destinations, digest cadence/channel, and weekly NGO behavior.
-- [ ] Add the complete migration, receipt, partial-failure, backlog, compatibility, and safety test matrix.
+- [x] Add the four-value notification tier while preserving 70/45/none assignment and leaving explore disabled.
+- [x] Add the idempotent `job_delivery_receipts` migration and typed delivery-kind/destination contracts.
+- [x] Implement the exact general/NGO Discord selection and fallback rules with one Discord obligation per job, plus independent Telegram delivery.
+- [x] Return exact per-job/per-destination successes from notifier sends and record only successful receipts transactionally.
+- [x] Replace new delivery paths' global `notified` writes with receipt-based pending/retry logic; keep `notified` and `mark_notified()` legacy-only.
+- [x] Replace the digest lookback with bounded receipt-based carry-over, deterministic ordering, and 14-day staleness.
+- [x] Record grouped digest receipts for exactly the jobs included in a successful payload and keep overflow pending.
+- [x] Add explore routing counts additively across metrics, persistence restoration, health, stats, and daily status.
+- [x] Preserve dry-run immutability, current routing thresholds, Discord destinations, digest cadence/channel, and weekly NGO behavior.
+- [x] Add the complete migration, receipt, partial-failure, backlog, compatibility, and safety test matrix.
 
 ## Acceptance criteria
 
@@ -1762,11 +1762,29 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 4A — Notification tier and delivery-state foundation
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-07
+- Commit: `feat: make job notification delivery idempotent` (this Phase 4A commit)
 - Tests:
-- Peak memory:
+  - Focused delivery/observability/employment regression gate: `python -m pytest tests/v2/test_notification_delivery.py tests/v2/test_observability.py tests/v2/test_employment_storage_presentation.py -q` — 91 passed in 1.69s.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 334 passed in 3.13s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 334 passed in 3.10s.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 1,211 passed, 104 failed, 9 warnings in 11.53s. A separate sorted node-ID comparison found exactly the recorded 104 failures, with no new or missing failing IDs.
+- Peak memory: 343.5 MiB / 512 MiB (67.08%), 8.7 MiB below the 352.2 MiB Phase 3 reference and 86.5 MiB below the 430 MiB target.
 - Notes:
+  - Files changed: `models/job.py`, `models/scan.py`, `storage/database.py`, `notifiers/base.py`, `notifiers/delivery.py`, `notifiers/discord_notifier.py`, `notifiers/telegram_notifier.py`, `main.py`, `health.py`, `tests/v2/test_notification_delivery.py`, `tests/v2/test_observability.py`, `tests/v2/test_employment_storage_presentation.py`, and this Phase 4A checklist/progress entry.
+  - Added the valid `none`/`explore`/`digest`/`immediate` model while leaving production assignment at the unchanged 70 immediate / 45 digest / below-45 none boundaries. Live and isolated scans reported `explore=0`; scoring, the company cap, employment compatibility, and source schedules were not changed.
+  - Added the idempotent `job_delivery_receipts(job_id TEXT NOT NULL, delivery_kind TEXT NOT NULL, destination TEXT NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY (job_id, delivery_kind, destination))` migration plus pending/receipt indexes. A representative Phase 3 database initialized twice safely; the migration preserved `jobs.notified`, rewrote no historical job, fabricated no receipt, and left `source_scan_runs` unchanged.
+  - Delivery kinds are `immediate`, `digest`, and schema-ready `explore`; destinations are `discord_general`, `discord_ngo`, and `telegram`. One shared resolver sends general jobs to Discord general, NGO jobs to Discord NGO when configured, and NGO jobs to general as fallback; a receipt at either Discord destination satisfies the one Discord obligation across later configuration changes. Telegram remains independent and digest remains Discord-general only.
+  - Discord and Telegram batch methods now return exact successful job/destination pairs. Per-job exceptions and HTTP statuses at least 400 omit only failed jobs; sibling successes continue and are recorded in one transactional `INSERT OR IGNORE` batch. Unconfigured channels create no synthetic success.
+  - `jobs.notified=1` now has the documented conservative meaning `legacy_suppressed`; it is not evidence of historical provider delivery. New immediate/digest paths never call `mark_notified()` and keep new rows at `notified=0`; destination receipts are authoritative.
+  - Immediate delivery now runs from durable pending state after every production scan, including a scan saving zero rows. Focused and isolated runtime checks proved Discord-success/Telegram-failure and inverse retries, exact sibling receipts, configuration-change suppression, and retrying only the missing destination.
+  - Immediate/digest queries use `fetched_at` within 14 days, `notified=0`, receipt absence, a 15-item bound, and exact ordering by score, posted/fetched recency, fetched recency, then ID. The six-hour value remains schedule cadence only. Tests proved seven-day-old digest work is retained, 15+ overflow carries to later runs, 15-day stale work is excluded without a receipt, and two isolated runtime digest runs each delivered the next 15 jobs with 20 still pending.
+  - The grouped digest builder retains exact rendered membership under the Discord description limit. Successful sends receipt only included jobs; selected-but-not-rendered overflow remains pending, and a failed grouped payload records none.
+  - Added `explore` additively to per-source/current routing counts, persisted JSON restoration, `/health`, `--stats`, and daily status while retaining `immediate`, `digest`, and `diagnostic`; saved `none` remains diagnostic. The final isolated health summary was 11,586 raw / 58 accepted-unseen-saved / 11,528 rejected / 8 immediate / 50 digest / 0 explore / 0 diagnostic.
+  - Dry scans passed for Arbeitnow (175 raw / 1 accepted) and all-source `--explain` (11,585 raw / 58 accepted). An absent database remained absent; a 25-byte sentinel retained SHA-256 `61126de1b795b976f3ac878f48e88fa77a87d7308ba57c7642b9e1068403a496` and identical nanosecond mtime before/after dry-run.
+  - Final image: `job-bot:phase4a`, `sha256:19cec7e70350d72a09b0dc552f19e01c87df28cc25c97555355ce3d9a1a702c3`, 374,776,815 bytes. The isolated service used temporary DB/log mounts, no `.env`, disabled real notifier/status/Zoho sends, a 512 MiB limit, and loopback-only `127.0.0.1:18085`; startup completed in approximately 95.8 seconds, about 4.6% above the 91.6-second Phase 3 reference and below the 10% investigation threshold. Temporary runtime data/container were removed.
+  - Runtime inspection confirmed the exact receipt columns, zero fabricated receipts, all 58 new rows retained `notified=0`, 8 immediate mocked deliveries receipted on the first run and 0 selected on retry, two 15-job digest batches carried over correctly, all 58 language records remained populated, and 23 rows retained known employment metadata. Personio remained `partial_success`, StepStone remained isolated `unknown_error`, and JSON-LD remained `zero_results`.
+  - Weekly NGO jobs remain outside one-time receipt semantics and repeat in focused regression coverage. Known limitation: provider HTTP and SQLite receipt commits cannot be atomic, so a crash after external acceptance but before receipt commit can produce an at-least-once duplicate on retry. No broker or exactly-once claim was added. Phase 4B and Phase 5 remain not started.
 
 ## Phase 4B — Recall policy, explore digest, and company-cap tuning
 

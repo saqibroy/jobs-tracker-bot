@@ -319,26 +319,9 @@ async def test_permission_marker_does_not_suppress_or_reroute_delivery(
         freelance_permission_required=True,
         notification_tier="immediate",
     )
-    discord_send = AsyncMock()
-    telegram_send = AsyncMock()
-    monkeypatch.setattr(main.config, "DISCORD_WEBHOOK_URL", "https://example.test/discord")
-    monkeypatch.setattr(main.config, "TELEGRAM_BOT_TOKEN", "token")
-    monkeypatch.setattr(main.config, "TELEGRAM_CHAT_ID", "chat")
-    monkeypatch.setattr(
-        main,
-        "DiscordNotifier",
-        lambda: SimpleNamespace(send_jobs=discord_send),
-    )
-    monkeypatch.setattr(
-        main,
-        "TelegramNotifier",
-        lambda: SimpleNamespace(send_jobs=telegram_send),
-    )
-    mark = AsyncMock()
-    monkeypatch.setattr(main, "mark_notified", mark)
+    process = AsyncMock()
+    monkeypatch.setattr(main, "process_pending_immediate_deliveries", process)
 
     await main._send_notifications([employee, freelance])
 
-    discord_send.assert_awaited_once_with([employee, freelance])
-    telegram_send.assert_awaited_once_with([employee, freelance])
-    mark.assert_awaited_once_with([employee.id, freelance.id])
+    process.assert_awaited_once_with()

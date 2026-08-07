@@ -40,6 +40,7 @@ GermanRequirementLevel: TypeAlias = Literal[
     "native",
     "unknown",
 ]
+NotificationTier: TypeAlias = Literal["none", "explore", "digest", "immediate"]
 
 EMPLOYMENT_RELATIONSHIPS = frozenset(
     {
@@ -103,7 +104,7 @@ class Job(BaseModel):
     match_reasons: list[str] = Field(default_factory=list)
     eligibility_status: Literal["unknown", "eligible", "ineligible"] = "unknown"
     eligibility_reasons: list[str] = Field(default_factory=list)
-    notification_tier: Literal["none", "digest", "immediate"] = "none"
+    notification_tier: NotificationTier = "none"
     employment_relationship: EmploymentRelationship = "unknown"
     work_schedule: WorkSchedule = "unknown"
     contract_term: ContractTerm = "unknown"
