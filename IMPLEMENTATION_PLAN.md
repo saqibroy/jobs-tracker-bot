@@ -472,12 +472,12 @@ Prioritize enabled/default sources and direct ATS adapters: Greenhouse, Ashby, P
 
 ## Tasks
 
-- [ ] Audit default/direct ATS response shapes, documentation where available, and saved/live fixtures; add the source-by-source evidence table to this phase's progress log.
-- [ ] Add normalized structured mappings only to adapters with verified native fields, in the priority order above.
-- [ ] Add or update sanitized saved fixtures and adapter tests for every mapping; mock external HTTP in automated tests.
-- [ ] Test structured precedence, partial structured enrichment, unknown-value fallback, malformed-value isolation, and heuristic fallback when the native field is absent.
-- [ ] Run focused adapter/integration tests, the complete verification sequence, representative live diagnostic dry scans for mapped default sources, isolated `/health`, and memory measurement.
-- [ ] Update only the Phase 2B checklist and progress entry after verification; commit as `feat: map structured employment metadata from job sources` and stop for review.
+- [x] Audit default/direct ATS response shapes, documentation where available, and saved/live fixtures; add the source-by-source evidence table to this phase's progress log.
+- [x] Add normalized structured mappings only to adapters with verified native fields, in the priority order above.
+- [x] Add or update sanitized saved fixtures and adapter tests for every mapping; mock external HTTP in automated tests.
+- [x] Test structured precedence, partial structured enrichment, unknown-value fallback, malformed-value isolation, and heuristic fallback when the native field is absent.
+- [x] Run focused adapter/integration tests, the complete verification sequence, representative live diagnostic dry scans for mapped default sources, isolated `/health`, and memory measurement.
+- [x] Update only the Phase 2B checklist and progress entry after verification; commit as `feat: map structured employment metadata from job sources` and stop for review.
 
 ## Acceptance criteria
 
@@ -1189,11 +1189,49 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 2B — Structured source employment metadata
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-07
+- Commit: `feat: map structured employment metadata from job sources` (this Phase 2B commit)
 - Tests:
-- Peak memory:
-- Notes:
+  - Focused source mappings: `python -m pytest tests/v2/test_structured_source_employment.py -q` — 20 passed in 0.30s.
+  - Focused mappings plus employment/partial-success regressions — 121 passed in 0.68s.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 209 passed in 1.41s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 209 passed in 1.47s.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 1,086 passed, 104 failed; JUnit comparison found 0 new and 0 missing failing node IDs versus the Phase 0 baseline.
+- Peak memory: 347.1 MiB / 512 MiB (67.80%), 11.8 MiB above the 335.3 MiB Phase 2A reference and 82.9 MiB below the 430 MiB target.
+- Provider support audit (live diagnostics are from 2026-08-07 and remain non-blocking):
+
+  | Source | Raw structured field and observed values | Normalized mapping | Evidence | Unsupported dimensions/values |
+  | --- | --- | --- | --- | --- |
+  | Personio | XML `employmentType`: permanent 1,215; intern 77; working_student 43; temporary 15; trainee 5; freelance 4; fixed_term 3; empty 1. XML `schedule`: full-time 1,233; part-time 71; full-or-part-time 58; empty 1. HTML fallback exposes explicit card metadata such as Full-time, Part-time/Vollzeit/Teilzeit, Permanent employee/Festanstellung, Fixed-term, Temporary, Working Student, Internship, and Freelance. | permanent/Permanent employee/Festanstellung → employee + permanent; intern/Internship/Praktikum → internship; working_student/Working Student/Werkstudent → working_student; freelance → freelance; temporary/fixed_term/Fixed-term/Befristet → fixed_term; full-time/Vollzeit → full_time; part-time/Teilzeit → part_time. | Official Personio XML documentation, all 72 configured-board live XML audit, six current HTML fallbacks, saved XML/HTML fixtures. | trainee and full-or-part-time remain unknown; no verified hours, duration, or rate field. |
+  | Lever | `categories.commitment`: Full-time 217; Full-Time 101; Permanent Full Time Employee 66; empty 24; Internship 17; Full Time 16; Full-Time (Remote) 10; Fixed Term Contract 8; Full-Time or Part-Time 7; Full-time contract 2; and single Hybrid, Part-Time, Temporary, Student, Werkstudent, Intern, All work types values. | Full-time spelling variants → full_time; Part-Time → part_time; Intern/Internship → internship; Werkstudent → working_student; Fixed Term Contract/Temporary → fixed_term; Permanent Full Time Employee → employee + full_time + permanent. | Official public Postings API field contract, all eight configured-board live audit, saved fixture. | bare/ambiguous contract, Student, Hybrid, Full-Time or Part-Time, All work types, hours, duration, and rate remain unsupported. |
+  | Greenhouse | Clearly labelled custom metadata: `Time Type` Full time 870, Part time 37, Full Time 36, Full-time 5, None 2; `Employment Type` Full-time 556, Regular 158, Unlimited Contract 132, Fixed Term 20, Permanent 20 plus lowercase 7, Intern 14, Working Student 10, None 9, Contract 6, Apprentice 1. | Time Type Full/Part variants and Employment Type Full-time → schedule; Unlimited Contract/Permanent → permanent term; Fixed Term → fixed term; Intern/Working Student → relationship. | All 38 configured-board live audit plus saved labelled-metadata fixture. | Regular, Contract, Apprentice, None, arbitrary metadata labels, top-level accessibility value `employment_required`, hours, duration, and rate remain unsupported. |
+  | Ashby | `employmentType`: FullTime 3,037; Intern 39; PartTime 20; Contract 14; Temporary 2. | FullTime/PartTime → schedule; Intern → internship; Temporary → fixed term. | Official Ashby public job-posting enum documentation, all 78 configured-board live audit, saved fixture. | Contract is ambiguous; workplaceType and compensation are not employment schedule/relationship/rate evidence. |
+  | Workable | `employment_type`: Full-time 8; Other 1 across the three configured boards. | Full-time → full_time. | Live widget audit and saved fixture. | Other and every unobserved value remain unknown; no hours, duration, or rate mapping. |
+  | JSON-LD | schema.org `JobPosting.employmentType`, a Text value commonly emitted as a string or array; current configuration has no enabled JSON-LD board. | Explicit Full Time/Part Time → schedule; Intern/Internship/Working Student → relationship; Freelance/Self Employed/Independent Contractor → freelance; Permanent/Fixed Term/Temporary → term. | Current schema.org definition and saved string/array/malformed fixture. | Contract/Contractor, malformed/non-string values, contradictory arrays, hours, duration, and rate remain unsupported. |
+  | Arbeitnow | `job_types`: observed Full Time 68; empty 44; Contract 15; repeated explicit permanent/full-time composites; Working student, Intern, Part Time, and mixed seniority labels. | Exact full-time/part-time labels → schedule; exact permanent/full-time-permanent labels → term/schedule; exact Intern/Internship, Working student/Werkstudent, Freelance, Fixed term/Temporary labels → corresponding normalized dimensions. | Live 175-job audit and saved fixture. | Contract, Full or part time, seniority/category labels, hours, duration, and rate remain unsupported. |
+  | Remotive | `job_type`: full_time 25; freelance 3; contract 3; part_time 2; empty 1 in the current software-development feed. | full_time/part_time → schedule; freelance → freelance. | Live API audit and saved fixture. | contract and empty remain unknown; no hours, duration, term, or rate mapping. |
+  | Himalayas | `employmentType` over the 200-job adapter window: Full Time 170; Contractor 21; Part Time 3; Temporary 3; Intern 3. | Full Time/Part Time → schedule; Contractor → freelance; Temporary → fixed term; Intern → internship. | Official Himalayas API/data dictionary (Contractor explicitly means independent contractor/freelance; Temporary means fixed-term), live audit, saved fixture. | Volunteer/Other and compensation/salary fields remain unsupported; salary is not a freelance rate. |
+  | Idealist | `jobType` over 200 remote jobs: FULL_TIME 151; CONTRACT 25; PART_TIME 18; PART_TIME + TEMPORARY 3; FULL_TIME + TEMPORARY 3. | FULL_TIME/PART_TIME → schedule; TEMPORARY → fixed term; CONTRACT → freelance because Idealist's publisher UI defines the category as “Contract / Freelancer.” | Official Idealist publisher help, live Algolia audit, saved fixture. | Volunteer/unknown values, `isFullTime=false`, salary, hours, duration, and rate remain unsupported. |
+  | LinkedIn | Guest HTML cards expose title, company, location, URL, and time only. | No structured employment mapping; Phase 2A heuristics retained. | Current adapter contract and live 41-job diagnostic. | Relationship, schedule, term, hours, duration, and rate unsupported. |
+  | RemoteOK | Current JSON exposes tags and salary bounds but no dedicated employment field. | No structured employment mapping; Phase 2A heuristics retained. | Live 100-job field-shape audit. | Free-text tags were not promoted; all structured employment dimensions unsupported. |
+  | StepStone | Current endpoint still returns HTTP 404 for all five queries; saved minimal fixture contains no employment field. | No mapping; broken endpoint deliberately unchanged. | Existing fixture and live diagnostic. | All structured employment dimensions unsupported. |
+- Mapping architecture and precedence:
+  - Provider dictionaries stay beside each adapter; one shared `merge_structured_employment_inputs()` drops conflicts independently per dimension, and all adapters pass normalized `EmploymentStructuredInput` values through the Phase 2A classifier.
+  - Evidence is compact and provider-qualified (for example `structured:personio:schedule=full_time`, `structured:lever:commitment=full_time`, and `structured:greenhouse:metadata.Time_Type=full_time`). Unknown or malformed values add no structured reason and fall back to normal heuristics.
+  - Fixture coverage proves structured schedule plus heuristic term, structured relationship surviving conflicting description text, unsupported values remaining unknown, JSON-LD string/list/malformed handling, and no-support LinkedIn behavior. URL/content hashes and the existing SQLite schema/round-trip remain unchanged.
+- Live coverage and behavior:
+  - All-default diagnostic: 11,596 raw / 41 accepted / 11,555 rejected; current accepted sources were Greenhouse 16, LinkedIn 14, Personio 5, Ashby 4, and Arbeitnow 2. Counts changed from Phase 2A because live platforms changed.
+  - Accepted relationship coverage improved from 1/39 (2.6%) to 4/41 (9.8%); schedule from 7/39 (17.9%) to 21/41 (51.2%); contract term from 2/39 (5.1%) to 8/41 (19.5%). Current distributions are relationship employee 4 / unknown 37; schedule full_time 21 / unknown 20; term permanent 7 / fixed_term 1 / unknown 33.
+  - Accepted per-source known relationship/schedule/term: Greenhouse 0/10/3; Ashby 0/4/0; Personio 4/5/5; Arbeitnow 0/1/0; LinkedIn heuristic-only 0/1/0; all other sources had zero accepted jobs in this sample.
+  - Raw structured relationship detections were internship 149, working_student 59, employee 1,305, and freelance 18. Student/intern detections came from Personio 122, Greenhouse 24, Ashby 39, Lever 19, and Arbeitnow 4; freelance detections came from Personio 4, Remotive 3, and Idealist 11. The ordered central employment gate produced 82 current employment rejections; earlier location gates still retain terminal ownership when reached first.
+  - Source health remained Greenhouse/Ashby/Lever/Workable/Arbeitnow/Remotive/Himalayas/RemoteOK/Idealist/LinkedIn healthy, JSON-LD zero_results, Personio partial_success with one unchanged `pitch` redirect issue, and StepStone complete unknown_error with five unchanged HTTP 404 issues. Malformed listing metadata stayed listing-local and produced no component issue.
+  - Routing remained score-only: 8 immediate, 33 digest, 0 diagnostic among the 41 current accepted jobs. No new employment routing distinction exists; the two additional digest jobs versus Phase 2A reflect the changing LinkedIn feed. Structured freelance permission remains informational.
+- Verification/runtime notes:
+  - Final image: `job-bot:phase2b`, `sha256:62f61855c6e56bf8667727aab0506e49aeda88999e9ec6a513c1b9a57d210aa8`.
+  - Required live dry scans ran for Personio, Lever, Greenhouse, Ashby, Workable, JSON-LD, Arbeitnow, Remotive, Himalayas, LinkedIn, Idealist, RemoteOK, StepStone, and all-default `--explain`. No source/query/page/concurrency setting changed.
+  - Dry-run proof: a mounted absent database remained absent. A sentinel retained SHA-256 `71d399cc4e75111442ee34638494e9ec436b57ef937a57d16bd492ec4e8263cb` and identical nanosecond mtime `2026-08-07 02:54:36.018522209 +0200` before/after all-source `--explain`.
+  - The isolated service used a temporary database/log directory, no `.env`, disabled Discord/Telegram/Zoho/status sends, a 512 MiB limit, and loopback-only `127.0.0.1:18083`. Startup scan completed in approximately 93.6 seconds with 41 rows saved; `/health` reported 11,596 raw, 41 accepted/unseen/saved, 11,555 rejected, 8 immediate, 33 digest, and 0 diagnostic. Peak observed memory was 347.1 MiB. The container and temporary runtime files were removed afterward.
+  - No database migration or production dependency was added. Known limitations: JSON-LD has no configured live board; Workable currently proves only Full-time; generic contract values remain intentionally unknown; live coverage depends on changing provider data. Phase 3 was not started.
 
 ## Phase 3
 

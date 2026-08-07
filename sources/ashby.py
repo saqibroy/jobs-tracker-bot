@@ -14,12 +14,26 @@ from datetime import datetime
 
 from loguru import logger
 
+from filters.employment import EmploymentStructuredInput, classify_employment
 from models.job import Job
 from sources.base import BaseSource
 from sources.ats_common import country_codes_from_text, infer_workplace, regions_from_text
 from sources.registry import CompanyBoard, boards_for
 
 _API_URL = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
+
+_EMPLOYMENT_TYPE_MAP = {
+    "fulltime": EmploymentStructuredInput(work_schedule="full_time"),
+    "parttime": EmploymentStructuredInput(work_schedule="part_time"),
+    "intern": EmploymentStructuredInput(employment_relationship="internship"),
+    "temporary": EmploymentStructuredInput(contract_term="fixed_term"),
+}
+
+
+def _ashby_employment(value: object) -> EmploymentStructuredInput:
+    if not isinstance(value, str):
+        return EmploymentStructuredInput()
+    return _EMPLOYMENT_TYPE_MAP.get(value.strip().lower(), EmploymentStructuredInput())
 
 
 class AshbySource(BaseSource):
@@ -79,7 +93,16 @@ class AshbySource(BaseSource):
                     source=self.name,
                     posted_at=posted_at,
                 )
-                jobs.append(job)
+                jobs.append(classify_employment(
+                    job,
+                    _ashby_employment(item.get("employmentType")),
+                    structured_source=self.name,
+                    structured_fields={
+                        "employment_relationship": "employmentType",
+                        "work_schedule": "employmentType",
+                        "contract_term": "employmentType",
+                    },
+                ))
             except (KeyError, TypeError) as exc:
                 logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
                 continue

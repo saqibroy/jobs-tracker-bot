@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<workzag-jobs>
+  <position>
+    <id>structured</id>
+    <name>Frontend Engineer</name>
+    <office>Berlin, Germany</office>
+    <employmentType></employmentType>
+    <schedule>full-time</schedule>
+    <jobDescriptions>
+      <jobDescription><value>12-month contract building React products.</value></jobDescription>
+    </jobDescriptions>
+  </position>
+  <position>
+    <id>employee</id>
+    <name>Backend Engineer</name>
+    <office>Berlin, Germany</office>
+    <employmentType>permanent</employmentType>
+    <schedule>full-or-part-time</schedule>
+    <jobDescriptions>
+      <jobDescription><value>Collaborate with freelance specialists.</value></jobDescription>
+    </jobDescriptions>
+  </position>
+</workzag-jobs>

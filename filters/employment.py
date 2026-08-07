@@ -40,6 +40,15 @@ class EmploymentStructuredInput:
 
 StructuredEmployment = EmploymentStructuredInput | Mapping[str, object]
 
+_STRUCTURED_DIMENSIONS = (
+    "employment_relationship",
+    "work_schedule",
+    "contract_term",
+    "weekly_hours",
+    "contract_duration",
+    "freelance_rate",
+)
+
 _WORKING_STUDENT_RE = re.compile(
     r"\bworking[\s-]+student\b|\bwerkstudent(?:[/*:_-]?in)?(?:nen)?\b",
     re.IGNORECASE,
@@ -208,8 +217,39 @@ def _add_reason(reasons: list[str], reason: str) -> None:
         reasons.append(normalized)
 
 
-def _has_dimension_reason(reasons: list[str], dimension: str) -> bool:
-    return any(f":{dimension}=" in reason for reason in reasons)
+def _has_dimension_reason(reasons: list[str], dimension: str, value: object) -> bool:
+    suffix = f"={value}"
+    return any(
+        f":{dimension}=" in reason
+        or (reason.startswith("structured:") and reason.endswith(suffix))
+        for reason in reasons
+    )
+
+
+def merge_structured_employment_inputs(
+    *inputs: EmploymentStructuredInput,
+) -> EmploymentStructuredInput:
+    """Merge provider field mappings independently, dropping conflicts.
+
+    A source can expose multiple structured labels for one listing (for
+    example Greenhouse custom metadata or JSON-LD arrays). Agreement is kept;
+    conflicting normalized values leave only that dimension unsupported so
+    normal heuristics can fill it later.
+    """
+
+    merged: dict[str, object | None] = {}
+    for dimension in _STRUCTURED_DIMENSIONS:
+        values = {
+            getattr(value, dimension)
+            for value in inputs
+            if getattr(value, dimension) is not None
+        }
+        merged[dimension] = next(iter(values)) if len(values) == 1 else None
+    return EmploymentStructuredInput(**merged)  # type: ignore[arg-type]
+
+
+def _reason_token(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())[:60].strip("_")
 
 
 def _relationship_signals(text: str) -> set[str]:
@@ -385,6 +425,9 @@ def _heuristic_from_scopes(
 def classify_employment(
     job: Job,
     structured: StructuredEmployment | None = None,
+    *,
+    structured_source: str | None = None,
+    structured_fields: Mapping[str, str] | None = None,
 ) -> Job:
     """Classify each employment dimension without changing unrelated fields."""
 
@@ -423,16 +466,22 @@ def classify_employment(
         "duration": duration is not None,
         "rate": rate is not None,
     }
-    for dimension, value in (
-        ("relationship", relationship),
-        ("schedule", schedule),
-        ("term", term),
-        ("hours", hours),
-        ("duration", duration),
-        ("rate", rate),
+    for model_dimension, reason_dimension, value in (
+        ("employment_relationship", "relationship", relationship),
+        ("work_schedule", "schedule", schedule),
+        ("contract_term", "term", term),
+        ("weekly_hours", "hours", hours),
+        ("contract_duration", "duration", duration),
+        ("freelance_rate", "rate", rate),
     ):
-        if value is not None and not _has_dimension_reason(reasons, dimension):
-            _add_reason(reasons, f"structured:{dimension}={value}")
+        if value is None or _has_dimension_reason(reasons, reason_dimension, value):
+            continue
+        source = _reason_token(structured_source or "")
+        field = _reason_token((structured_fields or {}).get(model_dimension, ""))
+        if source and field:
+            _add_reason(reasons, f"structured:{source}:{field}={value}")
+        else:
+            _add_reason(reasons, f"structured:{reason_dimension}={value}")
 
     if relationship is None:
         value, scope, conflict = _heuristic_from_scopes(

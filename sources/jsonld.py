@@ -8,10 +8,53 @@ from bs4 import BeautifulSoup
 from loguru import logger
 from pydantic import ValidationError
 
+from filters.employment import (
+    EmploymentStructuredInput,
+    classify_employment,
+    merge_structured_employment_inputs,
+)
 from models.job import Job
 from sources.ats_common import clean_html, country_codes_from_text, infer_workplace, parse_datetime, regions_from_text
 from sources.base import BaseSource
 from sources.registry import CompanyBoard, boards_for
+
+_EMPLOYMENT_TYPE_MAP = {
+    "full time": EmploymentStructuredInput(work_schedule="full_time"),
+    "part time": EmploymentStructuredInput(work_schedule="part_time"),
+    "intern": EmploymentStructuredInput(employment_relationship="internship"),
+    "internship": EmploymentStructuredInput(employment_relationship="internship"),
+    "working student": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "freelance": EmploymentStructuredInput(employment_relationship="freelance"),
+    "self employed": EmploymentStructuredInput(employment_relationship="freelance"),
+    "independent contractor": EmploymentStructuredInput(
+        employment_relationship="freelance"
+    ),
+    "permanent": EmploymentStructuredInput(contract_term="permanent"),
+    "fixed term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "temporary": EmploymentStructuredInput(contract_term="fixed_term"),
+}
+
+
+def _jsonld_employment(value: object) -> EmploymentStructuredInput:
+    values = value if isinstance(value, list) else [value]
+    mapped: list[EmploymentStructuredInput] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        normalized = " ".join(
+            item.strip().lower().replace("_", " ").replace("-", " ").split()
+        )
+        employment = _EMPLOYMENT_TYPE_MAP.get(normalized)
+        if employment is not None:
+            mapped.append(employment)
+    return merge_structured_employment_inputs(*mapped)
+
+
+def _jsonld_employment_tags(value: object) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return [item for item in values if isinstance(item, str) and item.strip()]
 
 
 def _job_postings(value) -> list[dict]:
@@ -53,7 +96,8 @@ class JsonLdCareerSource(BaseSource):
                     f"{location} {item.get('jobLocationType', '')}",
                     item.get("jobLocationType") == "TELECOMMUTE",
                 )
-                jobs.append(Job(
+                employment_type = item.get("employmentType")
+                job = Job(
                     title=item.get("title") or "",
                     company=board.company,
                     location=location or "Unspecified",
@@ -63,9 +107,19 @@ class JsonLdCareerSource(BaseSource):
                     eligible_regions=regions_from_text(location),
                     url=item.get("url") or board.url,
                     description=clean_html(item.get("description")),
-                    tags=[str(item.get("employmentType", ""))],
+                    tags=_jsonld_employment_tags(employment_type),
                     source=self.name,
                     posted_at=parse_datetime(item.get("datePosted")),
+                )
+                jobs.append(classify_employment(
+                    job,
+                    _jsonld_employment(employment_type),
+                    structured_source=self.name,
+                    structured_fields={
+                        "employment_relationship": "employmentType",
+                        "work_schedule": "employmentType",
+                        "contract_term": "employmentType",
+                    },
                 ))
             except (ValidationError, KeyError, TypeError, AttributeError) as exc:
                 logger.debug(

@@ -17,11 +17,24 @@ from datetime import datetime, timezone
 from loguru import logger
 from pydantic import ValidationError
 
+from filters.employment import EmploymentStructuredInput, classify_employment
 from models.job import Job
 from sources.base import BaseSource
 from sources.ats_common import country_codes_from_text, regions_from_text
 
 _API_URL = "https://remotive.com/api/remote-jobs"
+
+_JOB_TYPE_MAP = {
+    "full_time": EmploymentStructuredInput(work_schedule="full_time"),
+    "part_time": EmploymentStructuredInput(work_schedule="part_time"),
+    "freelance": EmploymentStructuredInput(employment_relationship="freelance"),
+}
+
+
+def _remotive_employment(value: object) -> EmploymentStructuredInput:
+    if not isinstance(value, str):
+        return EmploymentStructuredInput()
+    return _JOB_TYPE_MAP.get(value.strip().lower(), EmploymentStructuredInput())
 
 # Categories to fetch — role filter handles non-dev roles from broader categories
 _CATEGORIES: list[str] = [
@@ -79,7 +92,15 @@ class RemotiveSource(BaseSource):
                     source=self.name,
                     posted_at=posted_at,
                 )
-                jobs.append(job)
+                jobs.append(classify_employment(
+                    job,
+                    _remotive_employment(item.get("job_type")),
+                    structured_source=self.name,
+                    structured_fields={
+                        "employment_relationship": "job_type",
+                        "work_schedule": "job_type",
+                    },
+                ))
             except (ValidationError, KeyError, TypeError) as exc:
                 logger.warning("[{}] Skipping malformed entry: {}", self.name, exc)
                 continue

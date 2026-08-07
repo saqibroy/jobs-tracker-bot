@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from pydantic import ValidationError
 
+from filters.employment import EmploymentStructuredInput, classify_employment
 from models.job import Job
 from models.scan import sanitize_source_error
 from sources.base import BaseSource
@@ -28,6 +29,20 @@ from sources.base import BaseSource
 _API_URL = "https://himalayas.app/jobs/api"
 _PAGE_SIZE = 20  # API hard-caps at 20
 _MAX_PAGES = 10  # 200 jobs max
+
+_EMPLOYMENT_TYPE_MAP = {
+    "full time": EmploymentStructuredInput(work_schedule="full_time"),
+    "part time": EmploymentStructuredInput(work_schedule="part_time"),
+    "contractor": EmploymentStructuredInput(employment_relationship="freelance"),
+    "temporary": EmploymentStructuredInput(contract_term="fixed_term"),
+    "intern": EmploymentStructuredInput(employment_relationship="internship"),
+}
+
+
+def _himalayas_employment(value: object) -> EmploymentStructuredInput:
+    if not isinstance(value, str):
+        return EmploymentStructuredInput()
+    return _EMPLOYMENT_TYPE_MAP.get(value.strip().lower(), EmploymentStructuredInput())
 
 # Parent categories / keywords in category names we want
 _WANTED_CATEGORY_KEYWORDS: set[str] = {
@@ -143,7 +158,7 @@ class HimalayasSource(BaseSource):
         for level in (item.get("seniority") or []):
             tags.append(level)
         employment = item.get("employmentType")
-        if employment:
+        if isinstance(employment, str) and employment:
             tags.append(employment)
         tags = tags[:10]
 
@@ -161,7 +176,7 @@ class HimalayasSource(BaseSource):
         if desc:
             desc = desc[:2000]
 
-        return Job(
+        job = Job(
             title=title,
             company=company,
             location=location,
@@ -182,6 +197,16 @@ class HimalayasSource(BaseSource):
             tags=tags,
             source=self.name,
             posted_at=posted_at,
+        )
+        return classify_employment(
+            job,
+            _himalayas_employment(employment),
+            structured_source=self.name,
+            structured_fields={
+                "employment_relationship": "employmentType",
+                "work_schedule": "employmentType",
+                "contract_term": "employmentType",
+            },
         )
 
     # ------------------------------------------------------------------

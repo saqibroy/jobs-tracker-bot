@@ -38,6 +38,11 @@ from datetime import datetime, timezone
 from loguru import logger
 from pydantic import ValidationError
 
+from filters.employment import (
+    EmploymentStructuredInput,
+    classify_employment,
+    merge_structured_employment_inputs,
+)
 from models.job import Job
 from models.scan import sanitize_source_error
 from sources.base import BaseSource
@@ -53,6 +58,27 @@ _BASE_URL = "https://www.idealist.org"
 
 # Number of results per Algolia request (max 1000)
 _HITS_PER_PAGE = 50
+
+_JOB_TYPE_MAP = {
+    "FULL_TIME": EmploymentStructuredInput(work_schedule="full_time"),
+    "PART_TIME": EmploymentStructuredInput(work_schedule="part_time"),
+    "TEMPORARY": EmploymentStructuredInput(contract_term="fixed_term"),
+    # Idealist labels this provider category "Contract / Freelancer" in its
+    # publisher UI, so it is not the ambiguous generic contract label used by
+    # several other aggregators.
+    "CONTRACT": EmploymentStructuredInput(employment_relationship="freelance"),
+}
+
+
+def _idealist_employment(value: object) -> EmploymentStructuredInput:
+    if not isinstance(value, list):
+        return EmploymentStructuredInput()
+    mapped = [
+        _JOB_TYPE_MAP[item.strip().upper()]
+        for item in value
+        if isinstance(item, str) and item.strip().upper() in _JOB_TYPE_MAP
+    ]
+    return merge_structured_employment_inputs(*mapped)
 
 # Two-letter ISO country codes we consider EU-eligible
 _EU_COUNTRY_CODES: set[str] = {
@@ -142,6 +168,7 @@ class IdealistSource(BaseSource):
                 "orgName",
                 "orgType",
                 "type",
+                "jobType",
                 "locationType",
                 "description",
                 "url",
@@ -226,7 +253,7 @@ class IdealistSource(BaseSource):
             "SOCIAL_ENTERPRISE",
         }
 
-        return Job(
+        job = Job(
             title=name,
             company=org,
             location=location,
@@ -239,6 +266,16 @@ class IdealistSource(BaseSource):
             source=self.name,
             is_ngo=is_ngo,
             posted_at=posted_at,
+        )
+        return classify_employment(
+            job,
+            _idealist_employment(hit.get("jobType")),
+            structured_source=self.name,
+            structured_fields={
+                "employment_relationship": "jobType",
+                "work_schedule": "jobType",
+                "contract_term": "jobType",
+            },
         )
 
     # ── Helpers ─────────────────────────────────────────────────────────

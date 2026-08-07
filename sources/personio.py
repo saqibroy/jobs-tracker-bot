@@ -30,6 +30,11 @@ from loguru import logger
 from bs4 import BeautifulSoup
 from pydantic import ValidationError
 
+from filters.employment import (
+    EmploymentStructuredInput,
+    classify_employment,
+    merge_structured_employment_inputs,
+)
 from models.job import Job
 from sources.base import BaseSource
 from sources.ats_common import clean_html, country_codes_from_text, infer_workplace, regions_from_text
@@ -45,6 +50,84 @@ _LOCATION_SPLIT_RE = re.compile(
     r"working student|freelance|contract|trainee|minijob)\b",
     re.IGNORECASE,
 )
+
+_EMPLOYMENT_TYPE_MAP = {
+    "permanent": EmploymentStructuredInput(
+        employment_relationship="employee", contract_term="permanent"
+    ),
+    "permanent employee": EmploymentStructuredInput(
+        employment_relationship="employee", contract_term="permanent"
+    ),
+    "festanstellung": EmploymentStructuredInput(
+        employment_relationship="employee", contract_term="permanent"
+    ),
+    "intern": EmploymentStructuredInput(employment_relationship="internship"),
+    "internship": EmploymentStructuredInput(employment_relationship="internship"),
+    "praktikum": EmploymentStructuredInput(employment_relationship="internship"),
+    "working student": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "working_student": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "werkstudent": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "freelance": EmploymentStructuredInput(employment_relationship="freelance"),
+    "temporary": EmploymentStructuredInput(contract_term="fixed_term"),
+    "fixed term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "fixed-term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "fixed_term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "befristet": EmploymentStructuredInput(contract_term="fixed_term"),
+}
+_SCHEDULE_MAP = {
+    "full-time": EmploymentStructuredInput(work_schedule="full_time"),
+    "full time": EmploymentStructuredInput(work_schedule="full_time"),
+    "vollzeit": EmploymentStructuredInput(work_schedule="full_time"),
+    "part-time": EmploymentStructuredInput(work_schedule="part_time"),
+    "part time": EmploymentStructuredInput(work_schedule="part_time"),
+    "teilzeit": EmploymentStructuredInput(work_schedule="part_time"),
+}
+
+
+def _personio_employment(
+    employment_type: object,
+    schedule: object,
+    *,
+    metadata: list[str] | None = None,
+) -> tuple[EmploymentStructuredInput, dict[str, str]]:
+    inputs: list[EmploymentStructuredInput] = []
+    fields: dict[str, str] = {}
+
+    if isinstance(employment_type, str):
+        mapped = _EMPLOYMENT_TYPE_MAP.get(employment_type.strip().lower())
+        if mapped is not None:
+            inputs.append(mapped)
+            for dimension in ("employment_relationship", "contract_term"):
+                if getattr(mapped, dimension) is not None:
+                    fields[dimension] = "employmentType"
+
+    if isinstance(schedule, str):
+        mapped = _SCHEDULE_MAP.get(schedule.strip().lower())
+        if mapped is not None:
+            inputs.append(mapped)
+            fields["work_schedule"] = "schedule"
+
+    for value in metadata or []:
+        normalized = value.strip().lower()
+        mapped = _SCHEDULE_MAP.get(normalized) or _EMPLOYMENT_TYPE_MAP.get(normalized)
+        if mapped is None:
+            continue
+        inputs.append(mapped)
+        for dimension in (
+            "employment_relationship",
+            "work_schedule",
+            "contract_term",
+        ):
+            if getattr(mapped, dimension) is not None:
+                fields.setdefault(dimension, "cardMetadata")
+
+    return merge_structured_employment_inputs(*inputs), fields
 
 
 class PersonioSource(BaseSource):
@@ -95,6 +178,7 @@ class PersonioSource(BaseSource):
                 title = (position.findtext("name") or "").strip()
                 office = (position.findtext("office") or "").strip()
                 department = (position.findtext("department") or "").strip()
+                employment_type = (position.findtext("employmentType") or "").strip()
                 schedule = (position.findtext("schedule") or "").strip()
                 keywords = (position.findtext("keywords") or "").strip()
 
@@ -139,7 +223,13 @@ class PersonioSource(BaseSource):
                     source=self.name,
                     posted_at=posted_at,
                 )
-                jobs.append(job)
+                structured, fields = _personio_employment(employment_type, schedule)
+                jobs.append(classify_employment(
+                    job,
+                    structured,
+                    structured_source=self.name,
+                    structured_fields=fields,
+                ))
             except (ValidationError, AttributeError, TypeError) as exc:
                 logger.warning("[{}] Skipping malformed entry for '{}': {}", self.name, slug, exc)
                 continue
@@ -159,12 +249,19 @@ class PersonioSource(BaseSource):
 
         semaphore = asyncio.Semaphore(3)
 
-        async def fetch_detail(url: str, card_text: str) -> Job | None:
+        async def fetch_detail(
+            url: str,
+            card_text: str,
+            metadata: list[str],
+        ) -> Job | None:
             async with semaphore:
-                return await self._fetch_html_detail(board, url, card_text)
+                return await self._fetch_html_detail(board, url, card_text, metadata)
 
         results = await asyncio.gather(
-            *(fetch_detail(url, card_text) for url, card_text in links),
+            *(
+                fetch_detail(url, card_text, metadata)
+                for url, card_text, metadata in links
+            ),
             return_exceptions=True,
         )
 
@@ -182,30 +279,43 @@ class PersonioSource(BaseSource):
         )
         return jobs
 
-    def _extract_html_job_links(self, html: str, base_url: str) -> list[tuple[str, str]]:
+    def _extract_html_job_links(
+        self,
+        html: str,
+        base_url: str,
+    ) -> list[tuple[str, str, list[str]]]:
         soup = BeautifulSoup(html, "html.parser")
-        by_url: dict[str, str] = {}
+        by_url: dict[str, tuple[str, list[str]]] = {}
         for anchor in soup.find_all("a", href=True):
             href = str(anchor.get("href") or "")
             if not _JOB_LINK_RE.search(href):
                 continue
             url = urljoin(base_url, href)
             card_text = anchor.get_text(" ", strip=True)
-            by_url.setdefault(url, card_text)
-        return sorted(by_url.items())
+            metadata = [
+                node.get_text(" ", strip=True)
+                for node in anchor.select('[class*="jobMetaText"]')
+                if node.get_text(" ", strip=True)
+            ]
+            by_url.setdefault(url, (card_text, metadata))
+        return [
+            (url, card_text, metadata)
+            for url, (card_text, metadata) in sorted(by_url.items())
+        ]
 
     async def _fetch_html_detail(
         self,
         board: CompanyBoard,
         url: str,
         card_text: str,
+        metadata: list[str],
     ) -> Job | None:
         try:
             resp = await self._get(url)
-            return self._parse_html_detail(board, url, resp.text, card_text)
+            return self._parse_html_detail(board, url, resp.text, card_text, metadata)
         except Exception as exc:
             logger.warning("[{}] Failed to fetch HTML job '{}': {}", self.name, url, exc)
-            return self._job_from_card(board, url, card_text)
+            return self._job_from_card(board, url, card_text, metadata)
 
     def _parse_html_detail(
         self,
@@ -213,6 +323,7 @@ class PersonioSource(BaseSource):
         url: str,
         html: str,
         card_text: str,
+        metadata: list[str],
     ) -> Job | None:
         soup = BeautifulSoup(html, "html.parser")
 
@@ -223,7 +334,7 @@ class PersonioSource(BaseSource):
         )
         title = title_el.get_text(" ", strip=True) if title_el else ""
         if not title:
-            return self._job_from_card(board, url, card_text)
+            return self._job_from_card(board, url, card_text, metadata)
 
         location_el = (
             soup.select_one('[class*="JobAttributes_jobMetaItemLocation"]')
@@ -248,7 +359,7 @@ class PersonioSource(BaseSource):
         signal_text = f"{title} {location} {description[:1000]}".lower()
         workplace_type = infer_workplace(signal_text)
 
-        return Job(
+        job = Job(
             title=title,
             company=board.company,
             location=location or "Unspecified",
@@ -261,8 +372,21 @@ class PersonioSource(BaseSource):
             tags=[],
             source=self.name,
         )
+        structured, fields = _personio_employment("", "", metadata=metadata)
+        return classify_employment(
+            job,
+            structured,
+            structured_source=self.name,
+            structured_fields=fields,
+        )
 
-    def _job_from_card(self, board: CompanyBoard, url: str, card_text: str) -> Job | None:
+    def _job_from_card(
+        self,
+        board: CompanyBoard,
+        url: str,
+        card_text: str,
+        metadata: list[str],
+    ) -> Job | None:
         text = " ".join(card_text.split())
         if not text:
             return None
@@ -271,7 +395,7 @@ class PersonioSource(BaseSource):
         # while downstream role/location filters decide whether it is usable.
         location = self._clean_html_location(text)
         workplace_type = infer_workplace(text)
-        return Job(
+        job = Job(
             title=text,
             company=board.company,
             location=location or "Unspecified",
@@ -283,6 +407,13 @@ class PersonioSource(BaseSource):
             description=text,
             tags=[],
             source=self.name,
+        )
+        structured, fields = _personio_employment("", "", metadata=metadata)
+        return classify_employment(
+            job,
+            structured,
+            structured_source=self.name,
+            structured_fields=fields,
         )
 
     def _clean_html_location(self, value: str) -> str:

@@ -12,10 +12,54 @@ from datetime import datetime, timezone
 from loguru import logger
 from pydantic import ValidationError
 
+from filters.employment import (
+    EmploymentStructuredInput,
+    classify_employment,
+    merge_structured_employment_inputs,
+)
 from models.job import Job
 from sources.base import BaseSource
 
 _API_URL = "https://www.arbeitnow.com/api/job-board-api"
+
+_JOB_TYPE_MAP = {
+    "full time": EmploymentStructuredInput(work_schedule="full_time"),
+    "full-time": EmploymentStructuredInput(work_schedule="full_time"),
+    "fulltime": EmploymentStructuredInput(work_schedule="full_time"),
+    "part time": EmploymentStructuredInput(work_schedule="part_time"),
+    "part-time": EmploymentStructuredInput(work_schedule="part_time"),
+    "parttime": EmploymentStructuredInput(work_schedule="part_time"),
+    "permanent": EmploymentStructuredInput(contract_term="permanent"),
+    "fulltime permanent": EmploymentStructuredInput(
+        work_schedule="full_time", contract_term="permanent"
+    ),
+    "full-time permanent": EmploymentStructuredInput(
+        work_schedule="full_time", contract_term="permanent"
+    ),
+    "intern": EmploymentStructuredInput(employment_relationship="internship"),
+    "internship": EmploymentStructuredInput(employment_relationship="internship"),
+    "working student": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "werkstudent": EmploymentStructuredInput(
+        employment_relationship="working_student"
+    ),
+    "freelance": EmploymentStructuredInput(employment_relationship="freelance"),
+    "fixed term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "fixed-term": EmploymentStructuredInput(contract_term="fixed_term"),
+    "temporary": EmploymentStructuredInput(contract_term="fixed_term"),
+}
+
+
+def _arbeitnow_employment(value: object) -> EmploymentStructuredInput:
+    if not isinstance(value, list):
+        return EmploymentStructuredInput()
+    mapped = [
+        _JOB_TYPE_MAP[item.strip().lower()]
+        for item in value
+        if isinstance(item, str) and item.strip().lower() in _JOB_TYPE_MAP
+    ]
+    return merge_structured_employment_inputs(*mapped)
 
 # ── German cities for location parsing ─────────────────────────────────────
 _KNOWN_GERMAN_CITIES: set[str] = {
@@ -150,7 +194,16 @@ class ArbeitnowSource(BaseSource):
                     company_postal_code=postal,
                     company_country=parsed_country,
                 )
-                jobs.append(job)
+                jobs.append(classify_employment(
+                    job,
+                    _arbeitnow_employment(item.get("job_types")),
+                    structured_source=self.name,
+                    structured_fields={
+                        "employment_relationship": "job_types",
+                        "work_schedule": "job_types",
+                        "contract_term": "job_types",
+                    },
+                ))
             except (ValidationError, KeyError, TypeError) as exc:
                 logger.warning("[{}] Skipping malformed entry: {}", self.name, exc)
                 continue

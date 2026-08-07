@@ -1,0 +1,130 @@
+{
+  "lever": [
+    {
+      "text": "Frontend Engineer",
+      "categories": {
+        "allLocations": ["Germany"],
+        "commitment": "Full-time"
+      },
+      "descriptionPlain": "A 12-month contract building React products.",
+      "hostedUrl": "https://example.com/lever/structured"
+    },
+    {
+      "text": "Backend Engineer",
+      "categories": {
+        "allLocations": ["Germany"],
+        "commitment": ["Full-time"]
+      },
+      "descriptionPlain": "Part-time employee position.",
+      "hostedUrl": "https://example.com/lever/malformed"
+    }
+  ],
+  "greenhouse": {
+    "jobs": [
+      {
+        "title": "Frontend Engineer",
+        "location": {"name": "Germany"},
+        "absolute_url": "https://example.com/greenhouse/structured",
+        "content": "Permanent employee position.",
+        "metadata": [
+          {"name": "Time Type", "value": "Part time"},
+          {"name": "Employment Type", "value": "Fixed Term"}
+        ]
+      },
+      {
+        "title": "Backend Engineer",
+        "location": {"name": "Germany"},
+        "absolute_url": "https://example.com/greenhouse/malformed",
+        "content": "Full-time permanent employee position.",
+        "metadata": {"name": "Time Type", "value": "Part time"}
+      }
+    ]
+  },
+  "ashby": {
+    "jobs": [
+      {
+        "title": "Software Engineer Intern",
+        "employmentType": "Intern",
+        "location": "Germany",
+        "secondaryLocations": [],
+        "isRemote": true,
+        "workplaceType": "Remote",
+        "jobUrl": "https://example.com/ashby/intern",
+        "descriptionPlain": "Full-time software engineering role."
+      }
+    ]
+  },
+  "workable": {
+    "jobs": [
+      {
+        "title": "Frontend Engineer",
+        "employment_type": "Full-time",
+        "url": "https://example.com/workable/structured",
+        "location": {
+          "location_str": "Germany",
+          "telecommuting": true,
+          "workplace_type": "remote"
+        },
+        "description": "Part-time work on React products."
+      },
+      {
+        "title": "Backend Engineer",
+        "employment_type": {"name": "Full-time"},
+        "url": "https://example.com/workable/malformed",
+        "location": {
+          "location_str": "Germany",
+          "telecommuting": true,
+          "workplace_type": "remote"
+        },
+        "description": "Part-time employee position."
+      }
+    ]
+  },
+  "arbeitnow": {
+    "data": [
+      {
+        "title": "Working Student Frontend Engineer",
+        "company_name": "Example",
+        "remote": true,
+        "location": "Berlin",
+        "url": "https://example.com/arbeitnow/student",
+        "description": "Build React products.",
+        "tags": ["Engineering"],
+        "job_types": ["Working student", "Part Time"]
+      }
+    ]
+  },
+  "remotive": {
+    "jobs": [
+      {
+        "title": "Freelance Frontend Engineer",
+        "company_name": "Example",
+        "candidate_required_location": "Worldwide",
+        "url": "https://example.com/remotive/freelance",
+        "description": "Full-time React work.",
+        "tags": ["react"],
+        "job_type": "freelance"
+      }
+    ]
+  },
+  "himalayas": {
+    "title": "Frontend Contractor",
+    "companyName": "Example",
+    "employmentType": "Contractor",
+    "applicationLink": "https://example.com/himalayas/contractor",
+    "categories": ["software"],
+    "seniority": ["Senior"],
+    "locationRestrictions": ["Germany"],
+    "excerpt": "Permanent employee wording appears incidentally."
+  },
+  "idealist": {
+    "name": "Frontend Engineer",
+    "orgName": "Example NGO",
+    "orgType": "NONPROFIT",
+    "jobType": ["FULL_TIME", "TEMPORARY", "CONTRACT"],
+    "description": "Part-time permanent employee wording.",
+    "url": {"en": "/en/nonprofit-job/example"},
+    "remoteZone": "WORLD",
+    "objectID": "idealist-structured"
+  }
+}
