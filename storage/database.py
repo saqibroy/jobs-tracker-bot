@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     freelance_rate TEXT,
     employment_reasons TEXT NOT NULL DEFAULT '[]',
     freelance_permission_required INTEGER NOT NULL DEFAULT 0,
+    posting_language TEXT NOT NULL DEFAULT 'unknown',
+    german_requirement_status TEXT NOT NULL DEFAULT 'unknown',
+    german_requirement_level TEXT NOT NULL DEFAULT 'unknown',
+    language_reasons TEXT NOT NULL DEFAULT '[]',
     posted_at   TEXT,
     fetched_at  TEXT NOT NULL,
     notified    INTEGER DEFAULT 0
@@ -143,6 +147,10 @@ _NEW_COLUMNS: dict[str, str] = {
     "freelance_rate": "TEXT",
     "employment_reasons": "TEXT NOT NULL DEFAULT '[]'",
     "freelance_permission_required": "INTEGER NOT NULL DEFAULT 0",
+    "posting_language": "TEXT NOT NULL DEFAULT 'unknown'",
+    "german_requirement_status": "TEXT NOT NULL DEFAULT 'unknown'",
+    "german_requirement_level": "TEXT NOT NULL DEFAULT 'unknown'",
+    "language_reasons": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 
@@ -233,9 +241,12 @@ async def save_jobs(jobs: list[Job]) -> list[Job]:
                      employment_relationship, work_schedule, contract_term,
                      weekly_hours, contract_duration, freelance_rate,
                      employment_reasons, freelance_permission_required,
+                     posting_language, german_requirement_status,
+                     german_requirement_level, language_reasons,
                      posted_at, fetched_at, notified)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, 0)
                 """,
                 (
                     job.id,
@@ -268,6 +279,10 @@ async def save_jobs(jobs: list[Job]) -> list[Job]:
                     job.freelance_rate,
                     json.dumps(job.employment_reasons),
                     int(job.freelance_permission_required),
+                    job.posting_language,
+                    job.german_requirement_status,
+                    job.german_requirement_level,
+                    json.dumps(job.language_reasons),
                     job.posted_at.isoformat() if job.posted_at else None,
                     job.fetched_at.isoformat(),
                 ),
@@ -388,6 +403,7 @@ def job_from_row(row: Mapping[str, Any]) -> Job:
         "match_reasons",
         "eligibility_reasons",
         "employment_reasons",
+        "language_reasons",
     ):
         if key in values and isinstance(values[key], str):
             values[key] = _decode_list(values[key])

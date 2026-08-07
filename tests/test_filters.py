@@ -910,13 +910,15 @@ class TestLanguageFilter:
         )
         assert passes_language_filter(job) is True
 
-    def test_reject_german(self):
+    def test_accept_german_prose_without_requirement(self):
         job = _make_job(
             title="Softwareentwickler",
             description="Wir suchen einen erfahrenen Softwareentwickler für unser Team in Berlin. "
                         "Sie sollten Erfahrung mit modernen Webtechnologien haben.",
         )
-        assert passes_language_filter(job) is False
+        assert passes_language_filter(job) is True
+        assert job.posting_language == "de"
+        assert job.german_requirement_status == "unspecified"
 
     def test_accept_short_text(self):
         """Very short text — should default to accept."""

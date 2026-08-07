@@ -9,7 +9,7 @@ except ModuleNotFoundError:  # Python 3.10 development environments
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, Literal, Mapping, cast
 
 from models.job import (
     EMPLOYMENT_RELATIONSHIPS,
@@ -17,6 +17,9 @@ from models.job import (
     EmploymentRelationship,
     WorkSchedule,
 )
+
+GermanCefrLevel = Literal["a1", "a2", "b1", "b2", "c1", "c2"]
+GERMAN_CEFR_LEVELS = frozenset({"a1", "a2", "b1", "b2", "c1", "c2"})
 
 
 DEFAULT_EMPLOYMENT_SECTION: dict[str, Any] = {
@@ -41,6 +44,39 @@ class EmploymentPolicy:
     freelance_permission_required: bool
     preferred_weekly_hours_min: int | None
     preferred_weekly_hours_max: int | None
+
+
+@dataclass(frozen=True)
+class LanguagePolicy:
+    """Validated candidate language capability used by the language gate."""
+
+    max_german_level: GermanCefrLevel
+    accepted_languages: frozenset[str]
+
+
+def parse_language_policy(section: Mapping[str, Any] | None) -> LanguagePolicy:
+    """Validate the required candidate language settings."""
+
+    if section is None:
+        raise ValueError("candidate.max_german_level is required")
+    raw_maximum = section.get("max_german_level")
+    if raw_maximum is None or not str(raw_maximum).strip():
+        raise ValueError("candidate.max_german_level is required")
+    maximum = str(raw_maximum).strip().lower()
+    if maximum not in GERMAN_CEFR_LEVELS:
+        raise ValueError(
+            "candidate.max_german_level must be one of A1, A2, B1, B2, C1, C2"
+        )
+    raw_languages = section.get("accepted_languages", [])
+    if not isinstance(raw_languages, list):
+        raise ValueError("candidate.accepted_languages must be a list")
+    accepted = frozenset(
+        str(value).strip().lower() for value in raw_languages if str(value).strip()
+    )
+    return LanguagePolicy(
+        max_german_level=cast(GermanCefrLevel, maximum),
+        accepted_languages=accepted,
+    )
 
 
 def _literal_set(
@@ -110,6 +146,7 @@ def load_profile() -> dict[str, Any]:
     with path.open("rb") as handle:
         profile = tomllib.load(handle)
     parse_employment_policy(profile.get("employment"))
+    parse_language_policy(profile.get("candidate"))
     return profile
 
 
@@ -126,3 +163,10 @@ def load_employment_policy() -> EmploymentPolicy:
     """Return the current validated employment policy."""
 
     return parse_employment_policy(load_profile().get("employment"))
+
+
+@lru_cache(maxsize=1)
+def load_language_policy() -> LanguagePolicy:
+    """Return the current validated candidate language policy."""
+
+    return parse_language_policy(load_profile().get("candidate"))

@@ -11,13 +11,22 @@ from loguru import logger
 
 import config as default_config
 from filters.employment import classify_employment, employment_rejection_reason
-from filters.language import passes_language_filter
+from filters.language import (
+    evaluate_language,
+    language_rejection_explanation,
+    passes_language_filter,
+)
 from filters.location import passes_location_filter
 from filters.match import compute_match_score
 from filters.ngo import classify_ngo
 from filters.role import passes_role_profile_filter as passes_role_filter
 from filters.stack import passes_stack_filter
-from filters.profile import EmploymentPolicy, load_employment_policy
+from filters.profile import (
+    EmploymentPolicy,
+    LanguagePolicy,
+    load_employment_policy,
+    load_language_policy,
+)
 from models.job import Job
 from models.scan import (
     FilterRejection,
@@ -99,6 +108,7 @@ def run_filter_pipeline(
     settings: Any = default_config,
     max_jobs_per_company: int = MAX_JOBS_PER_COMPANY,
     employment_policy: EmploymentPolicy | None = None,
+    language_policy: LanguagePolicy | None = None,
 ) -> FilterRunSummary:
     """Run the existing global filter order and count one terminal result/job."""
 
@@ -181,8 +191,18 @@ def run_filter_pipeline(
             )
             continue
 
-        if not passes_language_filter(job):
-            reject(job, RejectionCode.LANGUAGE, "language: non-English content detected")
+        language_passes = (
+            evaluate_language(job, language_policy)
+            if language_policy is not None
+            else passes_language_filter(job)
+        )
+        if not language_passes:
+            applied_language_policy = language_policy or load_language_policy()
+            reject(
+                job,
+                RejectionCode.LANGUAGE,
+                language_rejection_explanation(job, applied_language_policy),
+            )
             continue
 
         if not passes_senior_filter(job, settings):

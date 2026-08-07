@@ -2,6 +2,8 @@
 home_country = "DE"
 home_city = "Berlin"
 max_german_level = "B1"
+# Languages the candidate can satisfy when no explicit proficiency level is
+# imposed; this is not an advertisement-language allow-list or proof of fluency.
 accepted_languages = ["en"]
 
 [roles]

@@ -31,6 +31,7 @@ from filters.employment import (
     employment_display_lines,
     persisted_employment_display_lines,
 )
+from filters.language import language_display_text
 from filters.pipeline import (
     MAX_JOBS_PER_COMPANY,
     passes_company_blocklist,
@@ -221,6 +222,9 @@ def _print_rejections(rejected: list[tuple[Job, str]]) -> None:
             print(f"      {line}")
         if job.employment_reasons:
             print(f"      🔎  {'; '.join(job.employment_reasons[:4])}")
+        language_line = language_display_text(job, include_evidence=True)
+        if language_line:
+            print(f"      🗣  {language_line}")
         print(f"      📅  {age_str}  |  🌍  {job.source}")
         print(f"      ⛔  Reason: {reason}")
         print()
@@ -519,6 +523,9 @@ def _print_jobs(jobs: list[Job], *, explain: bool = False) -> None:
             print(f"      {line}")
         if explain and job.employment_reasons:
             print(f"      🔎  {'; '.join(job.employment_reasons[:4])}")
+        language_line = language_display_text(job, include_evidence=explain)
+        if language_line:
+            print(f"      🗣  {language_line}")
         if job.eligibility_reasons:
             print(f"      ✅  {'; '.join(job.eligibility_reasons)}")
         if job.match_score > 0:

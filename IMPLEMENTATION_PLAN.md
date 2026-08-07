@@ -655,13 +655,13 @@ Run the same isolated 512 MiB service and `/health` validation used for Phase 2B
 
 ## Tasks
 
-- [ ] Add the normalized model, validated language policy, bounded stable reasons, and centralized requirement-aware evaluator.
-- [ ] Add deterministic posting-language enrichment and required/optional/negated/alternative German requirement extraction.
-- [ ] Integrate the evaluator at the existing language gate without changing terminal accounting or any other gate.
-- [ ] Add the idempotent SQLite migration, safe reconstruction, and round-trip support.
-- [ ] Add concise CLI/explain presentation; keep Discord, Telegram, digest, scoring, and routing unchanged.
-- [ ] Add the complete configuration, extraction, pipeline, persistence, employment, and routing regression matrix.
-- [ ] Capture the bounded pre/post live diagnostics and verify Docker, `/health`, memory, and startup duration.
+- [x] Add the normalized model, validated language policy, bounded stable reasons, and centralized requirement-aware evaluator.
+- [x] Add deterministic posting-language enrichment and required/optional/negated/alternative German requirement extraction.
+- [x] Integrate the evaluator at the existing language gate without changing terminal accounting or any other gate.
+- [x] Add the idempotent SQLite migration, safe reconstruction, and round-trip support.
+- [x] Add concise CLI/explain presentation; keep Discord, Telegram, digest, scoring, and routing unchanged.
+- [x] Add the complete configuration, extraction, pipeline, persistence, employment, and routing regression matrix.
+- [x] Capture the bounded pre/post live diagnostics and verify Docker, `/health`, memory, and startup duration.
 
 ## Definition of done
 
@@ -1333,11 +1333,27 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 3
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-07
+- Commit: `feat: make language filtering requirement-aware` (this Phase 3 commit)
 - Tests:
-- Peak memory:
+  - Focused language, storage, and presentation matrix: 88 passed in 1.33s.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 297 passed in 2.36s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 297 passed in 2.09s.
+  - Historical diagnostic: 1,174 passed, 104 failed, 10 warnings; a node-ID comparison confirmed that the failures exactly match the recorded Phase 0 set, with no new or missing failures.
+- Peak memory: 352.2 MiB / 512 MiB, 4.5 MiB above the paired pre-Phase-3 measurement, 5.1 MiB above the Phase 2B reference, and 77.8 MiB below the 430 MiB target.
 - Notes:
+  - Changed `models/job.py`, `filters/profile.py`, `filters/language.py`, `filters/pipeline.py`, `storage/database.py`, `main.py`, `profile.toml`, `tests/test_filters.py`, `tests/v2/test_language.py`, and `tests/v2/test_language_storage_presentation.py`, plus this Phase 3 checklist/progress entry. No production dependency was added.
+  - Added normalized `posting_language`, `german_requirement_status`, `german_requirement_level`, and bounded `language_reasons` fields. The explicit idempotent SQLite migration uses safe `unknown`/`[]` defaults, preserves Phase 2B rows, tolerates malformed reason JSON, and round-trips all new metadata without changing `source_scan_runs`.
+  - Added a validated typed `LanguagePolicy` with configuration-driven A1–C2 ordering and backward-compatible unrestricted `accepted_languages` alternatives. The centralized lightweight evaluator keeps deterministic bounded posting-language detection separate from German hiring requirements and compares required CEFR, fluent (minimum B2), business-fluent/professional/verhandlungssicher (minimum C1), and native (never implied by CEFR) evidence.
+  - Required, optional, negated, irrelevant course/training, ambiguous, multiple-clause, and `or`/`and` alternative contexts are handled conservatively. Optional context wins over severity; only `incompatible` rejects; explicit unmodeled English proficiency alternatives pass as `unknown`. The evaluator remains at the existing language gate after employment/role/stack and preserves the stable `language` rejection code.
+  - CLI and `--explain` add at most one compact language line only when useful. Ordinary English/unspecified output remains quiet; Discord, Telegram, digest formatting, match scoring, thresholds, tiers, company caps, source behavior, and scheduling/concurrency are unchanged.
+  - Bounded pre-change live diagnostic: 11,566 raw / 37 accepted / 30 terminal language rejections / 8 immediate / 29 digest / 0 diagnostic. Rejections classified as German prose only 13, B2 0, C1 0, C2 0, fluent 2, business-fluent/professional/verhandlungssicher 0, native/Muttersprache 2, other detected posting language 12, and ambiguous German mention 1.
+  - Same-sample Phase 3 comparison: the prior gate would reject 29 and accept 37; Phase 3 rejected 2 and accepted 58, with 22 newly accepted and one newly rejected after stronger explicit native evidence. Eleven German-prose-only and eleven other-language-prose jobs were newly accepted. Thirteen ambiguous evaluations passed the language gate as `unknown`; terminal required evidence included one fluent and one native incompatibility. No terminal B2/C1/C2 or business-fluent live example appeared, so those policies are proven by fixtures. Routing moved from 8 immediate / 29 digest / 0 diagnostic to 8 / 50 / 0 solely through changed eligibility; score/tier invariance is covered by regression tests.
+  - Required Arbeitnow, Personio, LinkedIn, and all-default `--explain` dry scans passed. An absent database remained absent; the sentinel database retained SHA-256 `885ea9faad2abe6684c3bcf793f81ee660a195be3eb66e8cf334991ed1489827` and identical nanosecond mtime `2026-08-07 11:56:46.813940126 +0200` after every dry scan.
+  - Final image: `job-bot:phase3`, `sha256:647945954b9796ef69f9b53e841edfbdfd683ea443a509b991eaee1264d3182f`, 374,425,048 bytes. The isolated service used a temporary database/log tree, no `.env`, disabled Discord/Telegram/Zoho/status sends, a 512 MiB limit, and loopback-only `127.0.0.1:18084`; `/health` remained responsive.
+  - Paired pre-change startup was approximately 92.4 seconds at 347.7 MiB with 11,565 raw / 37 accepted / 8 immediate / 29 digest / 0 diagnostic. Final startup was approximately 91.6 seconds at 352.2 MiB with 11,575 raw / 58 accepted / 8 immediate / 50 digest / 0 diagnostic: approximately 0.9% faster and only 4.5 MiB higher, so neither investigation threshold was reached.
+  - Final persistence contained 58 jobs with all four columns populated safely: posting language `de` 11 / `en` 34 / `other` 11 / `unknown` 2, and German requirement status `optional` 1 / `unspecified` 57. Employment data persisted unchanged. Personio remained `partial_success` with one known redirect issue; StepStone remained isolated `unknown_error` with five HTTP 404 issues; JSON-LD remained `zero_results`; other configured sources were healthy.
+  - Known limitations: extraction is intentionally regex/rule based; ambiguous evidence passes conservatively; `accepted_languages` does not model explicit per-language proficiency; current live feeds are volatile; no current terminal live B2/C1/C2/business-fluent example was available. Phase 4 was not started.
 
 ## Phase 4
 

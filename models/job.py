@@ -19,6 +19,27 @@ EmploymentRelationship: TypeAlias = Literal[
 ]
 WorkSchedule: TypeAlias = Literal["full_time", "part_time", "unknown"]
 ContractTerm: TypeAlias = Literal["permanent", "fixed_term", "unknown"]
+PostingLanguage: TypeAlias = Literal["en", "de", "other", "unknown"]
+GermanRequirementStatus: TypeAlias = Literal[
+    "compatible",
+    "incompatible",
+    "optional",
+    "unspecified",
+    "unknown",
+]
+GermanRequirementLevel: TypeAlias = Literal[
+    "none",
+    "a1",
+    "a2",
+    "b1",
+    "b2",
+    "c1",
+    "c2",
+    "fluent",
+    "business_fluent",
+    "native",
+    "unknown",
+]
 
 EMPLOYMENT_RELATIONSHIPS = frozenset(
     {
@@ -35,6 +56,27 @@ CONTRACT_TERMS = frozenset({"permanent", "fixed_term", "unknown"})
 MAX_EMPLOYMENT_REASONS = 12
 MAX_EMPLOYMENT_REASON_LENGTH = 120
 MAX_EMPLOYMENT_DETAIL_LENGTH = 120
+POSTING_LANGUAGES = frozenset({"en", "de", "other", "unknown"})
+GERMAN_REQUIREMENT_STATUSES = frozenset(
+    {"compatible", "incompatible", "optional", "unspecified", "unknown"}
+)
+GERMAN_REQUIREMENT_LEVELS = frozenset(
+    {
+        "none",
+        "a1",
+        "a2",
+        "b1",
+        "b2",
+        "c1",
+        "c2",
+        "fluent",
+        "business_fluent",
+        "native",
+        "unknown",
+    }
+)
+MAX_LANGUAGE_REASONS = 8
+MAX_LANGUAGE_REASON_LENGTH = 120
 
 
 class Job(BaseModel):
@@ -70,6 +112,10 @@ class Job(BaseModel):
     freelance_rate: str | None = None
     employment_reasons: list[str] = Field(default_factory=list)
     freelance_permission_required: bool = False
+    posting_language: PostingLanguage = "unknown"
+    german_requirement_status: GermanRequirementStatus = "unknown"
+    german_requirement_level: GermanRequirementLevel = "unknown"
+    language_reasons: list[str] = Field(default_factory=list)
     company_city: Optional[str] = None
     company_postal_code: Optional[str] = None
     company_country: Optional[str] = None
@@ -150,6 +196,33 @@ class Job(BaseModel):
             if reason and reason not in reasons:
                 reasons.append(reason)
             if len(reasons) >= MAX_EMPLOYMENT_REASONS:
+                break
+        return reasons
+
+    @field_validator(
+        "posting_language",
+        "german_requirement_status",
+        "german_requirement_level",
+        mode="before",
+    )
+    @classmethod
+    def normalize_language_literals(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "unknown"
+        return str(v).strip().lower()
+
+    @field_validator("language_reasons", mode="before")
+    @classmethod
+    def normalize_language_reasons(cls, v):
+        if v is None:
+            return []
+        values = [v] if isinstance(v, str) else v
+        reasons: list[str] = []
+        for value in values:
+            reason = " ".join(str(value).split())[:MAX_LANGUAGE_REASON_LENGTH]
+            if reason and reason not in reasons:
+                reasons.append(reason)
+            if len(reasons) >= MAX_LANGUAGE_REASONS:
                 break
         return reasons
 
