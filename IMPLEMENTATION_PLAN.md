@@ -676,48 +676,453 @@ Run the same isolated 512 MiB service and `/health` validation used for Phase 2B
 
 ---
 
-# Phase 4 — Notification routing and recall
+# Phase 4A — Notification tier and delivery-state foundation
 
 ## Objective
 
-Surface more eligible jobs without flooding immediate notifications.
+Make notification delivery idempotent and capable of supporting immediate, digest, explore, retries, and multiple configured destinations without duplicate or lost delivery state. Phase 4A builds the delivery foundation while preserving the current effective routing thresholds, Discord destination behavior, digest cadence, and weekly NGO digest semantics.
 
-## Proposed configurable tiers
+Phase 4A must not lower recall thresholds, enable production explore routing, tune the company cap, change employment compatibility, or begin Phase 5 scheduling work.
+
+## Verified implementation baseline and current risks
+
+Start Phase 4A from the verified Phase 3 reference:
+
+- blocking v2: 297 passed
+- historical diagnostic: 1,174 passed and 104 known failures
+- peak memory: 352.2 MiB, below the 430 MiB target
+- startup scan: approximately 91.6 seconds
+- current live routing sample: 8 immediate, 50 digest, 0 diagnostic
+- effective thresholds: immediate 70 and digest 45
+- per-company cap: 2
+- `MINIMUM_MATCH_SCORE`: 0 by default
+
+The implementation audit found these delivery-state risks:
+
+- `jobs.notified` is one global boolean shared by tiers and destinations.
+- Immediate delivery marks every selected job globally notified after channel calls even though current notifier methods swallow some per-job failures and return no durable success set.
+- A failed immediate delivery has no database-backed retry path after the job becomes seen by deduplication.
+- The digest is Discord-only and queries only `notified=0` digest rows inside a short recent-hours window with a limit, so overflow can become too old for the next query without ever being delivered.
+- Routing metrics currently recognize only immediate, digest, and diagnostic, so a future explore value would be dropped or misclassified.
+- Weekly NGO digest intentionally ignores `notified` and repeats a current seven-day summary; it is a distinct behavior that must not be migrated into one-time receipts.
+
+## Tier and delivery-state contracts
+
+Extend the normalized notification tier to:
+
+```python
+Literal[
+    "none",
+    "explore",
+    "digest",
+    "immediate",
+]
+```
+
+`notification_tier` answers only how a job should be routed. It must not encode whether Discord or Telegram received it, which Discord webhook was selected, whether a grouped digest succeeded, or which destination still needs a retry.
+
+Keep Phase 4A routing equivalent to the current policy:
+
+- `immediate`: score at least 70
+- `digest`: score from 45 through 69
+- `none`: score below 45
+- `explore`: valid in the model and persistence layer, but assigned to no production job until Phase 4B enables the policy
+
+The existing `notification_tier` SQLite column is unconstrained text and does not require a destructive column migration. The Phase 4A schema migration is the new receipt table described below.
+
+## Logical delivery destinations
+
+Preserve the current immediate Discord behavior exactly:
+
+- A general job selects the general Discord webhook.
+- An NGO job selects the NGO Discord webhook when it is configured.
+- An NGO job falls back to the general Discord webhook when the NGO webhook is not configured.
+- A job is never intentionally sent to both Discord webhooks for the same immediate delivery.
+- Telegram is an independent destination when its token and chat are configured.
+
+Use stable logical receipt destination identifiers:
+
+- `discord_general`
+- `discord_ngo`
+- `telegram`
+
+A Discord receipt records the logical destination that actually accepted the job. For one job and delivery kind, a receipt at either Discord destination satisfies that job's single Discord delivery obligation, so a later webhook-configuration change cannot cause an already delivered job to be sent to the other Discord webhook. If no Discord receipt exists, a retry resolves the currently configured destination and records the destination actually used.
+
+The six-hour digest remains Discord-only and continues to use the general Discord webhook. Explore remains disabled in 4A. The weekly NGO digest remains a separate recurring summary outside these receipt semantics and must retain its current query, repeat, destination-fallback, CLI, and scheduler behavior.
+
+## Delivery receipt schema and API
+
+Add an explicit, idempotent table conceptually equivalent to:
+
+```text
+job_delivery_receipts
+---------------------
+job_id        TEXT NOT NULL
+delivery_kind TEXT NOT NULL
+destination   TEXT NOT NULL
+delivered_at  TEXT NOT NULL
+
+PRIMARY KEY (job_id, delivery_kind, destination)
+```
+
+Supported `delivery_kind` values are `immediate`, `digest`, and `explore`. Supported destinations are the three logical identifiers above. Keep these values typed and validated in application code; do not build a generic queue, event bus, or provider registry.
+
+Notifier delivery results must expose the exact successful `(job_id, destination)` pairs. A provider exception, a returned HTTP error, or a failed per-job retry must omit that pair from the success result. Record successful pairs with one transactional `INSERT OR IGNORE` batch and a UTC `delivered_at`; the unique key must make repeated recording harmless.
+
+Immediate delivery runs independently per configured obligation:
+
+- Discord success plus Telegram failure records only the selected Discord destination.
+- The next scan retries Telegram without sending the job to Discord again.
+- Telegram success plus Discord failure behaves symmetrically.
+- Both successes create both receipts.
+- An unconfigured destination creates no receipt and is not treated as a successful send.
+
+Current Discord and Telegram notifier methods swallow some per-job failures and return no success information. Phase 4A must add a small typed success result, make Discord HTTP status failures observable as failed jobs, and keep failures isolated so a bad destination or job cannot abort the scan.
+
+External HTTP delivery and SQLite cannot share a transaction. The receipt mechanism provides per-destination idempotency for normal retries, but a process crash after the provider accepts a message and before its receipt commits can still produce an at-least-once duplicate. Document this narrow crash window rather than adding a message broker or claiming impossible exactly-once delivery.
+
+## Legacy `notified` migration semantics
+
+Retain `jobs.notified` without rewriting or backfilling the jobs table. Its only historical meaning after migration is `legacy_suppressed`:
+
+- A historical `notified=1` row is suppressed from all Phase 4 delivery queries and must not be resent after upgrade.
+- It does not prove successful historical delivery to every configured channel or Discord destination; that outcome is unknowable because the old implementation had no durable per-destination result.
+- Do not invent historical receipts for any channel, destination, or delivery kind.
+- A historical `notified=0` row may remain pending according to its tier, missing receipt, batch ordering, and the 14-day stale policy.
+- Jobs created under Phase 4A keep `notified=0`; receipts become their authoritative delivery state.
+- `mark_notified()` remains legacy-only and must not be called by new immediate, digest, or explore delivery paths.
+
+Migration and regression tests must prove repeated initialization is safe and no previously globally notified job is unexpectedly resent.
+
+## Pending backlog, ordering, and grouped delivery
+
+Replace the current digest query's short lookback as the pending-state mechanism. Keep delivery bounded while separating cadence, batch size, maximum useful age, and receipt state:
+
+- The scheduled digest still runs every six hours.
+- Immediate retry processing runs after every non-dry production scan, including a scan that saves no new jobs.
+- Immediate and digest delivery select at most 15 jobs per destination/run in Phase 4A.
+- A pending job remains eligible until 14 days after `fetched_at`; after that it is intentionally stale and no longer selected. Staleness does not fabricate a delivery receipt.
+- A full batch leaves overflow pending for the next run; it is not lost merely because it is now older than the delivery interval.
+- Pending queries require `notified=0`, the matching tier, no satisfying receipt for the destination obligation, and `fetched_at` inside the stale boundary.
+
+Use this exact deterministic ordering for immediate, digest, and future explore selections:
+
+1. `match_score DESC`
+2. `COALESCE(posted_at, fetched_at) DESC`
+3. `fetched_at DESC`
+4. `id ASC`
+
+For a grouped digest, build a payload within the Discord embed limit and retain the exact IDs actually included. After a successful webhook response, record receipts only for those included jobs. Jobs excluded by the item or payload-size limit remain pending. A failed payload creates no receipts.
+
+## Health, metrics, and compatibility
+
+Add `explore` routing counts without removing or renaming existing fields:
+
+- Preserve `/health` keys `immediate`, `digest`, and `diagnostic`.
+- Add `explore` with a default of zero for old persisted summaries.
+- Continue mapping saved `none` jobs to `diagnostic`.
+- Add `explore` to per-source routing aggregation, latest-scan restoration, `--stats`, and the daily status routing block so it is never silently dropped.
+- Keep `source_scan_runs.routing_counts` as JSON; no `source_scan_runs` schema migration is expected.
+- Keep deployment health consumers that read only immediate/digest fields compatible.
+
+Dry-run and explain modes must create no database, receipt, notification, metric, or other delivery-state writes.
+
+## Expected files and modules
+
+- Tier and routing metrics: `models/job.py`, `models/scan.py`
+- Receipt migration, pending queries, and transactional receipt writes: `storage/database.py`
+- Typed delivery success contract and destination-aware sends: `notifiers/base.py`, `notifiers/discord_notifier.py`, `notifiers/telegram_notifier.py`
+- New focused delivery orchestration and grouped-payload module: `notifiers/delivery.py`
+- Scan/digest orchestration and additive presentation: `main.py`, `health.py`
+- New focused tests: `tests/v2/test_notification_delivery.py`
+- Focused compatibility updates: `tests/v2/test_observability.py`, `tests/v2/test_employment_storage_presentation.py`, and existing historical digest/weekly tests where required
+- Progress only: `IMPLEMENTATION_PLAN.md`
+
+Do not add a production dependency or another service.
+
+## Tasks
+
+- [ ] Add the four-value notification tier while preserving 70/45/none assignment and leaving explore disabled.
+- [ ] Add the idempotent `job_delivery_receipts` migration and typed delivery-kind/destination contracts.
+- [ ] Implement the exact general/NGO Discord selection and fallback rules with one Discord obligation per job, plus independent Telegram delivery.
+- [ ] Return exact per-job/per-destination successes from notifier sends and record only successful receipts transactionally.
+- [ ] Replace new delivery paths' global `notified` writes with receipt-based pending/retry logic; keep `notified` and `mark_notified()` legacy-only.
+- [ ] Replace the digest lookback with bounded receipt-based carry-over, deterministic ordering, and 14-day staleness.
+- [ ] Record grouped digest receipts for exactly the jobs included in a successful payload and keep overflow pending.
+- [ ] Add explore routing counts additively across metrics, persistence restoration, health, stats, and daily status.
+- [ ] Preserve dry-run immutability, current routing thresholds, Discord destinations, digest cadence/channel, and weekly NGO behavior.
+- [ ] Add the complete migration, receipt, partial-failure, backlog, compatibility, and safety test matrix.
+
+## Acceptance criteria
+
+- Routing tier and delivery state are independent; `explore` validates but receives no production jobs.
+- A general immediate job uses only `discord_general`; an NGO immediate job uses only `discord_ngo` when configured and otherwise only `discord_general`; Telegram remains independent.
+- Ordinary retries never resend a job to a destination already represented by a satisfying receipt, including across later Discord webhook-configuration changes.
+- Partial destination and per-job failures create receipts only for successes, and later runs retry only missing obligations.
+- Historical `notified=1` rows are conservatively suppressed without guessed receipts; historical outcomes remain explicitly unknown.
+- Receipt migration and writes are idempotent, and duplicate receipt attempts leave one row.
+- Digest overflow remains pending beyond the six-hour window until delivered or 14 days stale; ordering is exact and stable.
+- Successful grouped delivery records only included jobs; a failed send records none.
+- `/health` remains backward compatible and exposes additive explore counts while diagnostic retains saved-none semantics.
+- Weekly NGO digest query/repeat behavior and all 70/45 notification tier boundaries remain unchanged.
+- No new service, queue, production dependency, or Playwright/Chromium requirement is added.
+
+## Verification
+
+Run in this order:
+
+```bash
+python -m pytest tests/v2/test_notification_delivery.py tests/v2/test_observability.py tests/v2/test_employment_storage_presentation.py -q
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase4a .
+python main.py --dry-run --source arbeitnow
+python main.py --dry-run --explain
+```
+
+- The blocking v2 suite must pass. Compare the historical diagnostic with the Phase 3 reference of 1,174 passed and 104 known failures and introduce no new failing node IDs.
+- Use mocked provider calls for automated delivery tests; do not send test jobs to real Discord or Telegram destinations.
+- Run an isolated ephemeral 512 MiB service with temporary database/log mounts, no real `.env`, all notification/status/Zoho sends disabled, and loopback-only health binding.
+- Validate migration from a representative pre-Phase-4 database twice, health restoration before/after a completed scan, additive explore counts, and no delivery-state mutation in dry-run mode.
+
+## Memory criteria
+
+- Peak observed container memory must remain below 430 MiB using the Phase 3 startup-scan method (reference: 352.2 MiB and approximately 91.6 seconds).
+- Investigate a paired Phase 4A increase above 10 MiB or a startup-duration increase above 10% before completion.
+- Pending queries and payload builders must retain only the bounded batch; receipts are bounded to the finite delivery-kind/destination combinations per job and store no payload or response body.
+- Do not change source scheduling or concurrency; that remains Phase 5.
+
+## Progress-log requirements
+
+Record files changed, the exact receipt schema, migration and legacy-suppression proof, destination-selection behavior, focused/blocking/historical test results, Docker image, dry-run proof, `/health` compatibility, startup duration, peak memory, limitations, and confirmation that Phase 4B/5 were not started.
+
+## Definition of done
+
+- Every Phase 4A task and acceptance criterion is verified and recorded.
+- Delivery retries are receipt-driven per logical destination, historical notified rows are safe, and backlog cannot be silently stranded by the digest interval.
+- Current tier thresholds, exact Discord routing, Telegram independence, digest behavior, weekly NGO semantics, employment compatibility, company cap, and source schedules remain unchanged.
+- Focused and blocking tests, historical compatibility, Docker build, dry scans, isolated health, migration, and memory checks pass.
+- Commit Phase 4A separately as `feat: make job notification delivery idempotent` and stop for review before Phase 4B.
+
+---
+
+# Phase 4B — Recall policy, explore digest, and company-cap tuning
+
+## Objective
+
+Use the Phase 4A receipt foundation to expose more hard-eligible jobs through evidence-selected thresholds, a bounded daily explore digest, employment-aware presentation, a configurable tier-preserving company cap, and an explicit freelance-permission routing policy.
+
+Phase 4B must not change hard eligibility, employment compatibility, match-score calculation, source scheduling/concurrency, or weekly NGO digest semantics. It must not begin Phase 5.
+
+## Read-only threshold and cap simulation
+
+Before changing production thresholds or the company-cap default, fetch the current configured sources once and run a read-only simulation over jobs that pass every hard gate and receive a match score, before company-cap rejection. The simulation must not initialize or write the production database, persist scan metrics or receipts, send notifications, advance mail state, or write ATS discovery candidates.
+
+Report these pre-cap aggregates without descriptions or other unbounded posting content:
+
+- score bands: 70–100, 45–69, 30–44, 15–29, and 0–14
+- total hard-eligible jobs
+- current score-only cap-2 rejections
+- source distribution
+- employment-relationship distribution
+- work-schedule distribution
+- `freelance_permission_required` count
+- per-company counts and concentration
+
+Simulate at least:
+
+- A — current: immediate 70, digest 45, no explore, score-only company cap 2
+- B — original proposal: immediate 70, digest 30, explore 15, tier-preserving diversity cap 5
+- C — conservative alternative: immediate 70, digest 45, explore 30, tier-preserving diversity cap 5
+
+For every scenario compare immediate, digest, explore, and none volumes; jobs hidden by the cap; jobs per company; part-time/fixed-term/contract/freelance visibility; and selected-score distribution. Compare the diversity policy with score-only selection under the same thresholds/cap and prove that it never reduces the number of selected higher-tier jobs in favor of a lower tier. Report same-tier score trade-offs separately.
+
+Keep `immediate_score=70`. Adopt the 30/15 thresholds only when the evidence shows acceptable relevance and bounded volume; otherwise use the conservative 45/30 policy. Choose the smallest company cap from 2 through 5 that materially improves distinct actionable employment visibility without unacceptable company concentration; retain 2 when evidence is inconclusive. Record the simulation, chosen defaults, and rationale before final rollout rather than mechanically adopting either proposal.
+
+Add a read-only CLI diagnostic such as `python main.py --simulate-notifications` so the same aggregate comparison can be repeated during tuning. This mode must share production hard-gate/scoring logic but bypass persistence, notifications, discovery writes, and delivery state.
+
+## Typed notification policy
+
+Load one validated `NotificationPolicy` from `profile.toml`; do not scatter score, cap, item-limit, stale-age, or freelance-routing decisions across `main.py`, storage, and notifier renderers. The policy must contain:
 
 ```toml
 [notifications]
 immediate_score = 70
-digest_score = 30
-explore_score = 15
+digest_score = 45                 # final value selected by simulation
+explore_score = 30                # final value selected by simulation
 daily_explore_enabled = true
+explore_hour_utc = 17
+immediate_max_items = 15
+digest_max_items = 15
+explore_max_items = 10
+pending_max_age_days = 14
+max_jobs_per_company = 2          # final value selected from 2..5 by simulation
+freelance_permission_max_tier = "digest"
 ```
 
-Normalized tiers:
+The shown digest/explore/cap values are the conservative fallback when evidence is inconclusive, not a substitute for running the simulation. Validate:
 
-- `immediate`: strong matches
-- `digest`: plausible matches
-- `explore`: eligible but weak/uncertain matches
-- `none`: diagnostics only
+- `100 >= immediate_score > digest_score > explore_score >= 0`
+- enablement is boolean
+- UTC hour is an integer from 0 through 23
+- all item limits are positive bounded integers no greater than 25
+- pending age is a positive bounded integer no greater than 30
+- company cap is an integer from 1 through 5
+- freelance ceiling is one of `immediate`, `digest`, or `explore`
 
-Freelance roles with `freelance_permission_required = true` should have a visible flag and may use a dedicated digest section rather than immediate alerts.
+Configuration errors must fail clearly at profile load. Score assignment, pending queries, delivery scheduling, company selection, and simulation must all consume this same typed policy.
+
+## Explore and digest delivery
+
+Assign tiers only after hard eligibility and scoring:
+
+- score at or above immediate threshold → `immediate`
+- otherwise score at or above digest threshold → `digest`
+- otherwise score at or above explore threshold and explore enabled → `explore`
+- otherwise → `none`
+
+Explore contains only hard-eligible jobs, never sends immediate alerts, and runs once daily at the configured UTC hour. It uses the Phase 4A receipts, deterministic pending ordering, 14-day stale policy, Discord-general grouped delivery, and a strict default limit of 10. A failed delivery stays pending for only the missing logical destination; successful or stale jobs do not repeat.
+
+Keep the regular digest Discord-general only and bounded to 15 by default. Digest and explore payload builders must carry overflow deterministically, respect channel size limits, return exact included IDs, and record receipts only after successful payloads.
+
+## Tier-preserving company-cap diversity
+
+Make the company cap configurable through `NotificationPolicy`. Assign every hard-eligible candidate its policy-derived tier, including the freelance-permission ceiling, before final company-cap selection.
+
+Classify each candidate into exactly one mutually exclusive employment bucket with this precedence:
+
+1. `freelance` when `employment_relationship == "freelance"`
+2. `part_time` when the non-freelance job has `work_schedule == "part_time"`
+3. `contract_or_fixed_term` when the remaining job is a contract employee or fixed term
+4. `standard` for every remaining job
+
+Within each normalized company, preserve routing priority exactly:
+
+1. Process tiers in the order `immediate`, `digest`, `explore`, `none`.
+2. A lower-tier candidate can never consume a slot while an unselected higher-tier candidate remains.
+3. Within the current tier, keep its highest-ranked job first.
+4. When more slots remain in that same tier, prefer the highest-ranked candidates from useful employment buckets not yet represented in that tier, using the bucket precedence above.
+5. Fill remaining slots from that tier by deterministic rank before considering the next tier.
+6. Never exceed the one overall company limit; do not create a separate cap per tier or employment category.
+
+Rank candidates by match score descending, `posted_at` or `fetched_at` recency descending, `fetched_at` descending, and ID ascending. This must produce the documented behavior:
+
+- With cap 2, two full-time immediate jobs at 82 and 75 both beat a freelance explore job at 35; diversity cannot replace the 75 immediate job.
+- With cap 2, immediate jobs at 82 full-time, 77 part-time, and 75 full-time select 82 and 77 because diversity is applied within the same immediate tier.
+
+Every non-selected candidate receives exactly one terminal `company_cap` rejection. Overall and per-source `raw == accepted + sum(primary rejection counts)` must remain true.
+
+## Freelance-permission policy and presentation
+
+Use the existing `freelance_permission_required` marker without changing employment compatibility or rejecting the job. Apply the configured maximum tier after score-based routing and before company-cap selection. The default `digest` ceiling demotes an otherwise immediate permission-required freelance role to digest while leaving existing digest/explore/none results unchanged. Other freelance jobs remain score-routed.
+
+Keep the permission warning visible. Group digest/explore jobs into compact, mutually exclusive presentation sections:
+
+- strong employee/standard roles
+- part-time, contract-employee, and fixed-term roles
+- freelance roles, with the permission warning where applicable
+
+A job appears once per delivery and once across sections. Within each section preserve deterministic delivery order, bound titles/details, and keep every Discord payload within provider limits.
+
+## Health, metrics, and compatibility
+
+- Use the additive Phase 4A explore routing count across current scan metrics, persisted JSON restoration, `/health`, `--stats`, and daily status.
+- Keep `diagnostic` mapped only from saved `none` jobs.
+- Preserve existing source/funnel accounting and deployment-facing immediate/digest fields.
+- Require the simulation and normal dry-run paths to remain immutable.
+- Do not migrate `source_scan_runs`, change notification credentials, or alter weekly NGO repeat behavior.
+
+## Expected files and modules
+
+- Typed policy and tier assignment: `filters/profile.py`, `filters/match.py`, `profile.toml`
+- Tier-preserving diversity selection and terminal accounting: `filters/pipeline.py`
+- Read-only simulation and explore scheduling: `main.py`
+- Pending-query policy parameters and receipts: `storage/database.py`
+- Grouped delivery orchestration and compact employment-section rendering: `notifiers/delivery.py`, with Discord transport in `notifiers/discord_notifier.py`
+- New focused tests: `tests/v2/test_notification_policy.py`
+- Focused regressions: `tests/v2/test_notification_delivery.py`, `tests/v2/test_observability.py`, and employment/pipeline tests
+- Progress only: `IMPLEMENTATION_PLAN.md`
+
+Do not add a production dependency or another service.
 
 ## Tasks
 
-- [ ] Add `explore` to the tier model and DB migration.
-- [ ] Make the per-company cap configurable; default to 5.
-- [ ] Apply company cap independently enough that one category does not hide all part-time/freelance roles.
-- [ ] Add a daily explore digest with a strict maximum item count.
-- [ ] Keep immediate notifications concise.
-- [ ] Make digest queries idempotent and mark only actually delivered jobs as notified for the relevant tier.
-- [ ] Add sections by employment type.
-- [ ] Add tests for thresholds, caps, digest idempotency, and freelance flags.
+- [ ] Add the immutable aggregate simulation and record A/B/C evidence before choosing thresholds or cap defaults.
+- [ ] Add and validate the centralized `NotificationPolicy`; route all notification decisions through it.
+- [ ] Assign immediate/digest/explore/none tiers at exact boundaries and apply the configured freelance-permission ceiling without rejection.
+- [ ] Replace the hardcoded cap with the tier-preserving, diversity-aware, one-overall-limit selector.
+- [ ] Add the bounded daily Discord-general explore digest using Phase 4A receipts, retry, ordering, carry-over, and staleness.
+- [ ] Keep the regular digest bounded and receipt-driven; keep immediate alerts concise and high precision.
+- [ ] Add compact mutually exclusive employment sections and visible freelance-permission warnings without duplicate jobs.
+- [ ] Preserve source/funnel accounting, health compatibility, dry-run immutability, and weekly NGO behavior.
+- [ ] Add the complete threshold, configuration, cap, delivery, presentation, accounting, and performance test matrix.
+
+## Acceptance criteria
+
+- Simulation reports every required aggregate and scenario without a database or notification-side effect, and the progress log records why the final defaults were chosen.
+- Threshold boundaries are exact; immediate remains at 70 and no explore job generates an immediate alert.
+- The company selector never replaces a higher-tier job with a lower-tier diversity candidate and preserves the number of selected higher-tier jobs relative to score-only selection under the same cap.
+- Same-tier diversity follows the documented examples and deterministic bucket precedence; the one overall cap is never multiplied by category or tier.
+- Every cap exclusion has exactly one terminal rejection and all funnel invariants hold overall and per source.
+- Part-time, fixed-term, contract-employee, and freelance roles gain visibility when comparable roles exist in the same tier, without uncontrolled company flooding.
+- Permission-required freelance jobs remain eligible, are capped at digest by default, retain the warning, and follow configuration when the ceiling changes.
+- Explore and digest item limits, carry-over, stale expiry, receipts, partial failures, and no-duplicate behavior remain correct per logical destination.
+- Each grouped job appears exactly once, messages remain within provider limits, and Phase 4A health/routing compatibility remains intact.
+
+## Test matrix
+
+Automated tests must cover at least:
+
+- threshold boundary values and invalid ordering/types/bounds
+- explore enabled/disabled assignment, none assignment, and unchanged immediate precision
+- simulation output fields, A/B/C counts, cap rejection reporting, and complete write/notification immutability
+- company-cap configuration, exact tier priority, both documented cap-2 examples, deterministic bucket assignment/precedence, deterministic tie-breaking, and one terminal rejection
+- proof that lower-tier diversity never displaces higher-tier jobs and higher-tier counts match score-only selection under the same cap
+- part-time/freelance visibility within a tier and no per-category/tier cap explosion
+- immediate, digest, and daily explore item limits; carry-over; 14-day expiration; and ordering
+- receipt idempotency, actual Discord destination selection, partial channel failure, and retry of only missing obligations
+- freelance permission ceiling for immediate/digest/explore configurations without employment rejection
+- employment section formatting, provider-size bounds, and no duplicate job across sections
+- existing source/funnel/routing accounting, health restoration, weekly NGO behavior, and dry-run immutability
+
+## Verification
+
+Run focused policy, delivery, pipeline, presentation, and observability tests first, then:
+
+```bash
+python -m pytest tests/v2/test_notification_policy.py tests/v2/test_notification_delivery.py tests/v2/test_observability.py -q
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+python main.py --simulate-notifications
+docker build -t job-bot:phase4b .
+python main.py --dry-run --source arbeitnow
+python main.py --dry-run --explain
+```
+
+- The blocking v2 suite must pass. The historical diagnostic must introduce no failing node IDs beyond the verified 104 known failures.
+- Automated provider/delivery tests must use mocks; live source simulation remains diagnostic and must not determine unit-test success.
+- Run an isolated ephemeral 512 MiB service with temporary database/log mounts, no real `.env`, disabled real sends/Zoho, and loopback-only health binding. Validate scheduled registration, restored/completed `/health`, receipt carry-over with seeded fixtures, and compact status output.
+
+## Memory criteria
+
+- Peak observed container memory must remain below 430 MiB using the Phase 3 method (reference: 352.2 MiB and approximately 91.6 seconds).
+- Investigate a paired Phase 4B increase above 10 MiB or a startup-duration increase above 10% before completion.
+- Simulation, cap selection, pending queries, and renderers must operate on bounded/current scan data without retaining response bodies or unbounded payload/history.
+- Keep SQLite and existing conservative source concurrency; do not optimize source scheduling here.
+
+## Progress-log requirements
+
+Record files changed, the complete simulation table and selected defaults, threshold/cap rationale, final policy values, company-tier/diversity comparison, freelance-ceiling behavior, focused/blocking/historical tests, Docker image, dry-run proof, health output, startup duration, peak memory, limitations, and confirmation that Phase 5 was not started.
 
 ## Definition of done
 
-- Eligible lower-scoring jobs are visible in a controlled daily digest.
-- Immediate alerts remain high precision.
-- Notification retries do not produce uncontrolled duplicates.
-- Full tests pass.
+- Every Phase 4B task and acceptance criterion is verified and recorded using the approved Phase 4A foundation.
+- Lower-scoring hard-eligible jobs are visible only through bounded policy-driven delivery, while immediate precision and tier priority are preserved.
+- Company diversity operates only within routing priority, never multiplies the cap, and retains exact terminal accounting.
+- Focused and blocking tests, historical compatibility, simulation, Docker build, dry scans, isolated health, receipt retries, and memory/startup checks pass.
+- Commit Phase 4B separately as `feat: add bounded explore routing and recall tuning` and stop for review before Phase 5.
 
 ---
 
@@ -1355,7 +1760,15 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Final persistence contained 58 jobs with all four columns populated safely: posting language `de` 11 / `en` 34 / `other` 11 / `unknown` 2, and German requirement status `optional` 1 / `unspecified` 57. Employment data persisted unchanged. Personio remained `partial_success` with one known redirect issue; StepStone remained isolated `unknown_error` with five HTTP 404 issues; JSON-LD remained `zero_results`; other configured sources were healthy.
   - Known limitations: extraction is intentionally regex/rule based; ambiguous evidence passes conservatively; `accepted_languages` does not model explicit per-language proficiency; current live feeds are volatile; no current terminal live B2/C1/C2/business-fluent example was available. Phase 4 was not started.
 
-## Phase 4
+## Phase 4A — Notification tier and delivery-state foundation
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 4B — Recall policy, explore digest, and company-cap tuning
 
 - Status: Not started
 - Commit:
