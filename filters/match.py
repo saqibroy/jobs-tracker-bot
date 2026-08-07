@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import re
 
-from filters.profile import profile_list, profile_value
+from filters.notification_policy import (
+    apply_freelance_permission_ceiling,
+    assign_notification_tier,
+)
+from filters.profile import load_notification_policy, profile_list
 from models.job import Job
 
 
@@ -103,9 +107,9 @@ def compute_match_score(job: Job) -> int:
 
     job.match_breakdown = breakdown
     job.match_reasons = reasons
-    immediate = int(profile_value("notifications", "immediate_score", 70))
-    digest = int(profile_value("notifications", "digest_score", 45))
-    job.notification_tier = "immediate" if score >= immediate else "digest" if score >= digest else "none"
+    policy = load_notification_policy()
+    tier = assign_notification_tier(score, policy)
+    job.notification_tier = apply_freelance_permission_ceiling(job, tier, policy)
     return score
 
 

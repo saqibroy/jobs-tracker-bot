@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,12 +23,15 @@ import notifiers.discord_notifier as discord_module
 import notifiers.telegram_notifier as telegram_module
 import storage.database as database_module
 from filters.match import compute_match_score
+from filters.notification_policy import simulation_policy
 from models.job import Job
 from models.scan import empty_routing_counts
 from notifiers.base import DeliverySuccess, resolve_discord_destination
 from notifiers.delivery import (
     build_digest_payload,
+    build_explore_payload,
     process_pending_digest_delivery,
+    process_pending_explore_delivery,
     process_pending_immediate_deliveries,
 )
 from notifiers.discord_notifier import DiscordNotifier
@@ -84,10 +88,10 @@ def test_unknown_notification_tier_rejected() -> None:
     [
         ("Primary Developer", "react typescript python", "unknown", 70, "immediate"),
         ("Secondary Developer", "react", "remote", 45, "digest"),
-        ("Secondary Developer", "react", "unknown", 40, "none"),
+        ("Secondary Developer", "react", "unknown", 40, "explore"),
     ],
 )
-def test_phase4a_thresholds_never_assign_explore(
+def test_phase4b_policy_thresholds_assign_exact_tiers(
     monkeypatch: pytest.MonkeyPatch,
     title: str,
     description: str,
@@ -107,10 +111,6 @@ def test_phase4a_thresholds_never_assign_explore(
         return values[(section, key)]
 
     monkeypatch.setattr("filters.match.profile_list", profile_list)
-    monkeypatch.setattr(
-        "filters.match.profile_value",
-        lambda section, key, default: 70 if key == "immediate_score" else 45,
-    )
     job = make_job(
         title=title,
         description=description,
@@ -119,7 +119,6 @@ def test_phase4a_thresholds_never_assign_explore(
     )
     assert compute_match_score(job) == expected_score
     assert job.notification_tier == expected_tier
-    assert job.notification_tier != "explore"
 
 
 @pytest.mark.asyncio
@@ -190,8 +189,12 @@ async def test_legacy_notified_rows_are_suppressed_without_fabricated_receipts(
         await db.execute("UPDATE jobs SET notified = 1")
         await db.commit()
 
-    assert await get_pending_delivery_jobs("immediate", "discord_general") == []
-    assert await get_pending_delivery_jobs("digest", "discord_general") == []
+    assert await get_pending_delivery_jobs(
+        "immediate", "discord_general", limit=15, max_age_days=14
+    ) == []
+    assert await get_pending_delivery_jobs(
+        "digest", "discord_general", limit=15, max_age_days=14
+    ) == []
     assert await get_delivery_receipts() == []
 
 
@@ -362,6 +365,8 @@ async def test_ngo_uses_one_discord_destination_and_configuration_change_does_no
     pending_after_fallback_change = await get_pending_delivery_jobs(
         "immediate",
         "discord_general",
+        limit=15,
+        max_age_days=14,
         ngo_webhook_configured=False,
     )
     assert pending_after_fallback_change == []
@@ -383,7 +388,9 @@ async def test_successful_siblings_receipt_while_failed_job_remains_pending(
         jobs[0].id,
         jobs[2].id,
     }
-    pending = await get_pending_delivery_jobs("immediate", "discord_general")
+    pending = await get_pending_delivery_jobs(
+        "immediate", "discord_general", limit=15, max_age_days=14
+    )
     assert [job.id for job in pending] == [jobs[1].id]
 
 
@@ -469,7 +476,11 @@ async def test_pending_selection_is_deterministic_and_excludes_stale_rows(
     ]
     await save_jobs(jobs)
     pending = await get_pending_delivery_jobs(
-        "immediate", "discord_general", now=now
+        "immediate",
+        "discord_general",
+        limit=15,
+        max_age_days=14,
+        now=now,
     )
     assert [job.id for job in pending] == [
         jobs[1].id,
@@ -548,7 +559,7 @@ async def test_digest_receipts_only_rendered_jobs(
     monkeypatch.setattr(
         delivery_module,
         "build_digest_payload",
-        lambda selected: original_builder(
+        lambda selected, **_kwargs: original_builder(
             selected, max_description_chars=len(one.description)
         ),
     )
@@ -572,6 +583,139 @@ async def test_failed_grouped_digest_records_no_receipts(database: Path) -> None
     assert result.selected_count == 1
     assert result.successes == ()
     assert await get_delivery_receipts() == []
+
+
+def test_grouped_employment_sections_are_mutually_exclusive_and_exact() -> None:
+    standard = make_job("standard", notification_tier="explore", match_score=40)
+    part_fixed = make_job(
+        "part-fixed",
+        notification_tier="explore",
+        match_score=39,
+        work_schedule="part_time",
+        contract_term="fixed_term",
+    )
+    freelance = make_job(
+        "freelance",
+        notification_tier="explore",
+        match_score=38,
+        employment_relationship="freelance",
+        work_schedule="part_time",
+        freelance_permission_required=True,
+    )
+
+    payload = build_explore_payload([standard, part_fixed, freelance])
+
+    assert [job.id for job in payload.jobs] == [standard.id, part_fixed.id, freelance.id]
+    assert len({job.id for job in payload.jobs}) == 3
+    assert payload.description.count("Standard / strong employee roles") == 1
+    assert payload.description.count("Part-time / contract / fixed-term") == 1
+    assert payload.description.count("**Freelance**") == 1
+    assert payload.description.count("Freelance permission required") == 1
+    assert len(payload.description) <= 3_900
+
+
+@pytest.mark.asyncio
+async def test_explore_is_discord_general_only_bounded_and_carries_over(
+    database: Path,
+) -> None:
+    now = datetime.now(timezone.utc)
+    jobs = [
+        make_job(
+            f"explore-{index}",
+            notification_tier="explore",
+            match_score=44 - index,
+            fetched_at=now - timedelta(days=7),
+            posted_at=now - timedelta(days=7),
+        )
+        for index in range(12)
+    ]
+    stale = make_job(
+        "explore-stale",
+        notification_tier="explore",
+        match_score=99,
+        fetched_at=now - timedelta(days=15),
+        posted_at=now - timedelta(days=15),
+    )
+    await save_jobs([*jobs, stale])
+    discord = FakeDiscord()
+    selected_policy = simulation_policy(
+        digest_score=45,
+        explore_score=30,
+        daily_explore_enabled=True,
+        max_jobs_per_company=2,
+    )
+
+    first = await process_pending_explore_delivery(
+        total_jobs=12,
+        discord_notifier=discord,
+        policy=selected_policy,
+    )
+    second = await process_pending_explore_delivery(
+        total_jobs=12,
+        discord_notifier=discord,
+        policy=selected_policy,
+    )
+
+    assert (first.selected_count, first.included_count, len(first.successes)) == (10, 10, 10)
+    assert (second.selected_count, second.included_count, len(second.successes)) == (2, 2, 2)
+    receipts = await get_delivery_receipts()
+    assert len(receipts) == 12
+    assert {receipt["delivery_kind"] for receipt in receipts} == {"explore"}
+    assert {receipt["destination"] for receipt in receipts} == {"discord_general"}
+    assert await get_delivery_receipts(stale.id) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_explore_payload_writes_no_receipts(database: Path) -> None:
+    await save_jobs([make_job("explore", notification_tier="explore")])
+    selected_policy = simulation_policy(
+        digest_score=45,
+        explore_score=30,
+        daily_explore_enabled=True,
+        max_jobs_per_company=2,
+    )
+
+    result = await process_pending_explore_delivery(
+        total_jobs=1,
+        discord_notifier=FakeDiscord(grouped_success=False),
+        policy=selected_policy,
+    )
+
+    assert result.selected_count == 1
+    assert result.successes == ()
+    assert await get_delivery_receipts() == []
+
+
+@pytest.mark.asyncio
+async def test_policy_changes_immediate_limit_without_breaking_receipt_retry(
+    database: Path,
+) -> None:
+    jobs = [make_job(f"immediate-{index}") for index in range(3)]
+    await save_jobs(jobs)
+    discord = FakeDiscord()
+    telegram = FakeTelegram(configured=False)
+    selected_policy = simulation_policy(
+        digest_score=45,
+        explore_score=30,
+        daily_explore_enabled=True,
+        max_jobs_per_company=2,
+    )
+    selected_policy = replace(selected_policy, immediate_max_items=1)
+
+    first = await process_pending_immediate_deliveries(
+        discord_notifier=discord,
+        telegram_notifier=telegram,
+        policy=selected_policy,
+    )
+    second = await process_pending_immediate_deliveries(
+        discord_notifier=discord,
+        telegram_notifier=telegram,
+        policy=selected_policy,
+    )
+
+    assert first.selected_count == 1
+    assert second.selected_count == 1
+    assert len(await get_delivery_receipts()) == 2
 
 
 def test_explore_routing_metrics_are_additive() -> None:

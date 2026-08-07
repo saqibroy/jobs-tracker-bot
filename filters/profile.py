@@ -17,6 +17,7 @@ from models.job import (
     EmploymentRelationship,
     WorkSchedule,
 )
+from filters.notification_policy import NotificationPolicy
 
 GermanCefrLevel = Literal["a1", "a2", "b1", "b2", "c1", "c2"]
 GERMAN_CEFR_LEVELS = frozenset({"a1", "a2", "b1", "b2", "c1", "c2"})
@@ -31,6 +32,20 @@ DEFAULT_EMPLOYMENT_SECTION: dict[str, Any] = {
     "freelance_permission_required": True,
     "preferred_weekly_hours_min": 15,
     "preferred_weekly_hours_max": 40,
+}
+
+DEFAULT_NOTIFICATION_SECTION: dict[str, Any] = {
+    "immediate_score": 70,
+    "digest_score": 45,
+    "explore_score": 30,
+    "daily_explore_enabled": True,
+    "explore_hour_utc": 17,
+    "immediate_max_items": 15,
+    "digest_max_items": 15,
+    "explore_max_items": 10,
+    "pending_max_age_days": 14,
+    "max_jobs_per_company": 2,
+    "freelance_permission_max_tier": "digest",
 }
 
 
@@ -52,6 +67,32 @@ class LanguagePolicy:
 
     max_german_level: GermanCefrLevel
     accepted_languages: frozenset[str]
+
+
+def parse_notification_policy(
+    section: Mapping[str, Any] | None,
+) -> NotificationPolicy:
+    """Validate the centralized notification policy from the candidate profile."""
+
+    values = DEFAULT_NOTIFICATION_SECTION if section is None else section
+    try:
+        return NotificationPolicy(
+            immediate_score=values.get("immediate_score"),
+            digest_score=values.get("digest_score"),
+            explore_score=values.get("explore_score"),
+            daily_explore_enabled=values.get("daily_explore_enabled"),
+            explore_hour_utc=values.get("explore_hour_utc"),
+            immediate_max_items=values.get("immediate_max_items"),
+            digest_max_items=values.get("digest_max_items"),
+            explore_max_items=values.get("explore_max_items"),
+            pending_max_age_days=values.get("pending_max_age_days"),
+            max_jobs_per_company=values.get("max_jobs_per_company"),
+            freelance_permission_max_tier=values.get(
+                "freelance_permission_max_tier"
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid notification policy: {exc}") from exc
 
 
 def parse_language_policy(section: Mapping[str, Any] | None) -> LanguagePolicy:
@@ -147,6 +188,7 @@ def load_profile() -> dict[str, Any]:
         profile = tomllib.load(handle)
     parse_employment_policy(profile.get("employment"))
     parse_language_policy(profile.get("candidate"))
+    parse_notification_policy(profile.get("notifications"))
     return profile
 
 
@@ -170,3 +212,10 @@ def load_language_policy() -> LanguagePolicy:
     """Return the current validated candidate language policy."""
 
     return parse_language_policy(load_profile().get("candidate"))
+
+
+@lru_cache(maxsize=1)
+def load_notification_policy() -> NotificationPolicy:
+    """Return the current validated notification policy."""
+
+    return parse_notification_policy(load_profile().get("notifications"))

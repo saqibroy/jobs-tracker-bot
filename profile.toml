@@ -52,3 +52,12 @@ keywords = [
 [notifications]
 immediate_score = 70
 digest_score = 45
+explore_score = 30
+daily_explore_enabled = true
+explore_hour_utc = 17
+immediate_max_items = 15
+digest_max_items = 15
+explore_max_items = 10
+pending_max_age_days = 14
+max_jobs_per_company = 2
+freelance_permission_max_tier = "digest"

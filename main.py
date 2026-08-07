@@ -32,13 +32,17 @@ from filters.employment import (
 )
 from filters.language import language_display_text
 from filters.pipeline import (
-    MAX_JOBS_PER_COMPANY,
     passes_company_blocklist,
     passes_salary_filter,
     passes_senior_filter,
     rejection_pairs,
     run_filter_pipeline,
 )
+from filters.notification_policy import (
+    build_notification_simulation,
+    format_notification_simulation,
+)
+from filters.profile import NotificationPolicy, load_notification_policy
 from models.job import Job
 from models.scan import (
     FilterRunSummary,
@@ -53,6 +57,7 @@ from models.scan import (
 )
 from notifiers.delivery import (
     process_pending_digest_delivery,
+    process_pending_explore_delivery,
     process_pending_immediate_deliveries,
 )
 from sources.arbeitnow import ArbeitnowSource
@@ -101,9 +106,6 @@ logger.add(sys.stderr, level=config.LOG_LEVEL, format="<green>{time:HH:mm:ss}</g
 log_dir = Path(config.LOG_FILE).parent
 log_dir.mkdir(parents=True, exist_ok=True)
 logger.add(config.LOG_FILE, level="DEBUG", rotation="10 MB", retention="7 days")
-
-# Max jobs per company in a single scan to avoid one employer flooding results
-_MAX_JOBS_PER_COMPANY = MAX_JOBS_PER_COMPANY
 
 # ── Source registry ────────────────────────────────────────────────────────
 ALL_SOURCES = {
@@ -185,7 +187,6 @@ def _apply_filters(
         max_age_days=max_age_days,
         verbose=verbose,
         settings=config,
-        max_jobs_per_company=_MAX_JOBS_PER_COMPANY,
     )
     if verbose and summary.verbose_rejections:
         _print_rejections(rejection_pairs(summary))
@@ -262,7 +263,7 @@ async def run_scan(
     total_raw = len(all_jobs)
     logger.info("Total raw jobs fetched: {}", total_raw)
 
-    if config.ENABLE_ATS_SNIFFING:
+    if not dry_run and config.ENABLE_ATS_SNIFFING:
         try:
             appended = append_sniffed_candidates(all_jobs)
             if appended:
@@ -275,7 +276,6 @@ async def run_scan(
         max_age_days=max_age_days,
         verbose=verbose,
         settings=config,
-        max_jobs_per_company=_MAX_JOBS_PER_COMPANY,
     )
     if verbose and filter_summary.verbose_rejections:
         _print_rejections(rejection_pairs(filter_summary))
@@ -335,6 +335,36 @@ async def run_scan(
     await _send_notifications()
 
     return saved_jobs
+
+
+async def run_notification_simulation(
+    sources: list,
+    *,
+    max_age_days: int | None = None,
+) -> dict[str, object]:
+    """Fetch once and simulate notification policy without any persistent writes."""
+
+    all_jobs: list[Job] = []
+    batch_size = config.MAX_CONCURRENT_SOURCES
+    for i in range(0, len(sources), batch_size):
+        batch_sources = sources[i : i + batch_size]
+        outcomes = await asyncio.gather(
+            *[_fetch_source_outcome(source) for source in batch_sources]
+        )
+        for outcome in outcomes:
+            all_jobs.extend(outcome.jobs)
+        del outcomes
+
+    filter_summary = run_filter_pipeline(
+        all_jobs,
+        max_age_days=max_age_days,
+        verbose=False,
+        settings=config,
+        apply_company_cap=False,
+    )
+    report = build_notification_simulation(filter_summary.accepted_jobs)
+    del all_jobs
+    return report
 
 
 async def _fetch_source_outcome(source: object) -> SourceFetchOutcome:
@@ -659,6 +689,11 @@ def main():
         help="Show database statistics and exit.",
     )
     parser.add_argument(
+        "--simulate-notifications",
+        action="store_true",
+        help="Fetch configured sources once and print a read-only A/B/C notification-policy simulation.",
+    )
+    parser.add_argument(
         "--weekly-digest",
         action="store_true",
         help="Send the weekly NGO digest immediately and exit.",
@@ -712,6 +747,17 @@ def main():
     sources = _get_sources(args.source)
     source_names = [s.name for s in sources]
 
+    if args.simulate_notifications:
+        logger.info(
+            "Starting read-only notification simulation — sources: {}",
+            source_names,
+        )
+        report = asyncio.run(
+            run_notification_simulation(sources, max_age_days=args.max_age)
+        )
+        print(format_notification_simulation(report))
+        return
+
     if args.dry_run:
         # One-shot scan — no scheduler
         max_age = args.max_age  # None means use config default
@@ -758,6 +804,7 @@ async def _restore_persisted_health_state() -> None:
 
 async def _async_main(sources: list) -> None:
     """Run scheduler, Discord bot, health server all in one event loop."""
+    notification_policy = load_notification_policy()
     # Initialize DB
     await init_db()
 
@@ -787,13 +834,7 @@ async def _async_main(sources: list) -> None:
         next_run_time=datetime.now(timezone.utc),  # run immediately on start
     )
 
-    scheduler.add_job(
-        _scheduled_digest,
-        "interval",
-        hours=config.DIGEST_INTERVAL_HOURS,
-        id="digest",
-        name="Digest Summary",
-    )
+    _register_notification_delivery_jobs(scheduler, notification_policy)
 
     scheduler.add_job(
         _scheduled_health_check,
@@ -994,6 +1035,37 @@ async def _async_main(sources: list) -> None:
         logger.info("Job Tracker Bot stopped")
 
 
+def _register_notification_delivery_jobs(
+    scheduler: AsyncIOScheduler,
+    policy: NotificationPolicy,
+) -> None:
+    """Register the policy-driven digest schedules on the existing scheduler."""
+
+    if policy.daily_explore_enabled:
+        scheduler.add_job(
+            _scheduled_explore,
+            CronTrigger(
+                hour=policy.explore_hour_utc,
+                minute=0,
+                timezone=timezone.utc,
+            ),
+            id="explore",
+            name="Daily Explore Digest",
+        )
+        logger.info(
+            "Explore digest scheduled: {:02d}:00 UTC",
+            policy.explore_hour_utc,
+        )
+
+    scheduler.add_job(
+        _scheduled_digest,
+        "interval",
+        hours=config.DIGEST_INTERVAL_HOURS,
+        id="digest",
+        name="Digest Summary",
+    )
+
+
 # ── Scheduled tasks ────────────────────────────────────────────────────────
 
 async def _scheduled_scan() -> None:
@@ -1114,12 +1186,29 @@ async def _scheduled_digest() -> None:
                 await webhook.execute()
         else:
             logger.info(
-                "📋 Digest: no pending jobs inside the 14-day delivery window "
+                "📋 Digest: no pending jobs inside the configured delivery window "
                 "(total in DB: {})",
                 total,
             )
     except Exception:
         logger.exception("Digest task failed")
+
+
+async def _scheduled_explore() -> None:
+    """Send one receipt-driven Discord-general explore batch each day."""
+
+    try:
+        total = await get_total_count()
+        result = await process_pending_explore_delivery(total_jobs=total)
+        logger.info(
+            "🔎 Explore: {} pending, {} included, {} delivered (total in DB: {})",
+            result.selected_count,
+            result.included_count,
+            len(result.successes),
+            total,
+        )
+    except Exception:
+        logger.exception("Explore digest task failed")
 
 
 async def _scheduled_health_check() -> None:

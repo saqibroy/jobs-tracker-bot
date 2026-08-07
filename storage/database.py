@@ -663,8 +663,8 @@ async def get_pending_delivery_jobs(
     delivery_kind: DeliveryKind,
     destination: DeliveryDestination,
     *,
-    limit: int = 15,
-    max_age_days: int = 14,
+    limit: int,
+    max_age_days: int,
     ngo_webhook_configured: bool = False,
     now: datetime | None = None,
 ) -> list[Job]:
@@ -738,7 +738,7 @@ async def get_pending_delivery_jobs(
             j.id ASC
         LIMIT ?
     """
-    params.append(min(limit, 15))
+    params.append(limit)
     async with aiosqlite.connect(path) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(query, params)

@@ -1048,15 +1048,15 @@ Do not add a production dependency or another service.
 
 ## Tasks
 
-- [ ] Add the immutable aggregate simulation and record A/B/C evidence before choosing thresholds or cap defaults.
-- [ ] Add and validate the centralized `NotificationPolicy`; route all notification decisions through it.
-- [ ] Assign immediate/digest/explore/none tiers at exact boundaries and apply the configured freelance-permission ceiling without rejection.
-- [ ] Replace the hardcoded cap with the tier-preserving, diversity-aware, one-overall-limit selector.
-- [ ] Add the bounded daily Discord-general explore digest using Phase 4A receipts, retry, ordering, carry-over, and staleness.
-- [ ] Keep the regular digest bounded and receipt-driven; keep immediate alerts concise and high precision.
-- [ ] Add compact mutually exclusive employment sections and visible freelance-permission warnings without duplicate jobs.
-- [ ] Preserve source/funnel accounting, health compatibility, dry-run immutability, and weekly NGO behavior.
-- [ ] Add the complete threshold, configuration, cap, delivery, presentation, accounting, and performance test matrix.
+- [x] Add the immutable aggregate simulation and record A/B/C evidence before choosing thresholds or cap defaults.
+- [x] Add and validate the centralized `NotificationPolicy`; route all notification decisions through it.
+- [x] Assign immediate/digest/explore/none tiers at exact boundaries and apply the configured freelance-permission ceiling without rejection.
+- [x] Replace the hardcoded cap with the tier-preserving, diversity-aware, one-overall-limit selector.
+- [x] Add the bounded daily Discord-general explore digest using Phase 4A receipts, retry, ordering, carry-over, and staleness.
+- [x] Keep the regular digest bounded and receipt-driven; keep immediate alerts concise and high precision.
+- [x] Add compact mutually exclusive employment sections and visible freelance-permission warnings without duplicate jobs.
+- [x] Preserve source/funnel accounting, health compatibility, dry-run immutability, and weekly NGO behavior.
+- [x] Add the complete threshold, configuration, cap, delivery, presentation, accounting, and performance test matrix.
 
 ## Acceptance criteria
 
@@ -1788,11 +1788,59 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 4B — Recall policy, explore digest, and company-cap tuning
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-07
+- Commit: `feat: add bounded explore routing and recall tuning` (this Phase 4B commit)
 - Tests:
-- Peak memory:
-- Notes:
+  - Focused policy/delivery/observability/presentation gate: `python -m pytest tests/v2/test_notification_policy.py tests/v2/test_notification_delivery.py tests/v2/test_observability.py tests/v2/test_employment_storage_presentation.py -q` — 151 passed in 4.32s.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 394 passed in 9.49s.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 394 passed in 7.74s.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30` — 1,271 passed, 104 failed, 10 warnings in 21.49s. A sorted node-ID comparison found exactly the recorded 104 failures, with no new or missing failures.
+- Peak memory: 344.2 MiB / 512 MiB (67.23%), 0.7 MiB above the documented 343.5 MiB Phase 4A reference, 6.4 MiB below the paired current-network Phase 4A run, and 85.8 MiB below the 430 MiB target.
+- Read-only simulation architecture and proof:
+  - Added `python main.py --simulate-notifications`. It fetches each configured source once through the normal typed source-outcome path, runs the one global production hard-gate/employment/language/scoring pipeline with only final company-cap application disabled, then evaluates policy scenarios over the retained pre-cap candidates.
+  - The simulator bypasses database initialization, deduplication/persistence, source metrics, delivery, ATS discovery, health publication, and Zoho/mail work. Automated forbidden-call tests passed. Runtime runs proved an absent DB remained absent; an existing DB and Zoho sentinel retained identical SHA-256 and mtime; no discovery file was created; no posting description was printed or retained in the report.
+  - Both the pre-rollout simulator and the finalized-image repeat produced the same aggregate evidence below, despite being separate live runs.
+- Live pre-cap evidence from the finalized bounded simulation:
+  - Hard-eligible pre-cap total: 79. Score bands: 70–100 = 16; 45–69 = 61; 30–44 = 2; 15–29 = 0; 0–14 = 0.
+  - Sources: Arbeitnow 1; Ashby 16; Greenhouse 20; Lever 1; LinkedIn 33; Personio 8.
+  - Relationships: employee 7; freelance 1; unknown 71. Schedules: full-time 36; unknown 43; no part-time candidate. Contract employee 0; fixed-term 1; contract-or-fixed-term union 1; freelance 1; permission-required freelance 1.
+  - Company concentration before cap: 46 companies; Clēra 14, adesso SE 5, Flix/GetYourGuide/Nebius/Speechify/Sunhat 3 each, Autohaus Royal/Beroe/Cresta/Doctolib/Mogic/Parloa 2 each, and 33 companies with 1. Current score-only cap 2 excluded 20 candidates.
+- Complete A/B/C and cap 2–5 selected aggregates (visibility is `part-time / contract-or-fixed-term / freelance / permission-required`; score bands are `70–100 / 45–69 / 30–44 / 15–29 / 0–14`):
+
+  | Scenario | Immediate | Digest | Explore | None | Cap exclusions | Visibility | Selected score bands | Lowest selected I/D/E | Selected company concentration |
+  | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+  | A current, score-only cap 2 | 10 | 49 | 0 | 0 | 20 | 0 / 1 / 0 / 0 | 10 / 49 / 0 / 0 / 0 | 70 / 45 / — | 13 companies ×2; 33 ×1; max 2/59 (3.4%) |
+  | B 70/30/15, diversity cap 2 | 10 | 49 | 0 | 0 | 20 | 0 / 1 / 0 / 0 | 10 / 49 / 0 / 0 / 0 | 70 / 45 / — | 13 ×2; 33 ×1; max 2/59 (3.4%) |
+  | B 70/30/15, diversity cap 3 | 11 | 55 | 0 | 0 | 13 | 0 / 1 / 0 / 0 | 11 / 53 / 2 / 0 / 0 | 70 / 41 / — | 7 ×3; 6 ×2; 33 ×1; max 3/66 (4.5%) |
+  | B 70/30/15, diversity cap 4 | 12 | 56 | 0 | 0 | 11 | 0 / 1 / 0 / 0 | 12 / 54 / 2 / 0 / 0 | 70 / 41 / — | 2 ×4; 5 ×3; 6 ×2; 33 ×1; max 4/68 (5.9%) |
+  | B 70/30/15, diversity cap 5 | 13 | 57 | 0 | 0 | 9 | 0 / 1 / 0 / 0 | 13 / 55 / 2 / 0 / 0 | 70 / 41 / — | 2 ×5; 5 ×3; 6 ×2; 33 ×1; max 5/70 (7.1%) |
+  | C 70/45/30, diversity cap 2 | 10 | 49 | 0 | 0 | 20 | 0 / 1 / 0 / 0 | 10 / 49 / 0 / 0 / 0 | 70 / 45 / — | 13 ×2; 33 ×1; max 2/59 (3.4%) |
+  | C 70/45/30, diversity cap 3 | 11 | 53 | 2 | 0 | 13 | 0 / 1 / 0 / 0 | 11 / 53 / 2 / 0 / 0 | 70 / 45 / 41 | 7 ×3; 6 ×2; 33 ×1; max 3/66 (4.5%) |
+  | C 70/45/30, diversity cap 4 | 12 | 54 | 2 | 0 | 11 | 0 / 1 / 0 / 0 | 12 / 54 / 2 / 0 / 0 | 70 / 45 / 41 | 2 ×4; 5 ×3; 6 ×2; 33 ×1; max 4/68 (5.9%) |
+  | C 70/45/30, diversity cap 5 | 13 | 55 | 2 | 0 | 9 | 0 / 1 / 0 / 0 | 13 / 55 / 2 / 0 / 0 | 70 / 45 / 41 | 2 ×5; 5 ×3; 6 ×2; 33 ×1; max 5/70 (7.1%) |
+
+  - All live diversity-versus-score-only comparisons had identical selected IDs and zero score trade-off because no competing same-tier company group contained a useful unrepresented employment bucket. Every comparison preserved tier counts. Focused fixtures separately prove the documented same-tier diversity replacement and quantify its score delta without a category multiplier.
+- Evidence-selected production policy:
+  - Selected `immediate_score=70`, `digest_score=45`, `explore_score=30`, `daily_explore_enabled=true`, and `max_jobs_per_company=2`; retained `explore_hour_utc=17`, immediate/digest/explore limits 15/15/10, `pending_max_age_days=14`, and `freelance_permission_max_tier="digest"`.
+  - The 30/15 aggressive thresholds were not justified: the live sample contained no 15–29 or 0–14 candidates, so it provided no relevance evidence for the proposed explore band, while its two 30–44 candidates would be promoted into the regular digest. Conservative 45/30 keeps those candidates in explore when a company slot is available.
+  - Cap 3 was the smallest cap with more selected jobs (+7 versus A), but it added no part-time/freelance/contract visibility and raised seven employers to three selected jobs. Caps 4/5 increased concentration further without employment-diversity benefit. Evidence was therefore inconclusive for a cap increase, so the approved cap-2 fallback was retained.
+  - Final C cap 2 versus A on the same sample: immediate ±0, digest ±0, explore 0, none ±0, company-cap exclusions ±0, company concentration unchanged, employment visibility unchanged, and lowest selected scores 70 immediate / 45 digest. The one permission-required freelance candidate remained hard-eligible but was cap-excluded; fixtures prove an otherwise-immediate marked freelance job routes to digest without rejection.
+- Implementation notes:
+  - Added one frozen validated `NotificationPolicy` loaded from `profile.toml`, one exact central tier function, and one routing-only freelance ceiling. Scoring arithmetic, hard eligibility, and employment compatibility are unchanged.
+  - Replaced the hardcoded cap with deterministic tier-first selection ranked by score, posted/fetched recency, fetched recency, then ID. Employment buckets are mutually exclusive; diversity is considered only within the current tier; the one overall cap is never multiplied; every exclusion receives one `company_cap` terminal result. Overall/per-source accounting remained valid.
+  - Added a 17:00 UTC APScheduler explore job only when enabled. Explore is Discord-general only, uses `delivery_kind=explore` receipts, never uses Telegram or immediate delivery, selects at most 10, carries overflow, excludes stale work, records exact included IDs only after success, and cannot overlap the mutually exclusive digest tier.
+  - Immediate/digest limits and pending age now come only from the typed policy. Storage accepts those values rather than owning duplicate defaults. Immediate destination semantics and missing-receipt retry behavior remain unchanged.
+  - Digest/explore payloads group each included job exactly once under standard, part-time/contract/fixed-term, or freelance sections. Output remains within the Discord description limit and retains title, company, employment metadata, score, URL, and permission warning without descriptions.
+  - No database schema migration or production dependency was added. `source_scan_runs` remained unchanged; explore/diagnostic health, stats, restoration, and daily status behavior passed regression coverage.
+- Runtime verification:
+  - Final image: `job-bot:phase4b`, `sha256:5ee01ce0247c18c3a833a0147058b0dc69e4164648675a2249813742f0075f80`, 374,949,818 bytes.
+  - Dry scans passed: Arbeitnow 175 raw / 1 accepted; Personio 1,397 / 7 with the known one-board partial success; LinkedIn 40 / 30; all-source explain 11,600 / 59. Across all four, DB and Zoho sentinel SHA-256/mtime stayed identical and the ATS discovery mount remained empty.
+  - The isolated 512 MiB Phase 4B service used temporary DB/log mounts, no `.env`, disabled real Discord/Telegram/status/Zoho sends, disabled ATS writes, and loopback-only `127.0.0.1:18086`. `/health` completed with 11,604 raw / 59 accepted-unseen-saved / 11,545 rejected / 10 immediate / 49 digest / 0 explore / 0 diagnostic; Personio remained partial, StepStone blocked, and JSON-LD zero-results.
+  - Startup took 206 seconds during repeated live ATS disconnect/retry delays. A paired unchanged Phase 4A image under the same current conditions took 191 seconds, making Phase 4B +7.9%, below the 10% investigation threshold. Phase 4B peak memory was 344.2 MiB versus paired Phase 4A 350.6 MiB.
+  - Seeded fake-transport runtime proof: two immediate jobs produced four Discord/Telegram receipts and zero work on retry; 17 digest jobs delivered 15 then 2; 12 explore jobs delivered 10 then 2; total receipts were 33 across immediate/digest/explore; a 15-day stale explore job got no receipt; no explore Telegram receipt existed. A receipted NGO job remained present in two consecutive weekly queries (1/1), preserving repeated weekly behavior.
+  - Restart proof restored the persisted 59-job health summary within four seconds, before the next startup scan completed, and registered the explore cron at 17:00 UTC.
+  - Temporary containers, databases, receipts, logs, live simulation output, and runtime files were removed after verification. The narrow provider-HTTP/receipt-commit at-least-once crash window remains unchanged. Live source volume and timing remain volatile; this sample had no selected explore, part-time, or freelance job, so later production evaluation should revisit recall only with new evidence.
+  - Phase 5 was not started.
 
 ## Phase 5
 

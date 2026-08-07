@@ -282,7 +282,7 @@ async def test_discord_format_includes_employment_and_permission_marker(
     assert "⚠️ Freelance permission required" in description
 
 
-def test_employee_and_freelance_metadata_do_not_change_score_or_tier() -> None:
+def test_freelance_permission_ceiling_changes_tier_but_not_score() -> None:
     shared = {
         "title": "Senior Frontend Developer",
         "description": "Build an NGO platform with React, TypeScript and Next.js.",
@@ -301,7 +301,8 @@ def test_employee_and_freelance_metadata_do_not_change_score_or_tier() -> None:
     )
 
     assert compute_match_score(employee) == compute_match_score(freelance)
-    assert employee.notification_tier == freelance.notification_tier
+    assert employee.notification_tier == "immediate"
+    assert freelance.notification_tier == "digest"
 
 
 @pytest.mark.asyncio

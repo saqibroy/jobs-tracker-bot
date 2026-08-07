@@ -163,7 +163,12 @@ class DiscordNotifier(BaseNotifier):
                 value=f"`{total_jobs}` total jobs tracked",
                 inline=True,
             )
-            embed.set_footer(text="Job Tracker Bot · Periodic Digest")
+            footer = (
+                "Job Tracker Bot · Explore Digest"
+                if "Explore" in payload.title
+                else "Job Tracker Bot · Periodic Digest"
+            )
+            embed.set_footer(text=footer)
             embed.set_timestamp(datetime.now(timezone.utc).isoformat())
             webhook.add_embed(embed)
             response = await webhook.execute()

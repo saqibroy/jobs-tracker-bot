@@ -18,14 +18,21 @@ from filters.language import (
 )
 from filters.location import passes_location_filter
 from filters.match import compute_match_score
+from filters.notification_policy import (
+    apply_freelance_permission_ceiling,
+    assign_notification_tier,
+    select_company_candidates,
+)
 from filters.ngo import classify_ngo
 from filters.role import passes_role_profile_filter as passes_role_filter
 from filters.stack import passes_stack_filter
 from filters.profile import (
     EmploymentPolicy,
     LanguagePolicy,
+    NotificationPolicy,
     load_employment_policy,
     load_language_policy,
+    load_notification_policy,
 )
 from models.job import Job
 from models.scan import (
@@ -38,7 +45,6 @@ from models.scan import (
     utc_now,
 )
 
-MAX_JOBS_PER_COMPANY = 2
 SENIOR_ACCEPT = {"senior", "lead", "staff", "principal", "head", "director", "architect"}
 SENIOR_REJECT = {"junior", "mid-level", "mid level", "entry-level", "entry level"}
 SALARY_NUM_RE = re.compile(r"[\d,.]+")
@@ -106,20 +112,22 @@ def run_filter_pipeline(
     verbose: bool = False,
     *,
     settings: Any = default_config,
-    max_jobs_per_company: int = MAX_JOBS_PER_COMPANY,
+    max_jobs_per_company: int | None = None,
     employment_policy: EmploymentPolicy | None = None,
     language_policy: LanguagePolicy | None = None,
+    notification_policy: NotificationPolicy | None = None,
+    apply_company_cap: bool = True,
 ) -> FilterRunSummary:
     """Run the existing global filter order and count one terminal result/job."""
 
     accepted_before_cap: list[Job] = []
     verbose_rejections: list[tuple[Job, FilterRejection]] = []
     seen_content_hashes: set[str] = set()
-    company_counts: defaultdict[str, int] = defaultdict(int)
     rejection_counts: Counter[RejectionCode] = Counter()
     per_source: dict[str, SourceFunnelMetrics] = {}
     now = utc_now()
     current_employment_policy = employment_policy or load_employment_policy()
+    current_notification_policy = notification_policy or load_notification_policy()
 
     for job in jobs:
         source = job.source or "unknown"
@@ -259,6 +267,16 @@ def run_filter_pipeline(
             )
             job.match_score = 0
 
+        score_tier = assign_notification_tier(
+            job.match_score,
+            current_notification_policy,
+        )
+        job.notification_tier = apply_freelance_permission_ceiling(
+            job,
+            score_tier,
+            current_notification_policy,
+        )
+
         if settings.MINIMUM_MATCH_SCORE > 0 and job.match_score < settings.MINIMUM_MATCH_SCORE:
             reject(
                 job,
@@ -272,19 +290,28 @@ def run_filter_pipeline(
         seen_content_hashes.add(job.content_hash)
         accepted_before_cap.append(job)
 
-    accepted_before_cap.sort(key=lambda item: item.match_score, reverse=True)
-    accepted: list[Job] = []
-    for job in accepted_before_cap:
-        company_key = job.company.lower().strip()
-        if company_counts[company_key] >= max_jobs_per_company:
+    if apply_company_cap:
+        cap = (
+            current_notification_policy.max_jobs_per_company
+            if max_jobs_per_company is None
+            else max_jobs_per_company
+        )
+        selection = select_company_candidates(
+            accepted_before_cap,
+            cap,
+            mode="diversity",
+        )
+        accepted = list(selection.selected)
+        for job in selection.excluded:
             reject(
                 job,
                 RejectionCode.COMPANY_CAP,
-                f"company cap: stronger {max_jobs_per_company} roles kept",
+                f"company cap: {cap} higher-tier/diverse roles kept",
             )
-            continue
-        company_counts[company_key] += 1
-        accepted.append(job)
+    else:
+        accepted = accepted_before_cap
+
+    for job in accepted:
         per_source[job.source or "unknown"].accepted_count += 1
 
     summary = FilterRunSummary(
