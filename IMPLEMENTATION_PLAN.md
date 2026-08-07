@@ -514,67 +514,165 @@ Add or remove individual live diagnostic commands to match the adapters proven t
 
 ## Objective
 
-Stop losing relevant German-market jobs simply because their descriptions are written in German.
+Stop rejecting relevant German-market jobs merely because their advertisement prose is German. Evaluate explicit German hiring requirements against the candidate profile while keeping advertisement-language detection as separate, non-gating enrichment.
 
-## Policy
+Phase 3 owns posting-language enrichment, explicit German-requirement extraction, compatibility, bounded explanations, persistence, concise CLI/explain presentation, tests, live diagnostics, and runtime verification. It must not change match-score calculation, notification tiers or thresholds, introduce explore routing, route German postings separately, reduce scores based on advertisement language, alter company caps, or change source scheduling/concurrency. Phase 4 may later decide whether language uncertainty affects routing.
 
-The language filter should evaluate job requirements, not only the prose language.
+## Normalized model and configuration
 
-Reject when the posting explicitly requires German above the configured maximum, including:
-
-- B2, C1, or C2
-- fluent
-- native
-- business fluent
-- professional proficiency
-- verhandlungssicher
-- Muttersprache
-
-Accept when:
-
-- the posting is English and contains no excessive German requirement
-- the posting explicitly accepts A1, A2, or B1
-- the posting says German is optional, a plus, beneficial, or not required
-- the posting is German but contains no explicit German-level requirement
-
-For a German posting with no explicit language requirement:
-
-- accept it
-- attach a reason such as `posting_language_german_requirement_unspecified`
-- treat it as a mild risk signal for scoring/routing, not a hard rejection
-
-## Model/output changes
-
-Add only fields that provide lasting value, for example:
+Add only these lasting normalized `Job` fields:
 
 ```python
 posting_language: Literal["en", "de", "other", "unknown"] = "unknown"
-language_requirement_status: Literal[
+german_requirement_status: Literal[
     "compatible",
     "incompatible",
     "optional",
     "unspecified",
     "unknown",
 ] = "unknown"
+german_requirement_level: Literal[
+    "none",
+    "a1",
+    "a2",
+    "b1",
+    "b2",
+    "c1",
+    "c2",
+    "fluent",
+    "business_fluent",
+    "native",
+    "unknown",
+] = "unknown"
 language_reasons: list[str] = Field(default_factory=list)
 ```
 
+`posting_language` describes the language of the advertisement. The German requirement fields describe German-language hiring requirements; they do not model proficiency in every language. Use `german_requirement_level`, rather than `german_required_level`, because it must also preserve optional evidence such as `german_requirement=b2:optional`.
+
+Add one validated, typed language policy loaded from `[candidate]`. Require `max_german_level`, case-normalize it, accept only A1, A2, B1, B2, C1, or C2, and fail clearly when it is missing or invalid. Do not introduce another hardcoded B1 default. Keep `accepted_languages` backward compatible and document it as languages that can satisfy an unrestricted working-language requirement; it is not an allow-list for advertisement prose and does not establish any CEFR, fluent, business-fluent, or native proficiency.
+
+Bound `language_reasons` to at most eight unique entries of at most 120 characters each. Persist stable evidence codes rather than sentences or posting excerpts, for example:
+
+- `posting_language=de`
+- `german_requirement=b1:required`
+- `german_requirement=b2:optional`
+- `german_requirement=none:not_required`
+- `german_requirement=fluent:required`
+- `german_requirement=business_fluent:required`
+- `german_requirement=native:required`
+- `alternative_language_requirement=english_explicit_level_unmodeled`
+
+## Requirement extraction and comparison policy
+
+Keep the existing `passes_language_filter(job) -> bool` compatibility interface for current callers, backed by one centralized evaluator that populates normalized metadata before pass/fail. Preserve the single terminal `language` rejection code and its current pipeline position after employment, role, and stack and before seniority. Every raw job must still have exactly one terminal result, and overall and per-source `raw == accepted + sum(primary rejection counts)` must remain true.
+
+Use lightweight deterministic regex/rules over title, tags, and description; add no NLP/ML dependency. Identify `German`/`Deutsch`, explicit CEFR levels, strong descriptors, required/minimum wording, optional/preferred wording, negation, `and`/`or` alternatives, and unrelated benefit/course contexts. Inspect enough surrounding clause text to determine context, but retain only bounded stable evidence.
+
+Classify each language clause deterministically:
+
+1. Exclude clearly unrelated evidence such as a German B2 course being provided or B2 mentioned for another subject.
+2. Apply explicit negation such as `German is not required` or `Deutschkenntnisse sind nicht erforderlich`.
+3. Apply optional/preferred context such as plus, preferred, beneficial, advantageous, desired later, `nice to have`, or `von Vorteil`.
+4. Apply explicit hard requirement/minimum context, including direct qualification-list forms such as `C1 German` or `Deutsch auf C1-Niveau` when they clearly state a hiring requirement.
+5. Treat vague, conflicting, or genuinely unclear wording as ambiguous rather than inventing an incompatible requirement.
+
+Negated and optional context controls the matched level: `German B2 is a plus`, `Fluent German would be nice to have`, `verhandlungssicheres Deutsch von Vorteil`, and `native German preferred` must not reject. When several statements appear, compare only clearly required German evidence; use the highest clear required CEFR level, but do not promote a higher optional or future-desired level into a requirement. Thus `German B1 required, B2 preferred` is compatible at max B1. Ambiguous evidence is accepted with `german_requirement_status="unknown"` and a bounded reason.
+
+Centralize the comparison policy:
+
+- CEFR: A1 < A2 < B1 < B2 < C1 < C2; a clear required level passes when it is at or below the configured maximum and rejects when above it.
+- Plain `fluent German` normalizes to `fluent` and, when required, has a minimum B2 comparison threshold.
+- `business fluent German`, `professional working proficiency in German`, and `verhandlungssicher Deutsch` normalize to `business_fluent` and, when required, have a minimum C1 comparison threshold.
+- `native German`, German mother tongue, and `Muttersprache` normalize to `native`; a CEFR-only candidate maximum cannot satisfy a required native-language constraint.
+- Optional/preferred/nice-to-have forms of every CEFR level or strong descriptor remain compatible regardless of the configured maximum.
+
+Use these aggregate statuses:
+
+- `compatible`: a clear mandatory German requirement is within the configured capability, or a recognized unrestricted alternative-language branch is satisfied.
+- `incompatible`: a clear independently mandatory German requirement exceeds the configured capability.
+- `optional`: German is optional, preferred, beneficial, or explicitly not required.
+- `unspecified`: no explicit German hiring requirement was found; this is a passing decision, including for German advertisements.
+- `unknown`: German is mentioned but its hiring significance is ambiguous, or a potentially satisfying alternative has an explicit proficiency constraint the current profile cannot verify.
+
+Handle alternative-language requirements without inferring English proficiency:
+
+- `accepted_languages = ["en"]` can satisfy an unrestricted English alternative, but not `fluent English`, `English C1`, business-fluent English, native English, or another explicit English proficiency requirement.
+- `German B1 or English` is compatible because German B1 is compatible; `German B2 or English` is compatible through the unrestricted English branch.
+- `German B1 or fluent English` is compatible through German B1 without making an English-proficiency assumption.
+- `German B2 or fluent English` and `German B2 or English C1` pass conservatively as `unknown`: German B2 is incompatible at max B1, but the explicit English proficiency alternative is unmodeled and must be recorded as `alternative_language_requirement=english_explicit_level_unmodeled` rather than assumed or rejected.
+- `German B2 and English` and `German B2 and fluent English` reject at max B1 because the incompatible German branch is independently mandatory.
+- Do not add an English or general per-language proficiency model in Phase 3; a future phase may add one if justified.
+
+## Posting-language policy
+
+Use `langdetect` only for `posting_language`, retain `DetectorFactory.seed = 0`, and preserve the current bounded detection sample of title plus the first 300 description characters. Fewer than 20 usable characters or a detection exception maps to `unknown`; English maps to `en`, German to `de`, and another reliable result to `other`.
+
+Never use `posting_language` as a compatibility gate. German, other-language, short, and undetectable advertisements pass unless explicit German requirement evaluation establishes incompatibility. In particular, do not replace the old English-only filter with a hidden `accepted_languages` prose-language gate.
+
+## Persistence and presentation
+
+Persist all four normalized fields because they support historical inspection, debugging, later Phase 4 analysis, and concise presentation. Add explicit idempotent SQLite columns with safe `unknown`/`[]` defaults for Phase 2B databases, JSON-encode bounded `language_reasons`, verify old-row reconstruction and round trips, and make no destructive migration. Do not change `source_scan_runs` semantics.
+
+Keep normal output concise and omit ordinary English/unspecified metadata. Add at most one compact CLI line when a posting is German or contains explicit/ambiguous German evidence, for example `🗣 German posting · German requirement unspecified`, `🗣 German B1 required`, or `🗣 German B2 preferred`. Show bounded evidence in `--explain`; render an incompatible terminal explanation such as `Language: German B2 required; candidate max B1`.
+
+Do not add language metadata to Discord, Telegram, or scheduled digest messages in Phase 3. Persisted metadata plus CLI/explain output provide sufficient visibility without notification noise. Phase 3 must not alter scoring, immediate/digest thresholds, notification tiers, or routing.
+
+## Tests
+
+Add focused tests for:
+
+- Posting language: English, German, other, short text, detection failure, and deterministic detection.
+- Compatible requirements: A1/A2/B1 required; optional, preferred, plus, beneficial, nice-to-have, `von Vorteil`, and explicit not-required forms; German posting with no requirement.
+- Configured comparison: B2 required rejects at max B1 and accepts at max B2; case normalization; missing/invalid CEFR configuration.
+- Strong descriptors: fluent rejects at B1 and accepts at B2; business fluent/professional/`verhandlungssicher` reject at B2 and accept at C1; native rejects even at C2 under the CEFR-only model.
+- Optional descriptors: business-fluent preferred, `verhandlungssicheres Deutsch von Vorteil`, fluent optional, and native nice-to-have all pass regardless of max CEFR.
+- Context: B2 preferred, B2 nice-to-have, negated B2, English required plus German optional, B1 required plus B2 preferred, vague German skills, German B2 course provided, and unrelated B2 text.
+- Alternatives: every approved `German ... or/and English ...` case above, including the bounded unmodeled-English-level reason and no assumption of English proficiency.
+- Pipeline: exactly one terminal language rejection, overall/per-source accounting invariants, employment rejection still before language, accepted German jobs proceed to scoring unchanged, and language evaluation does not alter employment metadata.
+- Persistence: Phase 2B migration, repeated migration, safe defaults, normalized-field round trip, and valid/malformed JSON reason reconstruction.
+- Routing regression: otherwise identical accepted English, German-unspecified, and German-B1-compatible jobs receive the same match score and notification tier unless an existing independent scoring input differs.
+
+Use mocked detection/external HTTP in automated tests. Run focused language, pipeline, storage, presentation, employment, and routing tests first, followed by:
+
+```bash
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase3 .
+python main.py --dry-run --source arbeitnow
+python main.py --dry-run --explain
+```
+
+Blocking v2 tests must pass. The historical diagnostic must add no failures beyond the verified Phase 2B result of 1,086 passed and 104 known failures.
+
+## Live diagnostics and runtime verification
+
+Before implementation, capture a current live sample of terminal language rejections and classify bounded counts as: merely German advertisement prose, explicit B2, explicit C1, explicit C2, fluent, business-fluent/professional, native, other detected advertisement language, and ambiguous. Output only aggregate counts plus at most three source/title identifiers per category; never print, persist, or commit descriptions.
+
+After implementation, compare language rejection count, German postings newly accepted, explicit incompatible German jobs still rejected, accepted total, and immediate/digest/diagnostic totals. Success means accurate compatibility, not maximum acceptance.
+
+Run the same isolated 512 MiB service and `/health` validation used for Phase 2B. Record startup duration against the Phase 2A reference of approximately 51.4 seconds, the Phase 2B reference of approximately 93.6 seconds, and a paired pre-Phase-3 run. If the paired Phase 3 increase exceeds 10%, investigate the language implementation before completion; do not optimize source scheduling or concurrency. Record peak memory against 347.1 MiB, require it below 430 MiB, and investigate a Phase 3 increase above 10 MiB. Add no heavy NLP package or model.
+
 ## Tasks
 
-- [ ] Replace the current English-only decision with requirement-aware evaluation.
-- [ ] Use `candidate.max_german_level` from `profile.toml`.
-- [ ] Keep deterministic regex/rule behavior for explicit language requirements.
-- [ ] Use `langdetect` only to enrich posting language, not as the sole rejection rule.
-- [ ] Show language status in explain output.
-- [ ] Add comprehensive tests using German and English examples.
-- [ ] Ensure explicit B2/C1/native requirements still reject correctly.
+- [ ] Add the normalized model, validated language policy, bounded stable reasons, and centralized requirement-aware evaluator.
+- [ ] Add deterministic posting-language enrichment and required/optional/negated/alternative German requirement extraction.
+- [ ] Integrate the evaluator at the existing language gate without changing terminal accounting or any other gate.
+- [ ] Add the idempotent SQLite migration, safe reconstruction, and round-trip support.
+- [ ] Add concise CLI/explain presentation; keep Discord, Telegram, digest, scoring, and routing unchanged.
+- [ ] Add the complete configuration, extraction, pipeline, persistence, employment, and routing regression matrix.
+- [ ] Capture the bounded pre/post live diagnostics and verify Docker, `/health`, memory, and startup duration.
 
 ## Definition of done
 
-- A German-language posting without an explicit high-level requirement is no longer automatically rejected.
-- Explicit German requirements above B1 are rejected.
-- Every language decision has an explanation.
-- Full tests pass.
+- A posting is never rejected merely because its prose is German or another detected language.
+- German advertisements with no explicit German requirement pass with `german_requirement_status="unspecified"` and a bounded explanation.
+- Explicit German requirements are compared through the configured candidate maximum and the documented fluent/business-fluent/native policies; optional and ambiguous forms avoid aggressive rejection.
+- Alternative-language `or`/`and` behavior follows the documented rules without inventing English proficiency or adding a general proficiency model.
+- All normalized fields migrate and round-trip safely; every language decision has bounded stable evidence and every raw job retains exactly one terminal result.
+- Employment behavior, match scores, notification tiers/thresholds, routing, company caps, source scheduling, and Phase 4 remain unchanged.
+- Focused and blocking tests pass, the historical diagnostic adds no failures, Docker/dry scans/health pass, memory remains below 430 MiB, and startup duration is recorded and investigated when required.
+- Update only the Phase 3 checklist/progress entry after implementation verification, commit Phase 3 separately, and stop before Phase 4.
 
 ---
 
