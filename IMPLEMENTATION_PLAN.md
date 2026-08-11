@@ -1484,7 +1484,7 @@ Peak memory must stay below 430 MiB. Investigate any new source instability, une
 
 # Phase 5B — Impact-Source Admission
 
-**Status:** Not started
+**Status:** Completed
 
 ## Objective
 
@@ -1521,12 +1521,12 @@ Do not enable GoodJobs, ReliefWeb, or Devex merely because the previous stale pl
 
 ## Tasks
 
-- [ ] Re-run bounded live dry diagnostics for all six candidates under the selected Phase 5A concurrency configuration.
-- [ ] Audit source-network coverage, component outcome semantics, normalization, eligibility evidence, duration, memory, and unique useful yield.
-- [ ] Record an explicit enabled/manual-only decision and reason for every candidate.
-- [ ] Add only qualifying sources to Group C; keep the Group C scheduler absent when none qualify.
-- [ ] Add or update mocked fixtures/tests only for a source that receives a justified adapter correction or production admission.
-- [ ] Preserve manual access to all candidates regardless of scheduling decision.
+- [x] Re-run bounded live dry diagnostics for all six candidates under the selected Phase 5A concurrency configuration.
+- [x] Audit source-network coverage, component outcome semantics, normalization, eligibility evidence, duration, memory, and unique useful yield.
+- [x] Record an explicit enabled/manual-only decision and reason for every candidate.
+- [x] Add only qualifying sources to Group C; keep the Group C scheduler absent when none qualify.
+- [x] Add or update mocked fixtures/tests only for a source that receives a justified adapter correction or production admission. No candidate qualified and no adapter correction was justified, so no fixture/test change was required.
+- [x] Preserve manual access to all candidates regardless of scheduling decision.
 
 ## Verification and performance
 
@@ -2224,11 +2224,45 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 5B — Impact-Source Admission
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-11
+- Commit: `docs: record Phase 5B impact-source admission audit` (this Phase 5B commit)
 - Tests:
+  - Focused Phase 5A scheduling/runtime admission foundation: `python -m pytest tests/v2/test_phase5a_scheduling.py tests/v2/test_phase5a_runtime.py -q` — 33 passed, one third-party `audioop` deprecation warning.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 427 passed, one warning.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 427 passed, one warning.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30 --tb=no` — 1,304 passed, exactly the same 104 known failures, and 11 warnings; no production code changed and the failing node IDs match the Phase 5A baseline.
+  - Final-image catalog probe: passed; all six candidates resolve manually, all six remain `manual_only`, none appears in the scheduled union, and `source_group_c` is absent.
 - Peak memory:
-- Notes:
+  - Candidate diagnostics ran one source per Python 3.11 process inside the verified 512 MiB Phase 5A image. Maximum process RSS ranged from 62.8 to 72.5 MiB; 80,000 Hours was the highest at 72.5 MiB, well below the 430 MiB hard target.
+  - The final Phase 5B image's isolated core service used 54.5 MiB / 512 MiB before the first scheduled refresh, reported `status=ok` and `ready=true`, and registered 12 sources across exactly two groups. No Group C runtime scan was required because no candidate qualified.
+- Live admission audit:
+
+  | Source | Status | Raw | Hard-eligible pre-cap | Final | Duration | Issues | Source HTTP limit / peak | Attempts / retries / rate limits | Max RSS | Decision |
+  | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | ---: | --- |
+  | GoodJobs | `zero_results` but not trustworthy | 0 | 0 | 0 | 1.3s | parser drift; typed issue count 0 | 4 / 1 | 1 / 0 / 0 | 71.4 MiB | manual-only |
+  | ReliefWeb | `healthy` | 21 | 0 | 0 | 16.9s | 0 typed issues; one recovered network retry | 4 / 3 | 4 / 1 / 0 | 69.0 MiB | manual-only |
+  | Devex | `healthy` | 20 | 0 | 0 | 1.4s | 0 | 4 / 1 | 2 / 0 / 0 | 62.8 MiB | manual-only |
+  | EuroBrussels | `healthy` | 28 | 0 | 0 | 2.2s | 0 | 4 / 1 | 2 / 0 / 0 | 70.4 MiB | manual-only |
+  | 80,000 Hours | `healthy` | 42 | 0 | 0 | 2.8s | 0 | 4 / 1 | 3 / 0 / 0 | 72.5 MiB | manual-only |
+  | Tech Jobs for Good | `blocked` | 0 | 0 | 0 | 0.5s | one `blocked` issue: HTTP 403 | 4 / 1 | 2 / 0 / 0 | 62.9 MiB | manual-only |
+
+- Admission decisions and evidence:
+  - **GoodJobs — manual-only.** The current server response was 753,347 characters but the adapter normalized no jobs. A successful HTTP response is therefore still reported as `zero_results` even though the evidence indicates parser drift, so normalization, current field quality, useful yield, and trustworthy zero-result outcome semantics are not demonstrated. Repair was intentionally not attempted.
+  - **ReliefWeb — manual-only.** All 21 raw jobs had valid title/company/URL, 19 had a non-placeholder location, and 20 content hashes were unique, but all 21 were rejected because Germany/Berlin eligibility was unknown. Relationship, schedule, and contract-term metadata were entirely unknown. Its three-feed fan-out stayed within the shared ceiling and recovered one transient request, but the adapter does not record per-feed success/failure through the component outcome collector, so mixed-feed partial-success semantics remain insufficient for admission.
+  - **Devex — manual-only.** All 20 raw jobs normalized title/company/location/URL, with 19 unique content hashes. Sixteen failed location eligibility; four had explicit worldwide location evidence but all four failed the role gate, leaving no plausible useful tech yield. Native employment dimensions were entirely unknown. Its two sequential pages are budgeted, but a later-page failure after usable results would not be reported as partial success.
+  - **EuroBrussels — manual-only.** All 28 raw jobs normalized required fields and unique content, but all 28 had unknown Germany/Berlin eligibility and were location-rejected. Native employment dimensions were entirely unknown and useful yield was zero. Both sequential page requests were budgeted, but mixed-page failure semantics are not instrumented as partial success.
+  - **80,000 Hours — manual-only.** All 42 source-prefiltered jobs normalized required fields and unique content. Thirty-five failed location eligibility; seven had explicit acceptable location evidence (six worldwide and one EU) but all seven failed the role gate. Native employment dimensions were entirely unknown and useful yield was zero. The three sequential Algolia pages were budgeted, but mixed-page failure semantics are not instrumented as partial success. The existing broad source-side remote default was not used to weaken the hard eligibility gate.
+  - **Tech Jobs for Good — manual-only.** Both public URL attempts remained blocked by Cloudflare HTTP 403. The typed outcome correctly reported `blocked`, but unattended public access, normalized fields, useful yield, and stable production behavior cannot be demonstrated without changing the prohibited access strategy; no bypass or repair was attempted.
+- Network, concurrency, and fixture review:
+  - All six adapters use the shared `BaseSource._get()`/`_post()` transport; a static direct-network audit found no `httpx.AsyncClient`, `aiohttp.ClientSession`, `requests`, `urllib.urlopen`, or URL-fed `feedparser` bypass in their modules. No reviewed HTTP-budget exception is needed.
+  - ReliefWeb has exactly three concurrent feed tasks, matching the component setting and remaining under the scan-wide ceiling; the other candidates use one request or bounded sequential page attempts. None has nested/recursive component limiting, browser runtime, Playwright/Chromium, private authentication, or unbounded task creation. 80,000 Hours uses only the public browser-exposed Algolia search key.
+  - Existing mocked historical adapter fixtures remain available, but no candidate received production admission or a justified localized correction. In accordance with the conditional Phase 5B task, no new fixture or adapter test was added solely to make a manual-only source appear admissible.
+- Verification/runtime notes:
+  - Final image: `job-bot:phase5b`, `sha256:68b5c6f8c28fe008874b71c8f6d84cc1ab8e948b9e328746078e7dd90954c4f2`, 375,344,950 bytes.
+  - A final-image GoodJobs dry run remained read-only and reproduced 0 raw / 0 accepted with the same 753,347-character parser-drift response, HTTP peak 1/4, no retry, and no rate limit.
+  - The isolated service used temporary database/log mounts, no project `.env`, disabled real Discord/Telegram/status/Zoho sends and ATS discovery, a 512 MiB limit, and loopback-only `127.0.0.1:18087`. `/health` became ready before source refresh, with the next Group A trigger approximately 51 seconds away; temporary runtime data and the container were removed after validation.
+  - No production source, catalog, scheduler, configuration, database schema, dependency, fixture, or test file changed. Group C membership remains empty and its scheduler job remains absent. Every candidate remains manually runnable for bounded diagnostics.
+  - Known limitations: live feeds and provider latency remain volatile; no seven-day production yield comparison exists for manual-only candidates; GoodJobs parser drift, candidate component-outcome gaps, Tech Jobs for Good access, and StepStone remain deliberately unrepaired. Phase 6 was not started.
 
 ## Phase 6
 
