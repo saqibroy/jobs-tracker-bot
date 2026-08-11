@@ -20,6 +20,7 @@ from notifiers.base import (
 )
 from notifiers.discord_notifier import DiscordNotifier, _SOURCE_ICONS
 from notifiers.telegram_notifier import TelegramNotifier
+from runtime_leases import immediate_delivery_lease
 from storage.database import get_pending_delivery_jobs, record_delivery_receipts
 
 _DISCORD_DESCRIPTION_LIMIT = 3_900
@@ -181,6 +182,22 @@ async def process_pending_immediate_deliveries(
     policy: NotificationPolicy | None = None,
 ) -> DeliveryRunResult:
     """Retry every configured immediate destination from durable pending state."""
+
+    async with immediate_delivery_lease():
+        return await _process_pending_immediate_deliveries_unlocked(
+            discord_notifier=discord_notifier,
+            telegram_notifier=telegram_notifier,
+            policy=policy,
+        )
+
+
+async def _process_pending_immediate_deliveries_unlocked(
+    *,
+    discord_notifier: DiscordNotifier | None = None,
+    telegram_notifier: TelegramNotifier | None = None,
+    policy: NotificationPolicy | None = None,
+) -> DeliveryRunResult:
+    """Perform one leased pending-immediate obligation attempt."""
 
     discord = discord_notifier or DiscordNotifier()
     telegram = telegram_notifier or TelegramNotifier()

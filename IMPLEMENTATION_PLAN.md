@@ -1547,7 +1547,7 @@ For every candidate record live status, raw, hard-eligible pre-cap, final accept
 
 # Phase 6 — Job-alert email ingestion
 
-**Status:** Not started
+**Status:** In progress — Phase 6A1 completed; Phase 6A2 and Phase 6B not started
 
 ## Objective
 
@@ -1596,7 +1596,7 @@ Do not rewrite the Zoho API client, application extractor, source scheduler, or 
 
 ## Phase 6A1 — Job-alert routing and ingestion foundation
 
-**Status:** Not started
+**Status:** Completed on 2026-08-11
 
 ### Message document and intent routing
 
@@ -2553,11 +2553,28 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 6A1
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-11
+- Commit: `feat: add job-alert ingestion foundation` (this Phase 6A1 commit)
 - Tests:
+  - Focused Phase 6A1 routing/storage/replay/concurrency gate: `python -m pytest tests/v2/test_phase6a1_alert_foundation.py tests/v2/test_phase6a1_replay_concurrency.py -q` — 45 passed; the final 512 MiB image repeat passed in 2.99 seconds.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 472 passed and one third-party `audioop` deprecation warning.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 472 passed and the same warning.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30 --tb=no` — 1,349 passed, exactly the recorded 104 failures, and 11 warnings in 13.24 seconds. The sorted failing node IDs had zero additions or omissions versus the Phase 0/5B baseline.
 - Peak memory:
+  - The final-image focused workload, including bounded multi-message/multi-item parsing, isolated write ingestion, pending replay, forced source/mail ingestion overlap, and delivery serialization, used 129,835,008 bytes (123.8 MiB) / 512 MiB cgroup peak.
+  - The final isolated core service used 58,888,192 bytes (56.2 MiB) at the ready probe and peaked at 68,608,000 bytes (65.4 MiB), with current usage 1.7 MiB above the Phase 5B 54.5 MiB readiness reference. Both observations are below the 430 MiB hard target and the paired increase is below the 10-MiB investigation threshold. The long unchanged Phase 5 source-concurrency experiment was not rerun.
 - Notes:
+  - Files changed: `integrations/job_alerts/__init__.py`, `contracts.py`, `message.py`, `processing.py`, `registry.py`, and `urls.py`; `integrations/zoho_mail.py`; `job_ingestion.py`; `runtime_leases.py`; `storage/zoho_mail.py`; `storage/database.py`; `notifiers/delivery.py`; `main.py`; two focused Phase 6A1 test modules; `README.md`; and this Phase 6A1 status/progress entry. No production dependency was added.
+  - Added the exact three-intent application-first router, bounded message/parser contracts, an intentionally empty production parser registry, offline HTTP(S) URL safety/normalization, separate provider identity/direct-job URL semantics, and explicit unknown handling. LinkedIn-like and Indeed-like alert mail creates no application/review row; there is no LinkedIn or Indeed alert selector, parser, registration, or provider fixture.
+  - Added idempotent `processing_version`/bounded routing metadata migration, preserving legacy rows at version 0. Current version-1 messages update folder/last-seen metadata before skipping without a body refetch; eligible legacy rows reclassify once. Application lifecycle, recruiter, ATS-link/sender metadata, review, discovery, and full-history behavior remain on the established extractor path; the independent 14-day limit applies only to alert candidates.
+  - Added `(provider, identity_key)` alert-item storage with pending/processed replay semantics, terminal saved/duplicate/rejected association, bounded provider health, and processed-only 90-day cleanup after successful write sync. A fake write runtime proved migration twice, one company cap across a complete alert batch, current-version overlap skipping, invalid poison handling, parser/checkpoint failure behavior, persistence-before-pipeline replay even after the new-candidate window closes, save-before-completion dedup recovery, and no alert rows in `source_scan_runs`; new stale items remain ignored.
+  - Extracted one authoritative `process_discovered_jobs()` boundary used by source and mail jobs for the existing hard gates, scoring/tiering, freelance ceiling, company cap, URL/content deduplication, and save. Source fetching, outcomes, ATS discovery, metrics, health, catalog, coordinator, and HTTP budgets remain source-owned.
+  - Added a cancellation-safe in-process ingestion lease around dedup/save/terminal association and an independent immediate-delivery lease around selection/send/receipt. Synthetic source/mail interleavings proved source-first and mail-first behavior for the same URL and the same content under different URLs: one stored job, one pending immediate obligation, one external send, and one exact receipt. Failure/cancellation release and reverse-lock rejection passed; digest/explore behavior is unchanged.
+  - Every explicit, configured, and automatic-first-run Zoho dry run is now strongly read-only. Tests proved absent DB/cache/discovery paths remain absent; existing DB/token bytes, SHA-256, and nanosecond mtime remain identical; valid cached tokens are read without rewrite; expired or absent-cache credentials refresh in memory only; and no application, alert, review, provider-health, job, receipt, checkpoint, discovery, notification, or migration write occurs. Write mode retains staged secure token persistence after effective policy is known.
+  - Final real Zoho diagnostic used the final image, a read-only data mount, and a bounded 2026-07-28 boundary: one account, six folders, 228 summaries, 197 single full-content fetches, 72 application messages/records/reviews, 125 unknown messages, zero alerts/items/failures, zero pipeline jobs, zero discovery candidates, and no checkpoint. Aggregate data-tree content hash `75ceda8a404097944bdda9dc50c4da0b6a308bab6543aecc2d079323b071c08d` and aggregate size/nanosecond-mtime hash `48d0f927c2a42d8bf70517e5fba4c1de2d7d7742f834e6988c9469fe5b0f925a` were identical before/after; no body, address, identifier, token, or URL was printed.
+  - Final image: `job-bot:phase6a1`, `sha256:acb4a2209f4813aa74d0888612534e0b6ab1aaad8291677d446f5fd56db20c72`, 375,707,637 bytes. The final Arbeitnow dry scan remained healthy and read-only at 175 raw / one accepted with HTTP peak 1/4. Scoped Ruff and `git diff --check` passed.
+  - The isolated final-image service used temporary DB/log mounts, no project `.env`, disabled Discord/Telegram/status/Zoho/ATS writes, a 512 MiB limit, and loopback-only health. `/health` reported `status=ok`, `ready=true`, the unchanged top-level contract, and the first source trigger at approximately +60 seconds. Runtime registration remained exactly Group A (six sources, 60 minutes, +1 minute) and Group B (six sources, 120 minutes, +6 minutes); Group C was absent, StepStone remained manual-only, and the direct LinkedIn source remained unchanged.
+  - Known limitations: production alert-provider coverage is intentionally zero in Phase 6A1; the leases are deliberately in-process for this single-service deployment; provider HTTP acceptance and receipt commit retain the documented narrow at-least-once crash window; live mailbox/provider volumes remain variable. Phase 6A2 remains Not started and blocked on sanitized user-owned LinkedIn and Indeed samples. Phase 6B and Phase 7 remain Not started.
 
 ## Phase 6A2
 

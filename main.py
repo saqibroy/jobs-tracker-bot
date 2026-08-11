@@ -44,6 +44,7 @@ from filters.notification_policy import (
     format_notification_simulation,
 )
 from filters.profile import NotificationPolicy, load_notification_policy
+from job_ingestion import process_discovered_jobs
 from models.job import Job
 from models.scan import (
     FilterRunSummary,
@@ -321,15 +322,19 @@ async def _run_scan_lifecycle(
         except Exception:
             logger.exception("ATS sniffing failed; continuing scan")
 
-    filter_summary = run_filter_pipeline(
+    ingestion = await process_discovered_jobs(
         all_jobs,
+        persist=not dry_run,
         max_age_days=max_age_days,
         verbose=verbose,
-        settings=config,
+        filter_unseen_fn=filter_unseen,
+        save_jobs_fn=save_jobs,
+        pipeline_fn=run_filter_pipeline,
     )
+    filter_summary = ingestion.filter_summary
     if verbose and filter_summary.verbose_rejections:
         _print_rejections(rejection_pairs(filter_summary))
-    filtered = filter_summary.accepted_jobs
+    filtered = ingestion.accepted_jobs
     scan_summary = _build_scan_summary(
         scan_id=scan_id,
         started_at=scan_started_at,
@@ -347,18 +352,15 @@ async def _run_scan_lifecycle(
         _print_jobs(filtered, explain=verbose)
         return filtered
 
-    # Deduplicate against DB
-    await init_db()
-    new_jobs = await filter_unseen(filtered)
-    for job in new_jobs:
+    # The shared ingestion boundary serializes DB dedup/save against Zoho.
+    for job in ingestion.unseen_jobs:
         metrics = scan_summary.sources.get(job.source or "unknown")
         if metrics is not None:
             metrics.unseen_count += 1
     del filtered  # free pre-dedup list
 
-    saved_jobs: list[Job] = []
-    if new_jobs:
-        saved_jobs = await save_jobs(new_jobs)
+    saved_jobs = ingestion.saved_jobs
+    if saved_jobs:
         logger.info("{} new jobs saved to database", len(saved_jobs))
 
         for job in saved_jobs:
@@ -1274,6 +1276,21 @@ async def _run_zoho_sync_cli(*, dry_run: bool | None) -> None:
     print(f"  Full messages fetched:   {result.full_messages_fetched}")
     print(f"  Extracted records:       {result.extracted_records}")
     print(f"  Review queue records:    {result.review_records}")
+    print(f"  Application messages:    {result.application_messages}")
+    print(f"  Alert messages:          {result.alert_messages}")
+    print(f"  Unknown job messages:    {result.unknown_job_messages}")
+    print(f"  Alert items parsed:      {result.parsed_alert_items}")
+    print(f"  Alert items valid:       {result.valid_alert_items}")
+    print(f"  Alert items invalid:     {result.invalid_alert_items}")
+    print(f"  Alert items pending:     {result.pending_alert_items}")
+    print(f"  Alert items processed:   {result.processed_alert_items}")
+    print(f"  Provider failures:       {result.provider_failures}")
+    if result.provider_health:
+        print(f"  Provider health:         {', '.join(result.provider_health)}")
+    print(f"  Pipeline accepted:       {result.pipeline_accepted}")
+    print(f"  Pipeline rejected:       {result.pipeline_rejected}")
+    print(f"  Current-version skips:   {result.current_version_skipped}")
+    print(f"  Backlog deferred:        {result.backlog_deferred}")
     print(f"  Discovery candidates:    {result.discovery_candidates}")
     print(f"  Checkpoint advanced:     {result.checkpoint_advanced}")
     print(f"{'='*68}\n")
@@ -1287,12 +1304,23 @@ async def _scheduled_zoho_mail_sync() -> None:
         worker = ZohoMailIngestionWorker()
         result = await worker.run(dry_run=config.ZOHO_MAIL_SYNC_DRY_RUN)
         logger.info(
-            "Zoho Mail sync finished: accounts={} folders={} messages={} full={} records={} review={} discovery={} checkpoint={} dry_run={}",
+            "Zoho Mail sync finished: accounts={} folders={} messages={} full={} applications={} alerts={} unknown={} parsed={} valid={} invalid={} pending={} processed={} provider_failures={} provider_health={} pipeline_accepted={} pipeline_rejected={} review={} discovery={} checkpoint={} dry_run={}",
             result.accounts,
             result.folders,
             result.messages_seen,
             result.full_messages_fetched,
-            result.extracted_records,
+            result.application_messages,
+            result.alert_messages,
+            result.unknown_job_messages,
+            result.parsed_alert_items,
+            result.valid_alert_items,
+            result.invalid_alert_items,
+            result.pending_alert_items,
+            result.processed_alert_items,
+            result.provider_failures,
+            result.provider_health,
+            result.pipeline_accepted,
+            result.pipeline_rejected,
             result.review_records,
             result.discovery_candidates,
             result.checkpoint_advanced,

@@ -217,12 +217,20 @@ This starts the scheduler. The bot will:
 
 Press `Ctrl+C` to stop gracefully.
 
-## Zoho Mail application ingestion
+## Zoho Mail application and job-alert ingestion
 
 The optional Zoho worker reads your own mailbox through the official Zoho Mail
-REST API and extracts application/recruiter metadata into separate SQLite
-tables. It does not change the normal job-source filters and does not fetch
-attachments.
+REST API. It deterministically separates application/recruiter mail, supported
+job alerts, and unknown job-related mail. Application history remains in its
+own SQLite tables; supported alert items use the same eligibility, scoring,
+deduplication, persistence, and delivery path as normal source jobs. The worker
+does not fetch attachments or remote content.
+
+Phase 6A1 provides the bounded routing, storage, replay, dry-run, and concurrency
+foundation only. No production job-alert parser is registered yet: LinkedIn,
+Indeed, and other alert mail is durably classified as unknown rather than
+fabricating application records or jobs. Provider support begins separately in
+Phase 6A2 after sanitized user-owned fixtures are available.
 
 Use read-only OAuth scopes only:
 
@@ -250,6 +258,11 @@ source venv/bin/activate
 python tools/setup_zoho.py
 python main.py --zoho-sync --dry-run
 ```
+
+Every effective Zoho dry run is strongly read-only. It may read an existing
+checkpoint and refresh an expired OAuth token in memory, but it does not create
+or migrate SQLite, rewrite the token cache, append discovery seeds, send
+notifications, or persist mail/job state.
 
 `tools/setup_zoho.py` walks through the whole OAuth setup: asks for Client ID
 and Client Secret, opens the Zoho authorization URL, asks for the redirected
@@ -302,13 +315,22 @@ Sync behavior:
 - It skips Drafts, Spam, Trash, Templates and Outbox by default.
 - First run processes full available history unless `ZOHO_INITIAL_SYNC_FROM`
   is set.
+- Application/recruiter history keeps that configured boundary; alert
+  candidates are independently limited to messages received in the last 14
+  days.
 - Later runs start at `last_successful_sync_at - ZOHO_SYNC_OVERLAP_HOURS`.
 - It paginates folders with `ZOHO_FOLDER_PAGE_LIMIT=200`.
 - Checkpoints advance only after all relevant folders finish successfully.
 - Deduplication uses `account_id + message_id`, so moved messages are safe.
-- Full message content is fetched only for likely job/recruitment emails.
-- Quoted history, tracking pixels and signatures are stripped before
-  extraction.
+- Full message content is fetched at most once per routing generation and only
+  for likely job/recruitment emails.
+- Quoted history, tracking pixels, scripts and signatures are stripped once
+  into a bounded representation reused by routing and processing.
+- Current-version processed messages update moved-folder/last-seen metadata
+  without fetching the body again; pending alert items remain replayable until
+  the normal job pipeline reaches a terminal result.
+- A message is capped at 512 KiB decoded content, 200 examined links and 50
+  alert items; one sync processes at most 500 new/pending alert items.
 - Supported deterministic ATS detection: Personio, Ashby, Greenhouse, Lever,
   Workable, BambooHR, Teamtailor, SmartRecruiters, Recruitee, JOIN, Onlyfy,
   Softgarden, Workday and SAP SuccessFactors.

@@ -266,6 +266,24 @@ async def filter_unseen(jobs: list[Job]) -> list[Job]:
     return unseen
 
 
+async def find_existing_job_id(job: Job) -> str | None:
+    """Return the stored URL/content identity that makes ``job`` a duplicate."""
+
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            """
+            SELECT id FROM jobs
+            WHERE id = ? OR content_hash = ?
+            ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (job.id, job.content_hash, job.id),
+        )
+        row = await cursor.fetchone()
+    return str(row[0]) if row else None
+
+
 async def save_jobs(jobs: list[Job]) -> list[Job]:
     """Persist a batch and return only rows actually inserted by SQLite."""
 
