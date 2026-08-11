@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiohttp import web
 from loguru import logger
@@ -19,10 +19,13 @@ from models.scan import sanitize_source_error
 # ── Module-level state (updated by main.py) ────────────────────────────────
 _start_time: float = time.monotonic()
 _last_scan_time: datetime | None = None
-_next_scan_seconds: int = config.SCAN_INTERVAL_MINUTES * 60
+_next_scan_seconds: int = config.SOURCE_GROUP_A_STARTUP_DELAY_MINUTES * 60
+_next_scan_time: datetime | None = None
 _jobs_tracked: int = 0
 _paused: bool = False
 _scan_summary: dict = {}
+_ready: bool = False
+_ready_at: datetime | None = None
 
 _LEGACY_SUMMARY_KEYS = (
     "raw",
@@ -49,8 +52,36 @@ def set_jobs_tracked(count: int) -> None:
 
 def set_next_scan_seconds(seconds: int) -> None:
     """Update time until next scan."""
-    global _next_scan_seconds
-    _next_scan_seconds = seconds
+    global _next_scan_seconds, _next_scan_time
+    _next_scan_seconds = max(0, int(seconds))
+    _next_scan_time = datetime.now(timezone.utc) + timedelta(seconds=_next_scan_seconds)
+
+
+def set_next_scan_time(when: datetime | None) -> None:
+    """Record the soonest source-group trigger for dynamic health output."""
+
+    global _next_scan_time, _next_scan_seconds
+    _next_scan_time = when
+    if when is None:
+        _next_scan_seconds = 0
+        return
+    normalized = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    _next_scan_seconds = max(
+        0,
+        int((normalized - datetime.now(timezone.utc)).total_seconds()),
+    )
+
+
+def set_core_ready(ready: bool) -> None:
+    """Publish deterministic local-core readiness transitions."""
+
+    global _ready, _ready_at
+    _ready = bool(ready)
+    _ready_at = datetime.now(timezone.utc) if _ready else None
+
+
+def is_core_ready() -> bool:
+    return _ready
 
 
 def set_paused(paused: bool) -> None:
@@ -78,6 +109,36 @@ def set_scan_summary(summary: dict) -> None:
     )
     compact["unseen"] = max(0, int(summary.get("unseen", 0) or 0))
     compact["saved"] = max(0, int(summary.get("saved", 0) or 0))
+    compact["scope"] = str(summary.get("scope") or "legacy_all")[:40]
+
+    group_last_completed = summary.get("group_last_completed", {})
+    compact["group_last_completed"] = (
+        {
+            str(scope)[:40]: str(completed_at)[:40]
+            for scope, completed_at in list(group_last_completed.items())[:3]
+            if completed_at
+        }
+        if isinstance(group_last_completed, dict)
+        else {}
+    )
+    source_http = summary.get("source_http", {})
+    compact["source_http"] = (
+        {
+            "configured_limit": max(0, int(source_http.get("configured_limit", 0) or 0)),
+            "observed_peak": max(0, int(source_http.get("observed_peak", 0) or 0)),
+            "attempts": max(0, int(source_http.get("attempts", 0) or 0)),
+            "retries": max(0, int(source_http.get("retries", 0) or 0)),
+            "rate_limits": max(0, int(source_http.get("rate_limits", 0) or 0)),
+        }
+        if isinstance(source_http, dict)
+        else {
+            "configured_limit": 0,
+            "observed_peak": 0,
+            "attempts": 0,
+            "retries": 0,
+            "rate_limits": 0,
+        }
+    )
 
     sources = summary.get("sources", {})
     if isinstance(sources, dict):
@@ -138,12 +199,26 @@ async def _health_handler(request: web.Request) -> web.Response:
     """Handle GET /health requests."""
     uptime = time.monotonic() - _start_time
 
+    next_scan_seconds = _next_scan_seconds
+    if _next_scan_time is not None:
+        normalized = (
+            _next_scan_time
+            if _next_scan_time.tzinfo
+            else _next_scan_time.replace(tzinfo=timezone.utc)
+        )
+        next_scan_seconds = max(
+            0,
+            int((normalized - datetime.now(timezone.utc)).total_seconds()),
+        )
+
     data = {
         "status": "paused" if _paused else "ok",
+        "ready": _ready,
+        "ready_at": _ready_at.isoformat() if _ready_at else None,
         "uptime_seconds": int(uptime),
         "last_scan": _last_scan_time.isoformat() if _last_scan_time else None,
         "jobs_tracked": _jobs_tracked,
-        "next_scan_in_seconds": _next_scan_seconds,
+        "next_scan_in_seconds": next_scan_seconds,
         "last_scan_summary": _scan_summary,
     }
     return web.json_response(data)

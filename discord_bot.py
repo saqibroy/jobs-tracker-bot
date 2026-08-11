@@ -17,6 +17,7 @@ import discord
 from loguru import logger
 
 import config
+from scan_coordinator import ScanBusyResult
 from storage.database import get_stats, get_total_count, init_db
 
 
@@ -77,6 +78,9 @@ class JobTrackerBot(discord.Client):
 
         try:
             new_jobs = await self._scan_callback()
+            if isinstance(new_jobs, ScanBusyResult):
+                await message.channel.send(f"⏳ {new_jobs.message}")
+                return
             count = len(new_jobs) if new_jobs else 0
             if count > 0:
                 await message.channel.send(f"✅ Scan complete — {count} new job{'s' if count != 1 else ''} found")

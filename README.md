@@ -79,10 +79,10 @@ Built for a specific use case: finding remote tech roles at NGOs and impact-driv
 
 - **GitHub Actions CI/CD** — auto-deploy to Oracle Cloud on push to `main` (tests run first)
 - **Health endpoint** — `GET /health` returns JSON status (uptime, last scan, jobs tracked)
-- **Playwright + Chromium** — headless browser for JS-rendered sites, with optional `DISABLE_PLAYWRIGHT` for low-memory servers
-- **APScheduler** — 45-minute scan cycle, 6-hour digest summary, hourly health check
-- **Docker ready** — multi-stage Dockerfile with optional Playwright, log rotation (30MB cap), memory limits
-- **Concurrency control** — `MAX_CONCURRENT_SOURCES` to limit peak RAM usage
+- **Browser-free production** — no Playwright or Chromium dependency/process is required
+- **APScheduler** — staggered 60-minute ATS and 120-minute aggregator source groups, 6-hour digest summary, hourly health check
+- **Docker ready** — slim browser-free image, log rotation (30MB cap), memory limits
+- **Bounded concurrency** — independent adapter/component limits plus one scan-wide source HTTP ceiling
 - **520+ tests** across 7 test files
 
 ## Quick Start
@@ -208,8 +208,9 @@ python main.py
 ```
 
 This starts the scheduler. The bot will:
-- Run an immediate scan on startup
-- Scan all sources every 45 minutes
+- Become ready before source refreshes begin
+- Start Group A after 1 minute and scan it every 60 minutes
+- Start Group B after 6 minutes and scan it every 120 minutes
 - Send a digest summary every 6 hours
 - Log a health check every hour
 - Optionally run Zoho Mail ingestion when `ZOHO_MAIL_SYNC_ENABLED=true`
@@ -431,7 +432,11 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `DISCORD_COMMAND_CHANNEL_ID` | — | Channel ID where bot listens for commands |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
 | `TELEGRAM_CHAT_ID` | — | Target chat/group ID |
-| `SCAN_INTERVAL_MINUTES` | `45` | Minutes between scan cycles |
+| `SOURCE_GROUP_A_INTERVAL_MINUTES` | `60` | Minutes between direct employer/ATS scans |
+| `SOURCE_GROUP_B_INTERVAL_MINUTES` | `120` | Minutes between aggregator/discovery scans |
+| `SOURCE_GROUP_A_STARTUP_DELAY_MINUTES` | `1` | Non-immediate Group A startup offset after core readiness |
+| `SOURCE_GROUP_B_STARTUP_DELAY_MINUTES` | `6` | Staggered Group B startup offset after core readiness |
+| `SOURCE_GROUP_MISFIRE_GRACE_SECONDS` | `300` | Bounded scheduler misfire grace for source groups |
 | `DIGEST_INTERVAL_HOURS` | `6` | Hours between digest summaries |
 | `DAILY_STATUS_ENABLED` | `true` | Send a once-daily Discord heartbeat/status summary |
 | `DAILY_STATUS_HOUR` | `18` | UTC hour for the daily status summary |
@@ -443,8 +448,10 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `COMPANY_BLOCKLIST` | — | Comma-separated company names to always skip |
 | `FILTER_SENIOR_ONLY` | `false` | Only accept senior/lead/staff titles |
 | `MIN_SALARY_EUR` | `0` | Reject jobs with salary below this (0 = off) |
-| `DISABLE_PLAYWRIGHT` | `false` | Skip Playwright sources (saves ~50MB RAM) |
-| `MAX_CONCURRENT_SOURCES` | `6` | Max sources fetched in parallel (lower = less RAM) |
+| `MAX_CONCURRENT_SOURCE_ADAPTERS` | `2` | Max source adapters active within one scan |
+| `MAX_CONCURRENT_SOURCE_COMPONENTS` | `3` | Max workers at each local board/query/detail fan-out boundary |
+| `MAX_CONCURRENT_HTTP_REQUESTS` | `4` | Absolute simultaneous source HTTP attempt ceiling per scan |
+| `MAX_CONCURRENT_SOURCES` | — | Deprecated fallback for adapter concurrency only |
 | `ENABLE_ATS_SNIFFING` | `true` | Mine aggregator apply links for known ATS boards and append discovery seeds |
 | `HEALTH_PORT` | `8080` | Port for the health HTTP endpoint |
 | `DATABASE_PATH` | `./data/jobs.db` | SQLite database file |

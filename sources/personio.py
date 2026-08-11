@@ -19,7 +19,6 @@ Feed schema (workzag-jobs / position):
 
 from __future__ import annotations
 
-import asyncio
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -247,22 +246,17 @@ class PersonioSource(BaseSource):
             logger.warning("[{}] HTML fallback found no jobs for '{}'", self.name, slug)
             return []
 
-        semaphore = asyncio.Semaphore(3)
-
         async def fetch_detail(
-            url: str,
-            card_text: str,
-            metadata: list[str],
+            item: tuple[str, str, list[str]],
         ) -> Job | None:
-            async with semaphore:
-                return await self._fetch_html_detail(board, url, card_text, metadata)
+            url, card_text, metadata = item
+            return await self._fetch_html_detail(board, url, card_text, metadata)
 
-        results = await asyncio.gather(
-            *(
-                fetch_detail(url, card_text, metadata)
-                for url, card_text, metadata in links
-            ),
-            return_exceptions=True,
+        # This detail boundary owns a local worker pool. The outer board worker
+        # holds no permit from this pool, so nested fallback work cannot deadlock.
+        results = await self._map_bounded(
+            links,
+            fetch_detail,
         )
 
         jobs: list[Job] = []

@@ -11,7 +11,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -109,8 +108,7 @@ class RemotiveSource(BaseSource):
 
     async def fetch(self) -> list[Job]:
         """Fetch all categories in parallel and deduplicate by URL."""
-        tasks = [self._fetch_category(cat) for cat in _CATEGORIES]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await self._map_bounded(_CATEGORIES, self._fetch_category)
         category_jobs = self._consume_component_results(
             _CATEGORIES, results, lambda category: f"category:{category}"
         )

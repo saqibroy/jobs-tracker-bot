@@ -23,6 +23,7 @@ from filters.employment import employment_display_lines
 from models.job import Job
 from filters.match import match_score_bar
 from notifiers.base import BaseNotifier, DeliverySuccess
+from scan_coordinator import ScanBusyResult
 
 # Telegram rate limit: ~30 messages per second to the same chat.
 # We use a small delay to be safe.
@@ -179,6 +180,9 @@ class TelegramNotifier(BaseNotifier):
         await update.message.reply_text("🔄 Scanning now...")
         try:
             new_jobs = await self._scan_callback()
+            if isinstance(new_jobs, ScanBusyResult):
+                await update.message.reply_text(f"⏳ {new_jobs.message}")
+                return
             count = len(new_jobs) if new_jobs else 0
             if count > 0:
                 await update.message.reply_text(f"✅ Scan complete — {count} new job{'s' if count != 1 else ''} found")

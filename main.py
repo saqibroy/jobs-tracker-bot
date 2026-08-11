@@ -21,6 +21,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -60,37 +61,26 @@ from notifiers.delivery import (
     process_pending_explore_delivery,
     process_pending_immediate_deliveries,
 )
-from sources.arbeitnow import ArbeitnowSource
 from sources.ats_url_sniffer import append_sniffed_candidates
-from sources.ashby import AshbySource
-from sources.bamboohr import BambooHRSource
-from sources.devex import DevexSource
-from sources.eurobrussels import EuroBrusselsSource
-from sources.goodjobs import GoodJobsSource
-from sources.greenhouse import GreenhouseSource
-from sources.himalayas import HimalayasSource
-from sources.hours80k import Hours80kSource
-from sources.idealist import IdealistSource
-from sources.landingjobs import LandingJobsSource
-from sources.linkedin import LinkedInSource
-from sources.lever import LeverSource
-from sources.nofluffjobs import NoFluffJobsSource
-from sources.personio import PersonioSource
-from sources.jsonld import JsonLdCareerSource
-from sources.reliefweb import ReliefWebSource
-from sources.remoteok import RemoteOKSource
-from sources.remotive import RemotiveSource
-from sources.stepstone import StepstoneSource
-from sources.techjobsforgood import TechJobsForGoodSource
-from sources.themuse import TheMuseSource
-from sources.weworkremotely import WeWorkRemotelySource
-from sources.workable import WorkableSource
 from sources.base import BaseSource
+from sources.catalog import (
+    GROUP_BY_ID,
+    SOURCE_BY_NAME,
+    SOURCE_GROUPS,
+    instantiate_sources,
+    manual_all_source_names,
+)
+from sources.http_budget import SourceHttpBudget
+from scan_coordinator import (
+    ProductionScanCoordinator,
+    ScanBusyResult,
+)
 from storage.database import (
     backfill_match_scores,
     filter_unseen,
     get_latest_scan_summary,
     get_latest_source_statuses,
+    get_group_last_completed,
     get_stats,
     get_total_count,
     get_weekly_general_count,
@@ -109,41 +99,11 @@ logger.add(config.LOG_FILE, level="DEBUG", rotation="10 MB", retention="7 days")
 
 # ── Source registry ────────────────────────────────────────────────────────
 ALL_SOURCES = {
-    # Direct employer boards (default)
-    "greenhouse": GreenhouseSource,
-    "ashby": AshbySource,
-    "personio": PersonioSource,
-    "lever": LeverSource,
-    "workable": WorkableSource,
-    "jsonld": JsonLdCareerSource,
-    # Curated secondary sources with useful candidate-location data (default)
-    "remotive": RemotiveSource,
-    "arbeitnow": ArbeitnowSource,
-    "stepstone": StepstoneSource,
-    "himalayas": HimalayasSource,
-    # Optional/noisy sources remain addressable via --source but are not part
-    # of scheduled scans until their eligibility contracts are trustworthy.
-    "remoteok": RemoteOKSource,
-    "weworkremotely": WeWorkRemotelySource,
-    "idealist": IdealistSource,
-    "reliefweb": ReliefWebSource,
-    "techjobsforgood": TechJobsForGoodSource,
-    "eurobrussels": EuroBrusselsSource,
-    "hours80k": Hours80kSource,
-    "goodjobs": GoodJobsSource,
-    "devex": DevexSource,
-    "linkedin": LinkedInSource,
-    "nofluffjobs": NoFluffJobsSource,
-    "landingjobs": LandingJobsSource,
-    "themuse": TheMuseSource,
-    "bamboohr": BambooHRSource,
+    name: definition.adapter_class for name, definition in SOURCE_BY_NAME.items()
 }
-
-DEFAULT_SOURCE_NAMES = (
-    "greenhouse", "ashby", "personio", "lever", "workable", "jsonld",
-    "arbeitnow", "stepstone", "remotive", "himalayas",
-    "remoteok", "idealist", "linkedin",
-)
+DEFAULT_SOURCE_NAMES = manual_all_source_names()
+PRODUCTION_SCAN_COORDINATOR = ProductionScanCoordinator()
+_source_scheduler: AsyncIOScheduler | None = None
 
 def _get_sources(source_name: str | None) -> list:
     """Return source instances to run — all or a single one."""
@@ -154,7 +114,7 @@ def _get_sources(source_name: str | None) -> list:
             sys.exit(1)
         return [cls()]
 
-    return [ALL_SOURCES[name]() for name in DEFAULT_SOURCE_NAMES]
+    return instantiate_sources(DEFAULT_SOURCE_NAMES)
 
 
 def _passes_company_blocklist(job: Job) -> bool:
@@ -235,10 +195,100 @@ async def run_scan(
     dry_run: bool = False,
     max_age_days: int | None = None,
     verbose: bool = False,
+    *,
+    scan_scope: str = "manual_all",
+    coordinator_mode: Literal["manual", "scheduled"] = "manual",
+) -> list[Job] | ScanBusyResult:
+    """Run a scan, coordinating the complete production lifecycle."""
+
+    if dry_run:
+        return await _run_scan_lifecycle(
+            sources,
+            dry_run=True,
+            max_age_days=max_age_days,
+            verbose=verbose,
+            scan_scope=scan_scope,
+        )
+
+    if coordinator_mode == "scheduled":
+        async with PRODUCTION_SCAN_COORDINATOR.scheduled(scan_scope):
+            return await _run_scan_lifecycle(
+                sources,
+                dry_run=False,
+                max_age_days=max_age_days,
+                verbose=verbose,
+                scan_scope=scan_scope,
+            )
+
+    async with PRODUCTION_SCAN_COORDINATOR.manual(scan_scope) as lease:
+        if isinstance(lease, ScanBusyResult):
+            return lease
+        return await _run_scan_lifecycle(
+            sources,
+            dry_run=False,
+            max_age_days=max_age_days,
+            verbose=verbose,
+            scan_scope=scan_scope,
+        )
+
+
+async def _fetch_sources_with_budget(
+    sources: list,
+) -> tuple[list[SourceFetchOutcome], SourceHttpBudget]:
+    """Fetch adapters in bounded batches under one scan-local HTTP budget."""
+
+    http_limit = getattr(config, "MAX_CONCURRENT_HTTP_REQUESTS", 4)
+    if isinstance(http_limit, bool) or not isinstance(http_limit, int) or http_limit < 1:
+        http_limit = 4
+    adapter_limit = getattr(config, "MAX_CONCURRENT_SOURCE_ADAPTERS", None)
+    if (
+        isinstance(adapter_limit, bool)
+        or not isinstance(adapter_limit, int)
+        or adapter_limit < 1
+    ):
+        # Deprecated compatibility fallback applies only to adapter batching.
+        legacy_limit = getattr(config, "MAX_CONCURRENT_SOURCES", 3)
+        adapter_limit = (
+            legacy_limit
+            if isinstance(legacy_limit, int)
+            and not isinstance(legacy_limit, bool)
+            and legacy_limit > 0
+            else 3
+        )
+
+    budget = SourceHttpBudget(http_limit)
+    outcomes: list[SourceFetchOutcome] = []
+    for source in sources:
+        if isinstance(source, BaseSource):
+            source.bind_http_budget(budget)
+
+    try:
+        batch_size = adapter_limit
+        for index in range(0, len(sources), batch_size):
+            batch_sources = sources[index : index + batch_size]
+            results = await asyncio.gather(
+                *[_fetch_source_outcome(source) for source in batch_sources]
+            )
+            outcomes.extend(results)
+            del results
+    finally:
+        for source in sources:
+            if isinstance(source, BaseSource):
+                source.bind_http_budget(None)
+    return outcomes, budget
+
+
+async def _run_scan_lifecycle(
+    sources: list,
+    *,
+    dry_run: bool,
+    max_age_days: int | None,
+    verbose: bool,
+    scan_scope: str,
 ) -> list[Job]:
     """Fetch from all sources, filter, deduplicate, and optionally persist.
 
-    Sources are fetched in small batches (MAX_CONCURRENT_SOURCES at a time).
+    Sources are fetched in small adapter batches.
     Each batch is fetched, then its raw jobs are merged and the batch
     results are freed before the next batch starts.  This keeps peak
     memory well within Docker's 512 MB cgroup limit.
@@ -247,18 +297,18 @@ async def run_scan(
     scan_id = uuid.uuid4().hex
     scan_started_at = utc_now()
     all_jobs: list[Job] = []
-    outcomes: list[SourceFetchOutcome] = []
-    batch_size = config.MAX_CONCURRENT_SOURCES
-
-    for i in range(0, len(sources), batch_size):
-        batch_sources = sources[i : i + batch_size]
-        results = await asyncio.gather(
-            *[_fetch_source_outcome(source) for source in batch_sources]
-        )
-        for outcome in results:
-            outcomes.append(outcome)
-            all_jobs.extend(outcome.jobs)
-        del results  # free HTTP response data eagerly
+    outcomes, http_budget = await _fetch_sources_with_budget(sources)
+    for outcome in outcomes:
+        all_jobs.extend(outcome.jobs)
+    logger.info(
+        "Source HTTP budget for {}: peak {}/{} attempts={} retries={} rate_limits={}",
+        scan_scope,
+        http_budget.observed_peak,
+        http_budget.configured_limit,
+        http_budget.total_attempts,
+        http_budget.retry_count,
+        http_budget.rate_limit_count,
+    )
 
     total_raw = len(all_jobs)
     logger.info("Total raw jobs fetched: {}", total_raw)
@@ -285,6 +335,8 @@ async def run_scan(
         started_at=scan_started_at,
         outcomes=outcomes,
         filter_summary=filter_summary,
+        scan_scope=scan_scope,
+        http_budget=http_budget,
     )
     del all_jobs  # free unfiltered list
 
@@ -325,7 +377,20 @@ async def run_scan(
     scan_summary.validate_accounting()
     await persist_scan_metrics(scan_summary)
     source_health = await get_latest_source_statuses()
-    _publish_scan_health(scan_summary, source_health)
+    try:
+        group_last_completed = await get_group_last_completed()
+    except Exception:
+        # Metrics persistence is authoritative. Health enrichment must not turn
+        # a completed production scan into a failed scan during migration/tests.
+        logger.exception("Failed to load grouped completion health")
+        group_last_completed = {}
+    _publish_scan_health(scan_summary, source_health, group_last_completed)
+    try:
+        from health import set_last_scan
+
+        set_last_scan(scan_summary.completed_at)
+    except Exception:
+        logger.exception("Failed to publish latest production scan timestamp")
 
     if not saved_jobs:
         logger.info("No new jobs this cycle")
@@ -345,15 +410,17 @@ async def run_notification_simulation(
     """Fetch once and simulate notification policy without any persistent writes."""
 
     all_jobs: list[Job] = []
-    batch_size = config.MAX_CONCURRENT_SOURCES
-    for i in range(0, len(sources), batch_size):
-        batch_sources = sources[i : i + batch_size]
-        outcomes = await asyncio.gather(
-            *[_fetch_source_outcome(source) for source in batch_sources]
-        )
-        for outcome in outcomes:
-            all_jobs.extend(outcome.jobs)
-        del outcomes
+    outcomes, budget = await _fetch_sources_with_budget(sources)
+    for outcome in outcomes:
+        all_jobs.extend(outcome.jobs)
+    logger.info(
+        "Source HTTP budget for notification simulation: peak {}/{} attempts={} retries={} rate_limits={}",
+        budget.observed_peak,
+        budget.configured_limit,
+        budget.total_attempts,
+        budget.retry_count,
+        budget.rate_limit_count,
+    )
 
     filter_summary = run_filter_pipeline(
         all_jobs,
@@ -416,6 +483,8 @@ def _build_scan_summary(
     started_at: datetime,
     outcomes: list[SourceFetchOutcome],
     filter_summary: FilterRunSummary,
+    scan_scope: str = "legacy_all",
+    http_budget: SourceHttpBudget | None = None,
 ) -> ScanSummary:
     """Merge fetch outcomes with the counts from the single global filter pass."""
 
@@ -458,6 +527,12 @@ def _build_scan_summary(
         started_at=started_at,
         completed_at=utc_now(),
         sources=metrics_by_source,
+        scan_scope=scan_scope,
+        source_http_limit=(http_budget.configured_limit if http_budget else 0),
+        source_http_observed_peak=(http_budget.observed_peak if http_budget else 0),
+        source_http_attempts=(http_budget.total_attempts if http_budget else 0),
+        source_http_retries=(http_budget.retry_count if http_budget else 0),
+        source_http_rate_limits=(http_budget.rate_limit_count if http_budget else 0),
     )
     summary.validate_accounting()
     return summary
@@ -466,13 +541,16 @@ def _build_scan_summary(
 def _publish_scan_health(
     summary: ScanSummary,
     source_health: list[dict] | None = None,
+    group_last_completed: dict[str, str] | None = None,
 ) -> None:
     """Publish only bounded, sanitized counts to the in-process health state."""
 
     try:
         from health import set_scan_summary
 
-        set_scan_summary(summary.to_health_dict(source_health))
+        payload = summary.to_health_dict(source_health)
+        payload["group_last_completed"] = dict(group_last_completed or {})
+        set_scan_summary(payload)
     except Exception:
         logger.exception("Failed to publish scan health summary")
 
@@ -772,8 +850,9 @@ def main():
     # ── Full scheduler mode ────────────────────────────────────────────
     logger.info("Starting Job Tracker Bot in scheduler mode")
     logger.info(
-        "Scan every {} min | Digest every {} h | Health check every 1 h",
-        config.SCAN_INTERVAL_MINUTES,
+        "Source groups: A every {} min, B every {} min | Digest every {} h",
+        config.SOURCE_GROUP_A_INTERVAL_MINUTES,
+        config.SOURCE_GROUP_B_INTERVAL_MINUTES,
         config.DIGEST_INTERVAL_HOURS,
     )
     if config.COMPANY_BLOCKLIST:
@@ -802,38 +881,73 @@ async def _restore_persisted_health_state() -> None:
     except Exception:
         logger.exception("Failed to restore persisted scan health; continuing startup")
 
+
+def _register_source_group_jobs(
+    scheduler: AsyncIOScheduler,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Register every non-empty scheduled source group with stable semantics."""
+
+    origin = now or datetime.now(timezone.utc)
+    for group in SOURCE_GROUPS:
+        if not group.source_names:
+            continue
+        scheduler.add_job(
+            _scheduled_source_group,
+            "interval",
+            minutes=group.cadence_minutes,
+            args=[group.scheduler_id],
+            id=group.scheduler_id,
+            name=f"Source scan: {group.scan_scope}",
+            next_run_time=origin + timedelta(minutes=group.startup_delay_minutes),
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=config.SOURCE_GROUP_MISFIRE_GRACE_SECONDS,
+        )
+
+
+def _next_source_group_run_time(
+    scheduler: AsyncIOScheduler,
+) -> datetime | None:
+    times = [
+        job.next_run_time
+        for group in SOURCE_GROUPS
+        if (job := scheduler.get_job(group.scheduler_id)) is not None
+        and job.next_run_time is not None
+    ]
+    return min(times) if times else None
+
+
+def _refresh_next_scan_health(scheduler: AsyncIOScheduler) -> None:
+    try:
+        from health import set_next_scan_time
+
+        set_next_scan_time(_next_source_group_run_time(scheduler))
+    except Exception:
+        logger.exception("Failed to publish next source-group trigger")
+
+
 async def _async_main(sources: list) -> None:
     """Run scheduler, Discord bot, health server all in one event loop."""
-    notification_policy = load_notification_policy()
-    # Initialize DB
-    await init_db()
+    global _source_scheduler
 
-    # Restore the most recent completed production scan before the first new
-    # startup scan finishes, so /health remains informative during startup.
+    from health import set_core_ready, set_jobs_tracked, start_health_server
+
+    set_core_ready(False)
+    notification_policy = load_notification_policy()
+    await init_db()
     await _restore_persisted_health_state()
 
-    # Start health HTTP server
-    health_runner = None
-    try:
-        from health import start_health_server, set_jobs_tracked
-        health_runner = await start_health_server()
-        total = await get_total_count()
-        set_jobs_tracked(total)
-    except Exception:
-        logger.exception("Failed to start health server — continuing without it")
+    # The health listener is a core local dependency. If it cannot bind, the
+    # process must not advertise readiness.
+    health_runner = await start_health_server()
+    set_jobs_tracked(await get_total_count())
 
     # Set up APScheduler (no event_loop param — uses running loop automatically)
     scheduler = AsyncIOScheduler()
-
-    scheduler.add_job(
-        _scheduled_scan,
-        "interval",
-        minutes=config.SCAN_INTERVAL_MINUTES,
-        id="scan",
-        name="Job Scan",
-        next_run_time=datetime.now(timezone.utc),  # run immediately on start
-    )
-
+    _source_scheduler = scheduler
+    _register_source_group_jobs(scheduler)
     _register_notification_delivery_jobs(scheduler, notification_policy)
 
     scheduler.add_job(
@@ -888,12 +1002,13 @@ async def _async_main(sources: list) -> None:
         )
 
     scheduler.start()
-    logger.info("Scheduler started — {} sources registered", len(sources))
+    _refresh_next_scan_health(scheduler)
+    logger.info(
+        "Scheduler started — {} scheduled sources across {} groups",
+        len(manual_all_source_names()),
+        len(SOURCE_GROUPS),
+    )
 
-    # Send startup notification
-    await _send_startup_notification(len(sources))
-
-    # Build list of long-running coroutines to gather
     background_tasks: list[asyncio.Task] = []
 
     # ── Discord bot (optional) ─────────────────────────────────────────
@@ -903,7 +1018,12 @@ async def _async_main(sources: list) -> None:
 
         async def _manual_scan_callback():
             sources_list = _get_sources(None)
-            return await run_scan(sources_list, dry_run=False)
+            return await run_scan(
+                sources_list,
+                dry_run=False,
+                scan_scope="manual_all",
+                coordinator_mode="manual",
+            )
 
         channel_id = int(config.DISCORD_COMMAND_CHANNEL_ID)
 
@@ -912,9 +1032,10 @@ async def _async_main(sources: list) -> None:
                 command_channel_id=channel_id,
                 scan_callback=_manual_scan_callback,
             )
-            scan_job = scheduler.get_job("scan")
-            if scan_job:
-                bot.set_scan_times(last_scan=None, next_scan=scan_job.next_run_time)
+            bot.set_scan_times(
+                last_scan=None,
+                next_scan=_next_source_group_run_time(scheduler),
+            )
             return bot
 
         discord_bot = _new_discord_bot()
@@ -948,35 +1069,78 @@ async def _async_main(sources: list) -> None:
     # ── Telegram bot (optional) ────────────────────────────────────────
     telegram_app = None
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
-        try:
-            from notifiers.telegram_notifier import TelegramNotifier
-            from storage.database import get_stats as _tg_get_stats
+        from notifiers.telegram_notifier import TelegramNotifier
+        from storage.database import get_stats as _tg_get_stats
 
-            tg_notifier = TelegramNotifier()
-
-            async def _tg_scan_callback():
-                sources_list = _get_sources(None)
-                return await run_scan(sources_list, dry_run=False)
-
-            async def _tg_stats_callback():
-                await init_db()
-                return await _tg_get_stats()
-
-            telegram_app = tg_notifier.build_application(
-                scan_callback=_tg_scan_callback,
-                stats_callback=_tg_stats_callback,
+        async def _tg_scan_callback():
+            sources_list = _get_sources(None)
+            return await run_scan(
+                sources_list,
+                dry_run=False,
+                scan_scope="manual_all",
+                coordinator_mode="manual",
             )
 
-            await tg_notifier.register_commands()
-            await telegram_app.initialize()
-            await telegram_app.updater.start_polling(drop_pending_updates=True)
-            await telegram_app.start()
-            logger.info("Telegram bot started with /commands support")
-        except Exception:
-            logger.exception("Failed to start Telegram bot — continuing without it")
-            telegram_app = None
+        async def _tg_stats_callback():
+            await init_db()
+            return await _tg_get_stats()
+
+        async def _stop_telegram_application(app) -> None:
+            try:
+                if app.updater and app.updater.running:
+                    await app.updater.stop()
+                if app.running:
+                    await app.stop()
+                await app.shutdown()
+            except Exception:
+                logger.exception("Failed to stop Telegram application cleanly")
+
+        async def _run_telegram_forever() -> None:
+            nonlocal telegram_app
+            while True:
+                tg_notifier = TelegramNotifier()
+                app = tg_notifier.build_application(
+                    scan_callback=_tg_scan_callback,
+                    stats_callback=_tg_stats_callback,
+                )
+                telegram_app = app
+                try:
+                    await tg_notifier.register_commands()
+                    await app.initialize()
+                    await app.updater.start_polling(drop_pending_updates=True)
+                    await app.start()
+                    logger.info("Telegram bot started with /commands support")
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(
+                        "Telegram bot unavailable: {} — retrying in 30s",
+                        sanitize_source_error(exc),
+                    )
+                    await asyncio.sleep(30)
+                finally:
+                    await _stop_telegram_application(app)
+                    telegram_app = None
+
+        background_tasks.append(asyncio.create_task(
+            _run_telegram_forever(),
+            name="telegram-bot",
+        ))
+        logger.info("Telegram bot initialization scheduled")
     else:
         logger.info("Telegram bot not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+
+    if config.DISCORD_WEBHOOK_URL:
+        background_tasks.append(asyncio.create_task(
+            _send_startup_notification(len(manual_all_source_names())),
+            name="startup-notification",
+        ))
+
+    # Local core startup is now complete. Source refreshes and every optional
+    # external connection proceed asynchronously after this transition.
+    set_core_ready(True)
+    logger.info("Core service ready")
 
     # ── Keep alive: wait for shutdown signal ──────────────────────────
     stop_event = asyncio.Event()
@@ -1006,26 +1170,22 @@ async def _async_main(sources: list) -> None:
     finally:
         # ── Graceful shutdown ──────────────────────────────────────────
         logger.info("Shutting down...")
+        set_core_ready(False)
 
         if scheduler.running:
             scheduler.shutdown(wait=False)
+        _source_scheduler = None
 
         # Cancel background tasks (discord bot, etc.)
         for task in background_tasks:
             if not task.done():
                 task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
 
         if discord_bot and not discord_bot.is_closed():
             try:
                 await discord_bot.close()
-            except Exception:
-                pass
-
-        if telegram_app:
-            try:
-                await telegram_app.updater.stop()
-                await telegram_app.stop()
-                await telegram_app.shutdown()
             except Exception:
                 pass
 
@@ -1068,28 +1228,35 @@ def _register_notification_delivery_jobs(
 
 # ── Scheduled tasks ────────────────────────────────────────────────────────
 
-async def _scheduled_scan() -> None:
-    """Scheduled scan task — runs all sources."""
+async def _scheduled_source_group(group_id: str) -> None:
+    """Run one scheduled source group through the shared coordinator."""
+
     from health import is_paused
+
     if is_paused():
-        logger.info("⏸️ Scanning is paused — skipping scheduled scan")
+        logger.info("⏸️ Scanning is paused — skipping {}", group_id)
         return
 
-    logger.info("⏰ Scheduled scan starting...")
-    sources = _get_sources(None)
+    group = GROUP_BY_ID[group_id]
+    logger.info("⏰ Scheduled {} scan starting...", group.scan_scope)
+    sources = instantiate_sources(group.source_names)
     try:
-        await run_scan(sources, dry_run=False)
-        # Update health endpoint
-        try:
-            from health import set_last_scan, set_jobs_tracked, set_next_scan_seconds
-            set_last_scan(datetime.now(timezone.utc))
-            total = await get_total_count()
-            set_jobs_tracked(total)
-            set_next_scan_seconds(config.SCAN_INTERVAL_MINUTES * 60)
-        except Exception:
-            pass
+        await run_scan(
+            sources,
+            dry_run=False,
+            scan_scope=group.scan_scope,
+            coordinator_mode="scheduled",
+        )
+        from health import set_jobs_tracked
+
+        set_jobs_tracked(await get_total_count())
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        logger.exception("Scheduled scan failed")
+        logger.exception("Scheduled {} scan failed", group.scan_scope)
+    finally:
+        if _source_scheduler is not None:
+            _refresh_next_scan_health(_source_scheduler)
 
 
 async def _run_zoho_sync_cli(*, dry_run: bool | None) -> None:
@@ -1267,6 +1434,20 @@ def _daily_status_details(summary: dict) -> tuple[str, str]:
         degraded_text += f" · +{len(degraded) - 5} more"
     return rejection_text[:1000], (degraded_text or "None")[:1000]
 
+
+def _daily_group_freshness(summary: dict) -> str:
+    """Render at most three persisted scheduled-group completion timestamps."""
+
+    completed = summary.get("group_last_completed", {}) or {}
+    if not isinstance(completed, dict) or not completed:
+        return "No scheduled group completion recorded"
+    lines = [
+        f"`{str(scope)[:30]}` · `{str(timestamp)[:32]}`"
+        for scope, timestamp in sorted(completed.items())[:3]
+        if timestamp
+    ]
+    return ("\n".join(lines) or "No scheduled group completion recorded")[:1000]
+
 async def send_daily_status_summary() -> None:
     """Send one lightweight Discord status embed per day.
 
@@ -1308,11 +1489,13 @@ async def send_daily_status_summary() -> None:
         digest = summary.get("digest", 0)
         explore = summary.get("explore", 0)
         diagnostic = summary.get("diagnostic", 0)
+        scope = str(summary.get("scope") or "legacy_all")[:40]
 
         source_counts = summary.get("sources", {}) or {}
         top_sources = sorted(source_counts.items(), key=lambda item: item[1], reverse=True)[:8]
         source_lines = [f"`{name}` {count}" for name, count in top_sources]
         rejection_text, degraded_text = _daily_status_details(summary)
+        group_freshness = _daily_group_freshness(summary)
 
         webhook = AsyncDiscordWebhook(url=config.DISCORD_WEBHOOK_URL, content="")
         embed = DiscordEmbed(
@@ -1322,7 +1505,7 @@ async def send_daily_status_summary() -> None:
         )
         embed.add_embed_field(
             name="Last scan",
-            value=last_scan_text,
+            value=f"{last_scan_text}\nScope: `{scope}`",
             inline=False,
         )
         embed.add_embed_field(
@@ -1360,6 +1543,11 @@ async def send_daily_status_summary() -> None:
                 value=" · ".join(source_lines),
                 inline=False,
             )
+        embed.add_embed_field(
+            name="Scheduled group freshness",
+            value=group_freshness,
+            inline=False,
+        )
         embed.add_embed_field(
             name="Top rejection reasons",
             value=rejection_text,
@@ -1520,7 +1708,7 @@ async def _send_startup_notification(source_count: int) -> None:
             title="🤖  Job Tracker Bot started",
             description=(
                 f"📡 Monitoring **{source_count}** sources\n"
-                f"⏰ Next scan in ~1 minute\n"
+                f"⏰ First Group A scan in ~{config.SOURCE_GROUP_A_STARTUP_DELAY_MINUTES} minute(s)\n"
                 f"🖥️ Server: Oracle Cloud Frankfurt"
             ),
             color=0x10B981,  # emerald green

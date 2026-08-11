@@ -76,6 +76,7 @@ _CREATE_SOURCE_SCAN_RUNS = """
 CREATE TABLE IF NOT EXISTS source_scan_runs (
     scan_id          TEXT NOT NULL,
     source           TEXT NOT NULL,
+    scan_scope       TEXT NOT NULL DEFAULT 'legacy_all',
     started_at       TEXT NOT NULL,
     completed_at     TEXT NOT NULL,
     duration_ms      INTEGER NOT NULL DEFAULT 0,
@@ -115,7 +116,16 @@ _CREATE_SOURCE_SCAN_INDEXES = (
     "ON source_scan_runs(completed_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_source_completed "
     "ON source_scan_runs(source, completed_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_scope_completed "
+    "ON source_scan_runs(scan_scope, completed_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_source_scan_runs_scope_created "
+    "ON source_scan_runs(scan_scope, created_at DESC);",
 )
+
+_ADD_SOURCE_SCAN_SCOPE_COL = """
+ALTER TABLE source_scan_runs
+ADD COLUMN scan_scope TEXT NOT NULL DEFAULT 'legacy_all';
+"""
 
 _SOURCE_HEALTH_QUERY = """
 SELECT
@@ -194,6 +204,11 @@ async def init_db() -> None:
         await db.execute(_CREATE_INDEX)
         await db.execute(_CREATE_SOURCE_SCAN_RUNS)
         await db.execute(_CREATE_JOB_DELIVERY_RECEIPTS)
+        try:
+            await db.execute(_ADD_SOURCE_SCAN_SCOPE_COL)
+            logger.debug("Migration: added source_scan_runs.scan_scope column")
+        except Exception:
+            pass
         for statement in _CREATE_SOURCE_SCAN_INDEXES:
             await db.execute(statement)
         # Migration: add match_score column if it doesn't exist
@@ -329,11 +344,14 @@ async def persist_scan_metrics(summary: ScanSummary, retention_days: int = 30) -
 
     summary.validate_accounting()
     path = await _db_path()
-    created_at = datetime.now(timezone.utc)
+    # Preserve the scan-level completion separately from each source attempt's
+    # completion so restored group health matches the live published summary.
+    created_at = summary.completed_at
     rows = [
         (
             summary.scan_id,
             metrics.source,
+            summary.scan_scope,
             metrics.started_at.isoformat(),
             metrics.completed_at.isoformat(),
             max(0, metrics.duration_ms),
@@ -350,16 +368,16 @@ async def persist_scan_metrics(summary: ScanSummary, retention_days: int = 30) -
         )
         for metrics in summary.sources.values()
     ]
-    cutoff = (created_at - timedelta(days=retention_days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
     async with aiosqlite.connect(path) as db:
         await db.executemany(
             """
             INSERT OR REPLACE INTO source_scan_runs (
-                scan_id, source, started_at, completed_at, duration_ms, status,
+                scan_id, source, scan_scope, started_at, completed_at, duration_ms, status,
                 raw_count, accepted_count, unseen_count, saved_count,
                 rejection_counts, routing_counts, issue_count, sanitized_error,
                 created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -490,10 +508,10 @@ async def get_latest_scan_summary() -> dict | None:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT scan_id
+            SELECT scan_id, scan_scope
             FROM source_scan_runs
-            GROUP BY scan_id
-            ORDER BY MAX(completed_at) DESC, MAX(created_at) DESC
+            GROUP BY scan_id, scan_scope
+            ORDER BY MAX(created_at) DESC, MAX(completed_at) DESC
             LIMIT 1
             """
         )
@@ -501,8 +519,12 @@ async def get_latest_scan_summary() -> dict | None:
         if latest is None:
             return None
         cursor = await db.execute(
-            "SELECT * FROM source_scan_runs WHERE scan_id = ? ORDER BY source",
-            (latest["scan_id"],),
+            """
+            SELECT * FROM source_scan_runs
+            WHERE scan_id = ? AND scan_scope = ?
+            ORDER BY source
+            """,
+            (latest["scan_id"], latest["scan_scope"]),
         )
         rows = await cursor.fetchall()
 
@@ -522,7 +544,7 @@ async def get_latest_scan_summary() -> dict | None:
         unseen += row["unseen_count"]
         saved += row["saved_count"]
         source_counts[row["source"]] = row["raw_count"]
-        completed_at = max(completed_at or row["completed_at"], row["completed_at"])
+        completed_at = max(completed_at or row["created_at"], row["created_at"])
         for code, count in _decode_counts(row["rejection_counts"]).items():
             rejection_counts[code] = rejection_counts.get(code, 0) + count
         for route, count in _decode_counts(row["routing_counts"]).items():
@@ -530,8 +552,10 @@ async def get_latest_scan_summary() -> dict | None:
                 routing_counts[route] += count
 
     source_health = await get_latest_source_statuses()
+    group_last_completed = await get_group_last_completed()
     return {
         "scan_id": latest["scan_id"],
+        "scope": latest["scan_scope"],
         "completed_at": completed_at,
         "raw": raw,
         "eligible_role_matches": accepted,
@@ -562,10 +586,34 @@ async def get_latest_scan_summary() -> dict | None:
             }
             for item in source_health
         },
+        "group_last_completed": group_last_completed,
     }
 
 
 get_latest_completed_scan = get_latest_scan_summary
+
+
+async def get_group_last_completed() -> dict[str, str]:
+    """Return compact persisted completion timestamps for scheduled scopes."""
+
+    path = await _db_path()
+    async with aiosqlite.connect(path) as db:
+        cursor = await db.execute(
+            """
+            SELECT scan_scope, MAX(created_at) AS completed_at
+            FROM source_scan_runs
+            WHERE scan_scope IN ('group_a', 'group_b', 'group_c')
+            GROUP BY scan_scope
+            ORDER BY scan_scope
+            LIMIT 3
+            """
+        )
+        rows = await cursor.fetchall()
+    return {
+        str(scope): str(completed_at)
+        for scope, completed_at in rows
+        if completed_at
+    }
 
 
 async def mark_notified(job_ids: list[str]) -> None:

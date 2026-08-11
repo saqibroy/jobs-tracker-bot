@@ -19,7 +19,6 @@ gracefully handles this by logging a warning and returning [].
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import datetime, timezone
 
@@ -193,8 +192,7 @@ class LinkedInSource(BaseSource):
 
     async def fetch(self) -> list[Job]:
         """Fetch all search queries in parallel and deduplicate by URL."""
-        tasks = [self._fetch_query(q) for q in _SEARCH_QUERIES]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await self._map_bounded(_SEARCH_QUERIES, self._fetch_query)
         query_jobs = self._consume_component_results(
             _SEARCH_QUERIES,
             results,

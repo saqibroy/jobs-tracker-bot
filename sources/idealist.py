@@ -32,7 +32,6 @@ Fields per hit:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -104,10 +103,10 @@ class IdealistSource(BaseSource):
 
     async def fetch(self) -> list[Job]:
         # Run all Algolia queries concurrently and merge results
-        tasks = [
-            self._post_algolia(query=q, filters=f) for q, f in _QUERIES
-        ]
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        responses = await self._map_bounded(
+            _QUERIES,
+            lambda item: self._post_algolia(query=item[0], filters=item[1]),
+        )
 
         seen_ids: set[str] = set()
         jobs: list[Job] = []
@@ -157,8 +156,6 @@ class IdealistSource(BaseSource):
     # ── Algolia query ───────────────────────────────────────────────────
     async def _post_algolia(self, *, query: str, filters: str):
         """POST a search query to the Algolia REST API."""
-        import httpx
-
         payload = {
             "query": query,
             "filters": filters,
@@ -197,12 +194,7 @@ class IdealistSource(BaseSource):
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(
-                _ALGOLIA_URL, json=payload, headers=headers
-            )
-            resp.raise_for_status()
-            return resp
+        return await self._post(_ALGOLIA_URL, json_body=payload, headers=headers)
 
     # ── Parse a single Algolia hit → Job ────────────────────────────────
     def _parse_hit(self, hit: dict) -> Job | None:

@@ -13,6 +13,8 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 import httpx
 from loguru import logger
@@ -31,6 +33,7 @@ from models.scan import (
     sanitize_source_error,
     utc_now,
 )
+from sources.http_budget import SourceHttpBudget
 
 
 class BaseSource(ABC):
@@ -45,6 +48,21 @@ class BaseSource(ABC):
         self._component_issue_count = 0
         self._component_issues: list[SanitizedSourceIssue] = []
         self._component_failure_statuses: set[SourceStatus] = set()
+        self._source_http_budget: SourceHttpBudget | None = None
+
+    def bind_http_budget(self, budget: SourceHttpBudget | None) -> None:
+        """Bind this adapter to the budget owned by its current scan."""
+
+        self._source_http_budget = budget
+
+    @asynccontextmanager
+    async def _http_attempt(self) -> AsyncIterator[None]:
+        budget = self._source_http_budget
+        if budget is None:
+            yield
+            return
+        async with budget.attempt():
+            yield
 
     def _remember_request_issue(
         self,
@@ -125,17 +143,39 @@ class BaseSource(ABC):
         raise SourceComponentError(status, explanation)
 
     async def _map_bounded(self, items: list, worker) -> list:
-        """Run per-board requests with the configured concurrency ceiling."""
-        semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_SOURCES))
+        """Run one fan-out boundary with a fixed-size local worker pool."""
 
-        async def run(item):
-            async with semaphore:
-                return await worker(item)
-
-        return await asyncio.gather(
-            *(run(item) for item in items),
-            return_exceptions=True,
+        if not items:
+            return []
+        results: list[object] = [None] * len(items)
+        pending = iter(enumerate(items))
+        worker_count = min(
+            len(items),
+            max(1, config.MAX_CONCURRENT_SOURCE_COMPONENTS),
         )
+
+        async def run_worker() -> None:
+            for index, item in pending:
+                try:
+                    results[index] = await worker(item)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    results[index] = exc
+
+        tasks = [
+            asyncio.create_task(run_worker(), name=f"{self.name}-component-worker")
+            for _ in range(worker_count)
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return results
 
     # ── Retry-enabled HTTP GET ──────────────────────────────────────────
     async def _get(
@@ -152,11 +192,14 @@ class BaseSource(ABC):
         last_exc: Exception | None = None
         for attempt in range(1, config.HTTP_MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    resp = await client.get(url, params=params, headers=headers)
+                async with self._http_attempt():
+                    async with httpx.AsyncClient(timeout=self._timeout) as client:
+                        resp = await client.get(url, params=params, headers=headers)
 
                     # Rate limited — skip this run entirely
                     if resp.status_code == 429:
+                        if self._source_http_budget is not None:
+                            self._source_http_budget.record_rate_limit()
                         self._remember_request_issue(
                             "HTTP 429 rate limited",
                             SourceStatus.RATE_LIMITED,
@@ -190,7 +233,11 @@ class BaseSource(ABC):
                         self.name, status, sanitize_source_error(str(exc.request.url)),
                     )
                     raise
+                if attempt >= config.HTTP_MAX_RETRIES:
+                    break
                 wait = min(2 ** attempt, 8)
+                if self._source_http_budget is not None:
+                    self._source_http_budget.record_retry()
                 logger.warning(
                     "[{}] Attempt {}/{} failed: {} — retrying in {}s",
                     self.name,
@@ -203,7 +250,11 @@ class BaseSource(ABC):
             except httpx.RequestError as exc:
                 last_exc = exc
                 self._remember_request_issue(exc)
+                if attempt >= config.HTTP_MAX_RETRIES:
+                    break
                 wait = min(2 ** attempt, 8)
+                if self._source_http_budget is not None:
+                    self._source_http_budget.record_retry()
                 logger.warning(
                     "[{}] Attempt {}/{} failed: {} — retrying in {}s",
                     self.name,
@@ -231,10 +282,13 @@ class BaseSource(ABC):
         last_exc: Exception | None = None
         for attempt in range(1, config.HTTP_MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    resp = await client.post(url, json=json_body, headers=headers, params=params)
+                async with self._http_attempt():
+                    async with httpx.AsyncClient(timeout=self._timeout) as client:
+                        resp = await client.post(url, json=json_body, headers=headers, params=params)
 
                     if resp.status_code == 429:
+                        if self._source_http_budget is not None:
+                            self._source_http_budget.record_rate_limit()
                         self._remember_request_issue(
                             "HTTP 429 rate limited",
                             SourceStatus.RATE_LIMITED,
@@ -265,7 +319,11 @@ class BaseSource(ABC):
                         self.name, status, sanitize_source_error(str(exc.request.url)),
                     )
                     raise
+                if attempt >= config.HTTP_MAX_RETRIES:
+                    break
                 wait = min(2 ** attempt, 8)
+                if self._source_http_budget is not None:
+                    self._source_http_budget.record_retry()
                 logger.warning(
                     "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
                     self.name,
@@ -278,7 +336,11 @@ class BaseSource(ABC):
             except httpx.RequestError as exc:
                 last_exc = exc
                 self._remember_request_issue(exc)
+                if attempt >= config.HTTP_MAX_RETRIES:
+                    break
                 wait = min(2 ** attempt, 8)
+                if self._source_http_budget is not None:
+                    self._source_http_budget.record_retry()
                 logger.warning(
                     "[{}] POST attempt {}/{} failed: {} — retrying in {}s",
                     self.name,

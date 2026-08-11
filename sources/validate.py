@@ -28,7 +28,7 @@ _SOURCES = {
 async def validate_sources() -> int:
     boards = load_company_boards()
     print(f"\nValidating {len(boards)} enabled employer boards\n")
-    semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_SOURCES))
+    semaphore = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_SOURCE_COMPONENTS))
 
     async def validate_one(board):
         cls = _SOURCES.get(board.provider)

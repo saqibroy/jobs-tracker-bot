@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,6 +23,127 @@ def _get_list(key: str, default: str = "") -> list[str]:
     return [item.strip().lower() for item in raw.split(",") if item.strip()]
 
 
+def _validated_int(
+    values: Mapping[str, str],
+    key: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int,
+) -> int:
+    """Read one bounded integer and fail with a setting-specific message."""
+
+    raw = values.get(key, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{key} must be between {minimum} and {maximum}")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulingSettings:
+    """Validated source scheduling and concurrency settings."""
+
+    max_concurrent_source_adapters: int
+    max_concurrent_source_components: int
+    max_concurrent_http_requests: int
+    group_a_interval_minutes: int
+    group_b_interval_minutes: int
+    group_a_startup_delay_minutes: int
+    group_b_startup_delay_minutes: int
+    source_group_misfire_grace_seconds: int
+
+
+def load_scheduling_settings(
+    values: Mapping[str, str] | None = None,
+) -> SchedulingSettings:
+    """Load independent source runtime settings.
+
+    ``MAX_CONCURRENT_SOURCES`` is retained only as a deprecated fallback for
+    adapter concurrency. Component and HTTP limits have independent defaults
+    and never inherit it.
+    """
+
+    env = os.environ if values is None else values
+    if "MAX_CONCURRENT_SOURCE_ADAPTERS" in env:
+        adapter_concurrency = _validated_int(
+            env,
+            "MAX_CONCURRENT_SOURCE_ADAPTERS",
+            3,
+            maximum=32,
+        )
+    else:
+        adapter_concurrency = _validated_int(
+            env,
+            "MAX_CONCURRENT_SOURCES",
+            2,
+            maximum=32,
+        )
+    settings = SchedulingSettings(
+        max_concurrent_source_adapters=adapter_concurrency,
+        max_concurrent_source_components=_validated_int(
+            env,
+            "MAX_CONCURRENT_SOURCE_COMPONENTS",
+            3,
+            maximum=32,
+        ),
+        max_concurrent_http_requests=_validated_int(
+            env,
+            "MAX_CONCURRENT_HTTP_REQUESTS",
+            4,
+            maximum=64,
+        ),
+        group_a_interval_minutes=_validated_int(
+            env,
+            "SOURCE_GROUP_A_INTERVAL_MINUTES",
+            60,
+            maximum=1440,
+        ),
+        group_b_interval_minutes=_validated_int(
+            env,
+            "SOURCE_GROUP_B_INTERVAL_MINUTES",
+            120,
+            maximum=1440,
+        ),
+        group_a_startup_delay_minutes=_validated_int(
+            env,
+            "SOURCE_GROUP_A_STARTUP_DELAY_MINUTES",
+            1,
+            maximum=1439,
+        ),
+        group_b_startup_delay_minutes=_validated_int(
+            env,
+            "SOURCE_GROUP_B_STARTUP_DELAY_MINUTES",
+            6,
+            maximum=1439,
+        ),
+        source_group_misfire_grace_seconds=_validated_int(
+            env,
+            "SOURCE_GROUP_MISFIRE_GRACE_SECONDS",
+            300,
+            maximum=3600,
+        ),
+    )
+    if settings.group_a_startup_delay_minutes >= settings.group_a_interval_minutes:
+        raise ValueError(
+            "SOURCE_GROUP_A_STARTUP_DELAY_MINUTES must be inside the Group A cadence"
+        )
+    if settings.group_b_startup_delay_minutes >= settings.group_b_interval_minutes:
+        raise ValueError(
+            "SOURCE_GROUP_B_STARTUP_DELAY_MINUTES must be inside the Group B cadence"
+        )
+    offsets = {
+        settings.group_a_startup_delay_minutes,
+        settings.group_b_startup_delay_minutes,
+    }
+    if len(offsets) != 2:
+        raise ValueError("source group startup delays must be distinct")
+    return settings
+
+
 # ── Notifications ──────────────────────────────────────────────────────────
 DISCORD_WEBHOOK_URL: str = _get("DISCORD_WEBHOOK_URL")
 DISCORD_WEBHOOK_URL_NGO: str = _get("DISCORD_WEBHOOK_URL_NGO")
@@ -32,6 +155,13 @@ TELEGRAM_CHAT_ID: str = _get("TELEGRAM_CHAT_ID")
 # ── Scheduling ─────────────────────────────────────────────────────────────
 SCAN_INTERVAL_MINUTES: int = int(_get("SCAN_INTERVAL_MINUTES", "45"))
 DIGEST_INTERVAL_HOURS: int = int(_get("DIGEST_INTERVAL_HOURS", "6"))
+
+SCHEDULING: SchedulingSettings = load_scheduling_settings()
+SOURCE_GROUP_A_INTERVAL_MINUTES: int = SCHEDULING.group_a_interval_minutes
+SOURCE_GROUP_B_INTERVAL_MINUTES: int = SCHEDULING.group_b_interval_minutes
+SOURCE_GROUP_A_STARTUP_DELAY_MINUTES: int = SCHEDULING.group_a_startup_delay_minutes
+SOURCE_GROUP_B_STARTUP_DELAY_MINUTES: int = SCHEDULING.group_b_startup_delay_minutes
+SOURCE_GROUP_MISFIRE_GRACE_SECONDS: int = SCHEDULING.source_group_misfire_grace_seconds
 
 # Lightweight daily status embed. This does not send jobs; it reports whether
 # scans are running and how many jobs were fetched/accepted in the latest scan.
@@ -92,6 +222,9 @@ ACCEPT_ONSITE_GERMANY: bool = _get("ACCEPT_ONSITE_GERMANY", "false").lower() in 
 
 # ── Concurrency ────────────────────────────────────────────────────────────
 MAX_CONCURRENT_SOURCES: int = int(_get("MAX_CONCURRENT_SOURCES", "3"))
+MAX_CONCURRENT_SOURCE_ADAPTERS: int = SCHEDULING.max_concurrent_source_adapters
+MAX_CONCURRENT_SOURCE_COMPONENTS: int = SCHEDULING.max_concurrent_source_components
+MAX_CONCURRENT_HTTP_REQUESTS: int = SCHEDULING.max_concurrent_http_requests
 
 # ── Passive company discovery ──────────────────────────────────────────────
 # Mine aggregator apply links for known ATS board URLs and append newly-seen

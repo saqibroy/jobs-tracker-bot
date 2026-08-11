@@ -345,6 +345,12 @@ class ScanSummary:
     started_at: datetime
     completed_at: datetime
     sources: dict[str, SourceFunnelMetrics]
+    scan_scope: str = "legacy_all"
+    source_http_limit: int = 0
+    source_http_observed_peak: int = 0
+    source_http_attempts: int = 0
+    source_http_retries: int = 0
+    source_http_rate_limits: int = 0
 
     @property
     def raw_count(self) -> int:
@@ -434,6 +440,7 @@ class ScanSummary:
 
         routing = self.routing_counts
         return {
+            "scope": self.scan_scope,
             "raw": self.raw_count,
             "eligible_role_matches": self.accepted_count,
             "rejected": self.rejected_count,
@@ -449,6 +456,13 @@ class ScanSummary:
                 code.value: count for code, count in self.rejection_counts.items() if count
             },
             "source_health": source_health_map,
+            "source_http": {
+                "configured_limit": max(0, self.source_http_limit),
+                "observed_peak": max(0, self.source_http_observed_peak),
+                "attempts": max(0, self.source_http_attempts),
+                "retries": max(0, self.source_http_retries),
+                "rate_limits": max(0, self.source_http_rate_limits),
+            },
         }
 
 

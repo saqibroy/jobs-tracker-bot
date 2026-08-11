@@ -1128,7 +1128,7 @@ Record files changed, the complete simulation table and selected defaults, thres
 
 # Phase 5A — Grouped Scheduler, Locking, Health, and Bounded Source HTTP
 
-**Status:** Not started
+**Status:** Completed
 
 ## Objective
 
@@ -1402,18 +1402,18 @@ Production remains free of Playwright and Chromium through dependencies, Docker 
 
 ## Tasks
 
-- [ ] Add the focused source catalog, exact Group A/B membership, manual-only state, cadence validation, and conditional Group C omission.
-- [ ] Replace outer and component use of `MAX_CONCURRENT_SOURCES` with independently validated adapter, per-boundary component, and scan-wide source HTTP settings.
-- [ ] Add deadlock-safe local component fan-out with bounded worker/task creation, including nested Personio detail work.
-- [ ] Add the shared per-scan source HTTP budget and audit every scheduled adapter network path; route Idealist and all other unapproved bypasses through it.
-- [ ] Add the scheduled-adapter bypass assertion and explicit reviewed-exception contract.
-- [ ] Run the paired A/B/C experiment before selecting production concurrency or startup offsets.
-- [ ] Register stable, staggered group jobs with explicit `max_instances=1`, coalescing, and bounded misfire behavior.
-- [ ] Add the shared production scan coordinator with scheduled FIFO waiting and manual busy behavior.
-- [ ] Separate core readiness from group refresh and optional external connectivity.
-- [ ] Add the idempotent `scan_scope` migration and group-aware persisted/active health semantics.
-- [ ] Preserve scan-local company caps, receipts/policy, deduplication, ATS discovery dedup, and dry-run/simulation immutability.
-- [ ] Record representative/outlier durations, readiness, first full refresh, group memory, and maximum staggered-operation memory.
+- [x] Add the focused source catalog, exact Group A/B membership, manual-only state, cadence validation, and conditional Group C omission.
+- [x] Replace outer and component use of `MAX_CONCURRENT_SOURCES` with independently validated adapter, per-boundary component, and scan-wide source HTTP settings.
+- [x] Add deadlock-safe local component fan-out with bounded worker/task creation, including nested Personio detail work.
+- [x] Add the shared per-scan source HTTP budget and audit every scheduled adapter network path; route Idealist and all other unapproved bypasses through it.
+- [x] Add the scheduled-adapter bypass assertion and explicit reviewed-exception contract.
+- [x] Run the paired A/B/C experiment before selecting production concurrency or startup offsets.
+- [x] Register stable, staggered group jobs with explicit `max_instances=1`, coalescing, and bounded misfire behavior.
+- [x] Add the shared production scan coordinator with scheduled FIFO waiting and manual busy behavior.
+- [x] Separate core readiness from group refresh and optional external connectivity.
+- [x] Add the idempotent `scan_scope` migration and group-aware persisted/active health semantics.
+- [x] Preserve scan-local company caps, receipts/policy, deduplication, ATS discovery dedup, and dry-run/simulation immutability.
+- [x] Record representative/outlier durations, readiness, first full refresh, group memory, and maximum staggered-operation memory.
 
 ## Test matrix
 
@@ -2186,11 +2186,41 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 5A — Grouped Scheduler, Locking, Health, and Bounded Source HTTP
 
-- Status: Not started
-- Commit:
+- Status: Completed
+- Commit: `feat: group and bound production source scans` (this Phase 5A commit)
 - Tests:
-- Peak memory:
+  - Focused Phase 5A: 33 passed, with one third-party `audioop` deprecation warning.
+  - Blocking v2 and CI-equivalent gates: 427 passed for `python -m pytest tests/v2 -q`; 427 passed for `python -m pytest -q --timeout=30`.
+  - Historical diagnostic: 1,304 passed / exactly the same 104 known failures / 10 warnings; no new or missing failing node IDs.
+  - Final-image runtime contract probes: seven passed for scheduled FIFO/no overlap, cross-group URL/receipt deduplication, ATS append idempotency, dry-run/simulation immutability, and deterministic readiness/restart.
+- Peak memory: 330 MiB / 512 MiB during the selected staggered production-like Group A/B refresh, below the 430 MiB hard target and the 344.2 MiB Phase 4B reference.
 - Notes:
+  - Added the authoritative application source catalog. Group A is exactly Greenhouse, Ashby, Personio, Lever, Workable, and JSON-LD at 60 minutes. Group B is exactly Arbeitnow, Remotive, Himalayas, RemoteOK, Idealist, and LinkedIn at 120 minutes. StepStone and every impact/optional adapter remain manually addressable; Group C is absent.
+  - Split source limits into adapter/component/HTTP controls. The measured production defaults are `MAX_CONCURRENT_SOURCE_ADAPTERS=2`, `MAX_CONCURRENT_SOURCE_COMPONENTS=3`, and `MAX_CONCURRENT_HTTP_REQUESTS=4`; legacy `MAX_CONCURRENT_SOURCES` is only an adapter fallback.
+  - Added a scan-local source HTTP budget with configured/current/peak counters and cancellation-safe release. GET/POST retries release before backoff. Idealist now uses the shared POST transport. The scheduled-source audit found no remaining direct-network bypass and requires a non-empty reviewed catalog rationale for any future exception; no Phase 5A exception exists.
+  - Replaced per-item semaphore queues with fixed-size local worker pools. Every fan-out boundary owns its local workers; nested Personio HTML-detail work therefore cannot recursively acquire an outer component permit. The shared HTTP budget remains the absolute network-attempt ceiling.
+  - The paired experiment used the unchanged `job-bot:phase4b` image for A and interim image `sha256:2ee1057b0eed5da659cb5ef9dc70bd2fe02bae130e27b56c4c7ab81d167f6963` for B/C, in A/B/C then C/B/A order for each group:
+
+    | Scope/config | Paired durations | Median / slow | Peak memory | Raw | Pre-cap / final | HTTP peak and events |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | Group A / A | 233.0s, 261.3s | 247.1s / 261.3s | 337, 339 MiB | 10,939–10,940 | 36 / 24 | no unified ceiling; Personio retained its known one-component partial state |
+    | Group A / B | 224.4s, 263.4s | 243.9s / 263.4s | 316, 317 MiB | 10,900–10,941 | 36 / 24 | 4/4; 244–247 attempts, 6–9 retries, 0 rate limits |
+    | Group A / C | 259.2s, 272.7s | 266.0s / 272.7s | 330, 339 MiB | 10,941 | 36 / 24 | 6/6; 248 attempts, 10 retries, 0 rate limits |
+    | Group B / A | 13.1s, 14.6s | 13.8s / 14.6s | 126, 125 MiB | 387 | 33 / 30 | no unified ceiling; all sources healthy |
+    | Group B / B | 15.1s, 16.1s | 15.6s / 16.1s | 125, 124 MiB | 387 | 33 / 30 | 4/4; 26 attempts, 0 retries/rate limits; all sources healthy |
+    | Group B / C | 20.6s, 15.7s | 18.2s / 20.6s | 125, 126 MiB | 387 | 33 / 30 | 6/6; 26 attempts, 0 retries/rate limits; all sources healthy |
+
+  - Selected B because Group A was approximately 1.3% faster than paired A and Group B approximately 12.7% slower, both within the 20% bound, with lower Group A memory and unchanged useful coverage. One B Group A pass lost 41 raw jobs (0.4%) through isolated Greenhouse/Ashby component failures; the paired passes and final runtime recovered, with no repeated failure, rate limit, hard-eligible loss, or >5% source drop.
+  - Selected startup offsets are Group A +1 minute and Group B +6 minutes. The Group B offset uses the normal 243.9-second Group A duration rounded to four minutes plus approximately two minutes; the 263.4-second slow pass remains coordinator-protected. Jobs use stable IDs `source_group_a`/`source_group_b`, `max_instances=1`, coalescing, and 300-second misfire grace.
+  - Added one production coordinator around fetch, ATS discovery, filtering/cap, dedup/save, metrics/health, and pending immediate delivery. Scheduled groups wait FIFO; manual Discord/Telegram scans never queue and receive only the active scope/start time. Success, exception, and cancellation clear coordinator state.
+  - Core readiness now transitions false → true after SQLite/restoration, health binding, scheduler registration/start, and supervised local tasks, without awaiting Discord, Telegram, Zoho, or source connectivity; shutdown returns it to false. Final isolated core readiness took approximately 3.0 seconds.
+  - Added the idempotent non-null `scan_scope` migration with `legacy_all` default and scope/completion indexes. New scopes persist as `group_a`, `group_b`, or `manual_all`. Restored scan/group completion uses scan-level completion while per-source operational timestamps retain each source attempt time.
+  - Health preserves every legacy field and adds readiness, latest scope, bounded HTTP counters, Group A/B completion freshness, and the nearest group trigger. Restart restored the latest Group B summary plus authoritative Group A/B per-source health before a new scan; daily status labels scope and group freshness.
+  - Final isolated 512 MiB run used a temporary database/log directory, no project `.env`, disabled real Discord/Telegram/Zoho sends, no Group C, and loopback health. Group A triggered at +60 seconds and completed its full lifecycle in approximately 236 seconds with 10,938 raw / 36 pre-cap / 24 final/saved, HTTP 4/4, 244 attempts, six retries, and no rate limit. Group B triggered at +360 seconds and completed in approximately 15 seconds with 386 raw / 32 pre-cap / 29 final/saved, HTTP 4/4, 26 attempts, and no retry/rate limit. Both completed by approximately 378 seconds; readiness remained true throughout.
+  - LinkedIn remained healthy and useful in the final Group B refresh with 38 raw / 29 accepted. Personio retained the known bounded Pitch redirect partial issue. StepStone remains manual-only and its final diagnostic returned 0 raw with five HTTP 403 component issues; it was not repaired.
+  - Across the final Group A/B windows all 53 selected jobs were newly saved, no cross-group URL/content dedup loss occurred, and no normalized company exceeded two selections. Fixture/runtime probes preserve receipt idempotency, scan-local cap accounting, scope-local ATS discovery with append deduplication, and dry-run/simulation write-freedom.
+  - Final image: `job-bot:phase5a`, `sha256:3cc8d5e9bbabfb949b474e9d2797e19b48909a4e426a686ae034d5568a4c8ca4`, 375,342,313 bytes. No Playwright/Chromium dependency, production import, process, or dead disable setting was introduced. All temporary experiment/runtime containers, databases, logs, and aggregate runner files were removed.
+  - Live provider volumes/timing remain volatile; the known Personio redirect remains isolated and StepStone remains blocked/manual-only. Existing deployments that set only deprecated `MAX_CONCURRENT_SOURCES` should add the three measured explicit controls to use the selected defaults. Phase 5B and Phase 6 were not started.
 
 ## Phase 5B — Impact-Source Admission
 
