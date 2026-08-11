@@ -1547,70 +1547,357 @@ For every candidate record live status, raw, hard-eligible pre-cap, final accept
 
 # Phase 6 — Job-alert email ingestion
 
+**Status:** Not started
+
 ## Objective
 
-Increase coverage from platforms that are difficult or inappropriate to scrape by parsing job-alert emails through the existing read-only Zoho integration.
+Increase coverage from platforms that are difficult or inappropriate to scrape by parsing bounded job-alert email content through the existing read-only Zoho integration. Keep application/recruiter history behavior intact, pass alert-derived jobs through the normal hard-eligibility/scoring/deduplication/delivery path, and remain safe under the 512 MiB production limit.
 
-## Initial providers
+Phase 6 is split into two review gates for the foundation and initial providers, followed by provider-by-provider Phase 6B gates:
 
-Implement deterministic parsers in this order:
+1. Phase 6A1 — message routing, storage, shared job-ingestion foundation, and safety semantics
+2. Phase 6A2 — LinkedIn and Indeed alert parsers backed by sanitized user-owned fixtures
+3. Phase 6B — StepStone, JOIN, BerlinStartupJobs, freelancermap, and GULP in that order
 
-1. LinkedIn job alerts
-2. Indeed job alerts
-3. StepStone alerts
-4. JOIN alerts
-5. BerlinStartupJobs newsletters
-6. freelancermap project alerts
-7. GULP project alerts
+Stop for review after Phase 6A1 and again after Phase 6A2. Do not begin Phase 6B in the Phase 6A2 implementation run.
 
-## Design constraints
+## Verified pre-Phase-6 Zoho lifecycle
 
-- Do not fetch attachments.
-- Do not execute scripts from emails.
-- Sanitize and normalize links.
-- Prefer direct employer/ATS links when present.
-- Deduplicate by provider item ID, normalized URL, and content hash.
-- Preserve provider name as the source.
-- Keep application-history extraction separate from job-alert extraction.
-- Reuse the normal eligibility, role, stack, language, employment, scoring, and notification pipeline.
-- Avoid circular imports between `main.py` and Zoho modules.
-- Extract shared pipeline logic into a focused service module if necessary.
-- Do not build a generic email framework beyond the requirements of the initial providers.
+The current worker performs:
 
-## Suggested normalized object
+`Zoho accounts → eligible folders → paged message summaries → checkpoint/48-hour-overlap boundary → likely-job cheap filter → full content fetch → cleaned message → application/recruiter extraction → application/review persistence → processed flag → discovery candidates → account checkpoint`
 
-A parser may first produce a small `JobAlertItem`, then normalize it to `Job`.
+Important current semantics and risks:
 
-Required parser output:
+- `ZohoMailIngestionWorker.run()` initializes/migrates Zoho tables before effective per-account dry-run is known. Current dry-run suppresses record/checkpoint/discovery writes but may create or migrate the database.
+- OAuth refresh writes the refreshed access token to the configured cache even when the eventual mail pass is diagnostic.
+- Every likely-job message is sent to `extract_application_records()`. LinkedIn/Indeed alert text such as “job,” “position,” or “career” can therefore create false application rows or review items.
+- `zoho_mail_messages.processed` is currently only a legacy marker that application extraction completed. It is not checked before fetching/reprocessing overlap messages and does not prove that a message was handled by a Phase 6 router.
+- Application rows are upserted and ATS discovery append is deduplicated, but persistence occurs before the final checkpoint. An interrupted run can replay already committed work.
+- A checkpoint is written only after the configured account work completes; an exception while fetching, parsing, persisting, or appending discovery prevents the normal final checkpoint path.
+- The jobs table deduplicates by URL ID and content hash, but `filter_unseen()` and `save_jobs()` are separate operations and `content_hash` is indexed rather than unique. Source and mail ingestion therefore require a small shared critical section.
+- Phase 5A serializes production source scans, but it does not serialize Zoho ingestion or pending-immediate selection. Concurrent source/mail delivery could select the same still-unreceipted obligation unless delivery is separately serialized.
 
-- title
-- company
-- location
-- URL
+Do not rewrite the Zoho API client, application extractor, source scheduler, or notification system beyond the focused changes required by these audited gaps.
+
+## Shared Phase 6 safety and parsing bounds
+
+- Fetch no attachments, inline remote resources, or images. Execute no scripts and make no parser-triggered page or redirect requests.
+- Use the existing BeautifulSoup/string stack only; add no browser, OCR, LLM, ML/NLP model, external parsing service, or production dependency.
+- Process at most 512 KiB of decoded content per message, examine at most 200 links, return at most 50 alert items per message, and process at most 500 new/pending alert items per Zoho sync.
+- Bound normalized fields to title 200 characters, company 160, location 200, URL 1,000, and summary 1,000. Retain at most eight evidence codes of 120 characters and ten parser issues of 160 characters.
+- When the 500-item sync limit is reached, persist already completed work, leave remaining messages unprocessed, and do not advance the checkpoint. A later sync reuses current-version processed markers and pending-item state to drain the backlog without unbounded memory.
+- Reject missing/hostless/credentialed links and non-HTTP(S) schemes, including `javascript:`, `data:`, and `file:`.
+- Unwrap only fixture-proven provider redirect hosts/query parameters, for at most three offline layers. Strip fragments and tracking/session/campaign parameters without following arbitrary redirects.
+- Prefer a card-associated direct employer/ATS link for `Job.url` when present. Otherwise use the stable provider URL. Never execute or fetch the selected link during parsing.
+- Set `posted_at` only from explicit provider evidence. Email delivery/arrival time is not job-posted time.
+
+---
+
+## Phase 6A1 — Job-alert routing and ingestion foundation
+
+**Status:** Not started
+
+### Message document and intent routing
+
+Create one bounded cleaned-message representation from the already fetched content and reuse it for classification and the selected processor. Fetch full message content at most once per processing generation.
+
+Add a small typed routing result with exactly:
+
+- `application_or_recruitment`
+- `job_alert`
+- `unknown_job_email`
+
+The result contains an optional provider and bounded stable evidence/reason codes. Classification is deterministic and applies this precedence:
+
+1. Explicit application lifecycle evidence such as application received, rejection, interview, screening, offer, or candidate-status update routes to `application_or_recruitment`.
+2. Strong provider-alert evidence routes to `job_alert`. Require fixture-supported combinations of provider sender/subject/link/body/card evidence; a provider domain or generic “job/opportunity” word alone is insufficient.
+3. Recruiter outreach evidence routes to `application_or_recruitment` only after strong alert evidence has been excluded.
+4. Conflicting or insufficient job-related evidence routes to `unknown_job_email`.
+
+Only `application_or_recruitment` calls the existing `extract_application_records()` path. `job_alert` never creates an `ExtractedApplicationRecord` or application-review item. `unknown_job_email` is durably handled with a bounded classification reason and creates no fabricated application or alert job.
+
+### Versioned processed-message semantics
+
+Add an explicit, idempotent `processing_version INTEGER NOT NULL DEFAULT 0` migration to `zoho_mail_messages`.
+
+- Existing rows, including historical `processed=1` rows, remain version 0.
+- Phase 6A1 uses routing processing version 1.
+- A message is authoritatively skippable only when `processed = 1 AND processing_version >= 1`.
+- Every encountered message still upserts folder, summary, and last-seen metadata before the skip decision, so moved current-version messages update metadata without another full-body fetch.
+- A legacy `processed=1, processing_version=0` message may be fetched and classified once when it is within the applicable alert-processing window.
+- A legacy message reclassified as application/recruitment uses the existing idempotent application path; a legacy alert uses the new alert path; a deterministically handled result promotes it to `processed=1, processing_version=1`.
+- An unexpected processor exception leaves the message below the current version and prevents checkpoint advancement.
+- Do not delete, rewrite, or infer corrections to historical application/review rows that may have been created from alerts before Phase 6. Historical cleanup is out of scope.
+
+Mark a message current-version processed only after every configured processor for that route has handled its work. A multi-item alert is not complete until all valid items reach a normal job-pipeline terminal result and all invalid/skipped items have bounded durable issues. Deterministically invalid/unsupported content may be marked handled with an issue so one poison message does not block the account forever; unexpected parser, database, alert-pipeline, or Zoho exceptions remain transient failures and block checkpoint advancement.
+
+### Provider-neutral alert contracts
+
+Add a small typed intermediate model before `Job`:
+
+`JobAlertItem`
+
 - provider
-- optional summary
-- optional employment type
-- optional posted time
-- parsing confidence/evidence
+- optional provider-native item ID
+- title, company, location, canonical URL
+- optional explicit `posted_at`
+- optional employment/workplace text or normalized hints
+- optional bounded card-local summary
+- account ID and source message ID
+- bounded deterministic confidence/evidence
 
-## Tasks
+Title, company, location, and a safe URL are required. Missing values make the card invalid; do not substitute “Unknown,” “Remote,” “Germany,” or another eligibility-bearing default. Workplace type and `is_remote` are set only from explicit evidence; otherwise they remain unknown/non-asserted so the existing location gate rejects uncertainty.
 
-- [ ] Detect job-alert emails separately from application/recruiter emails.
-- [ ] Add provider-specific parsers with fixture-based tests.
-- [ ] Normalize alert items into the existing job pipeline.
-- [ ] Store a bounded record of processed alert items.
-- [ ] Add dry-run output showing parsed items without writes or notifications.
-- [ ] Add per-provider parser health metrics.
-- [ ] Ensure the normal Zoho checkpoint advances only after all configured mail processing succeeds.
-- [ ] Add documentation for creating useful alerts.
+Define a tiny provider parser protocol:
 
-## Definition of done
+- `matches(message, bounded_content) -> AlertMatch`
+- `parse(message, bounded_content) -> JobAlertParseResult`
 
-- At least LinkedIn and Indeed alert emails produce normalized jobs.
-- Job alert items pass through the same filters and deduplication as API jobs.
-- Existing application tracking continues to work.
-- Dry-run mode is safe and informative.
-- Full tests pass.
+`JobAlertParseResult` contains provider, status, items, bounded issues, examined/valid/invalid counts, and no raw body/HTML. Keep one module per provider under a focused `integrations/job_alerts/` package; do not build a generic plugin framework.
+
+### Alert identity, persistence, and replay
+
+Determine `identity_key` in this order:
+
+1. provider-native item/job ID
+2. canonical normalized job URL
+3. normalized title/company/location content hash
+
+Add an idempotent `email_job_alert_items` table keyed by `(provider, identity_key)` with bounded provider ID, canonical URL, content hash, originating account/message, display fields/evidence, `pending|processed` state, terminal outcome/rejection code, optional saved job ID, first/last-seen timestamps, and processed timestamp.
+
+- Upserting a new or replayed item records/retains `pending` before normal job processing.
+- `pending` never suppresses replay. Only `processed` means the normal job pipeline returned a terminal saved, duplicate, or rejected outcome.
+- If item persistence succeeds but job processing fails, the message remains below processing version 1, the checkpoint does not advance, and overlap safely retries the pending item.
+- If job saving succeeds but item completion fails, the retry reaches normal jobs-table dedup, then completes the alert item without creating another job or delivery obligation.
+- One alert message may contain zero, one, or many items. Invalid cards are recorded as bounded message/parser issues rather than unsafe `Job` defaults.
+- After a successful write-mode sync, delete only processed alert-item rows whose last-seen time is older than 90 days. Never clean pending items and never perform cleanup in dry-run.
+
+Add latest-only `email_job_alert_provider_health` rows keyed by provider with bounded status/counts, last attempt, last successful parse, processing-failure count, and bounded issue text. Keep these metrics separate from `source_scan_runs` and source-group health. Expose them in the bounded Zoho CLI/scheduled result only; preserve `/health` and Phase 5 source-health semantics.
+
+### Shared normal-job ingestion boundary and company cap
+
+Extract the smallest reusable post-fetch service, such as a focused root `job_ingestion.py`, without importing `main.py` from Zoho code.
+
+`process_discovered_jobs()` must reuse:
+
+- location eligibility
+- employment classification/gate
+- role, stack, language, seniority, salary, recency, and minimum-score gates
+- NGO classification
+- match scoring and `NotificationPolicy`
+- freelance-permission tier ceiling
+- the existing tier-preserving scan-local company cap
+- database URL/content deduplication and `save_jobs()`
+- optional bounded per-item saved/duplicate/rejected outcome association
+
+Source scans retain source fetching, ATS sniffing, source outcomes, `source_scan_runs` persistence, and source health. Alert jobs do not pretend to be source adapters and do not enter the scheduled source catalog.
+
+Process all new/pending alert jobs accumulated by one complete Zoho worker run as one deterministic alert batch across providers/accounts. Apply the existing company cap once to that batch, not once per message or provider. Do not add a cross-run/persistent company quota.
+
+### Ingestion and notification serialization
+
+Add one shared job-ingestion lease around only the state-changing database critical section needed to serialize:
+
+- filter/deduplication
+- save
+- per-item saved/duplicate/rejected outcome association
+- alert-item completion dependent on that outcome
+- source-specific post-save database accounting where required
+
+Do not hold the job-ingestion lease across Discord or Telegram HTTP.
+
+Preserve this lock order:
+
+`source production coordinator → job-ingestion lease → database ingestion work`
+
+Zoho uses:
+
+`job-ingestion lease → database ingestion work`
+
+Zoho must never acquire the Phase 5 production source coordinator. Source and Zoho fetching/parsing happen outside the job-ingestion lease. Release the lease on success, exception, and cancellation.
+
+Repository inspection confirms that source and Zoho paths could otherwise call pending-immediate selection concurrently. Add or reuse one small notification-delivery lease around:
+
+`pending-immediate selection → external send → receipt recording`
+
+The delivery lease is independent from the ingestion lease and is acquired only after the ingestion lease has been released. Never acquire the ingestion lease from inside delivery code, and never hold both in reverse order. Release the delivery lease on success, provider failure, database failure, and cancellation. Do not add a queue, worker service, or broker.
+
+The required invariants are:
+
+- Source and mail ingestion cannot race through `filter_unseen()/save_jobs()`, including the same content hash under different URLs.
+- Only one stored job survives regardless of whether the source or mail path wins.
+- Concurrent ingestion paths cannot externally send the same still-unreceipted immediate obligation twice.
+- Existing receipt-driven per-destination retry semantics and the narrow provider-accepted/receipt-commit at-least-once crash window remain unchanged.
+
+### Checkpoint and processing order
+
+Fetch/classify/parse Zoho messages independently of source scanning, accumulate one bounded alert batch, then use this write-mode order:
+
+1. Upsert message summaries and bounded routing state.
+2. Persist new/replayed alert items as pending.
+3. Under the job-ingestion lease, process the complete alert batch, save/deduplicate jobs, associate terminal item outcomes, complete alert items, and perform source-specific database accounting where applicable.
+4. Release the job-ingestion lease.
+5. Mark every fully handled message with `processed=1, processing_version=1`.
+6. Append idempotent application-derived ATS discovery candidates.
+7. Process pending immediate obligations under the separate delivery lease; provider failures remain receipt-driven pending work.
+8. Persist successful account checkpoints only after all configured mail work has completed.
+9. Run the 90-day processed-item cleanup only after successful write-mode completion.
+
+A full-content fetch, provider parse, database write, job-pipeline failure, or unexpected alert-processing exception prevents checkpoint advancement for the affected run/account. Deterministic unknown/invalid handling is durable and may advance. The 48-hour overlap remains defense in depth rather than the sole reliability mechanism.
+
+### Strong dry-run and OAuth safety
+
+Every effective Zoho dry-run, including explicit CLI dry-run, configured scheduled dry-run, and automatic first-run dry-run, is a strong read-only diagnostic.
+
+Determine and propagate the effective write policy into `ZohoOAuthMailClient`, or an equivalent explicit client option, before any token refresh can occur. Do not enforce it with a global monkeypatch or environment mutation.
+
+In dry-run:
+
+- A valid cached token may be read but the cache is not rewritten.
+- An expired token may be refreshed in memory so mailbox access succeeds, but refreshed credentials are not written and no temporary replacement file is created.
+- Existing token-cache bytes, SHA-256, and nanosecond mtime remain identical.
+- An absent token-cache remains absent when refresh credentials are supplied through configuration; otherwise authentication may fail clearly without creating the cache.
+- Do not initialize/migrate/create SQLite when absent. Read an existing checkpoint through a read-only connection.
+- Write no message summaries, processing versions, applications, alert items, reviews, parser health, discovery seeds, checkpoints, jobs, scan metrics, delivery receipts, or notifications.
+- Produce only bounded provider/message/item counts, normalized field summaries, and pipeline accepted/rejection totals. Print no body/HTML, tracking token, OAuth value, account address, or other private identifier.
+
+Normal scheduled/write-mode operation continues securely persisting refreshed tokens exactly as it does before Phase 6.
+
+### First-run and posted-time safety
+
+- Apply a 14-day alert-candidate window based on message receipt time, independently of application-history boundaries.
+- On a first run, an alert older than 14 days or with no reliable message date is durably handled/skipped in write mode and produces no `Job`. Legacy version-0 reclassification is allowed only inside this alert window.
+- Do not restrict or rewrite the existing application-history boundary merely to control alert backfill.
+- Alert email time never becomes `Job.posted_at`. When explicit provider posted time is absent, leave `posted_at=None` and retain the existing normal recency behavior.
+- Keep unknown work eligibility rejected. Do not infer Germany/worldwide scope or workplace type from provider reputation, recipient location, or alert delivery.
+
+### Phase 6A1 tests
+
+Automated tests use mocked Zoho/provider/notifier HTTP and synthetic foundation parsers only. Cover at least:
+
+- all three intent outcomes, routing precedence, conflicting evidence, and bounded reason/evidence fields
+- existing application received, rejection, interview, recruiter outreach, ATS metadata/link detection, review, and discovery behavior
+- LinkedIn/Indeed-like alerts and unknown job emails creating no application/review records before provider parsers exist
+- historical `processed=1, processing_version=0` receiving one eligible reclassification rather than a permanent skip
+- current-version processed overlap skipping full-body fetch while updating folder/last-seen metadata
+- reclassification, moved messages, review/discovery, message completion, migrations, and repeated initialization remaining idempotent
+- zero/one/many alert items, pending replay, no suppression before terminal processing, deterministic invalid handling, and transient failure checkpoint blocking
+- native-ID/URL/content-hash identity, repeated overlap, same item across messages, 90-day cleanup, and no pending cleanup
+- one company cap across the complete alert batch and unchanged filter/tier/freelance semantics
+- source/mail same URL and same content under different URLs, with source-first and mail-first interleavings
+- one stored job, one immediate obligation, one external immediate send, and exact receipts
+- job-ingestion and delivery lease release after success, exception, and cancellation with no reverse lock ordering
+- dry-run absent database/cache remaining absent; existing database, discovery, and token-cache SHA-256/mtime remaining identical
+- valid cached-token dry-run and expired-token mocked refresh completing without cache mutation
+- dry-run creating no applications, alert items, reviews, parser health, checkpoints, jobs, receipts, discovery writes, or notifications
+- unchanged Group A/B membership, cadence, production coordinator behavior, and absent Group C
+
+### Phase 6A1 verification and definition of done
+
+Run focused Phase 6A1 tests first, then:
+
+```bash
+python -m pytest tests/v2 -q
+python -m pytest -q --timeout=30
+python -m pytest tests -q --timeout=30
+docker build -t job-bot:phase6a1 .
+python main.py --zoho-sync --dry-run
+```
+
+- Blocking v2 tests pass. The historical diagnostic adds no failing node IDs beyond the verified 104 and is compared with the Phase 5B result of 1,304 passed.
+- Use a sanitized/fake Zoho runtime for automated write-mode proof; never send fixtures to real Discord/Telegram.
+- Validate strong dry-run sentinels, write-mode migration twice, overlap/replay, source/mail concurrency, unchanged `/health`, and unchanged Group A/B scheduling.
+- Measure representative bounded multi-message/multi-item parsing, isolated write ingestion, and overlap with scheduled source activity. Peak memory must remain below 430 MiB; investigate an increase greater than 10 MiB from the Phase 5A 330 MiB reference.
+- Do not rerun the long Phase 5 concurrency experiment because source scheduling/concurrency is unchanged.
+- Commit Phase 6A1 separately as `feat: add job-alert ingestion foundation` and stop for review before Phase 6A2.
+
+---
+
+## Phase 6A2 — LinkedIn and Indeed alert parsers
+
+**Status:** Not started
+
+### Authoritative fixtures and privacy
+
+Do not implement either provider parser until sanitized user-owned alert samples exist. Raw personal mailbox messages must never be committed.
+
+For each provider, sanitize one or more real structural samples by removing/replacing:
+
+- names and personal email addresses
+- account/message identifiers
+- unsubscribe, redirect, campaign, and tracking tokens unrelated to provider job identity
+- OAuth data and unique personal identifiers
+- unrelated body/footer content
+
+Retain only the structural markup/text needed to identify cards and use fake provider-native job IDs. Build synthetic edge variants from those authoritative samples. If samples are unavailable, Phase 6A2 is blocked rather than implemented from memory.
+
+### LinkedIn parser
+
+- Detect fixture-proven LinkedIn alert sender/subject/link/card combinations without routing application confirmations, recruiter/InMail outreach, or other LinkedIn mail as alerts.
+- Parse one or more repeated job cards with required title/company/location, stable numeric job ID, canonical LinkedIn job URL, optional card-local summary, and only explicit posted/employment/workplace evidence.
+- Canonicalize an available stable ID to `https://www.linkedin.com/jobs/view/{id}` when no associated direct employer/ATS URL is present.
+- Deduplicate repeated cards/links in one message by provider-native ID first.
+- Cover single/multiple cards, duplicate links, missing company/location, malformed cards, unsafe/tracking URLs, direct ATS preference, body/link/item limits, and non-alert LinkedIn mail.
+- Perform no LinkedIn page fetch, authenticated automation, or guest API request from the email parser.
+
+### Indeed parser
+
+- Detect fixture-proven Indeed alert evidence without routing application/recruitment or unrelated Indeed mail as alerts.
+- Prefer the stable `jk`/job key, canonicalize it to one fixture-proven stable Indeed `viewjob` form, and strip campaign/tracking parameters.
+- Preserve explicit Germany/remote/hybrid/on-site location evidence without inventing eligibility.
+- Cover the same single/multiple, duplicate, malformed, missing-field, unsafe/tracking, direct-link, bounds, and non-alert cases as LinkedIn.
+- Perform no Indeed page fetch or authenticated automation.
+
+### Normalization, attribution, and metrics
+
+- Attribute jobs as `linkedin_alert` and `indeed_alert` so notification/UI records distinguish email from direct sources. Add only compact presentation aliases/icons where needed.
+- Do not add alert providers to `sources/catalog.py`, Group A/B/C, the source HTTP budget, or `source_scan_runs`.
+- Normal jobs-table URL/content dedup remains final cross-source authority after provider-item dedup. Verify source-first and alert-first behavior for the direct LinkedIn source and any matching ATS job.
+- Provider parser health remains in the Phase 6A1 Zoho alert-health table and bounded sync result.
+- Add concise documentation for configuring useful LinkedIn/Indeed alerts without storing mailbox examples or private account data.
+
+### Phase 6A2 tests
+
+In addition to provider fixture matrices, prove:
+
+- LinkedIn/Indeed alerts create zero false application/review records.
+- Application confirmation, rejection, interview, and recruiter messages from provider domains retain application/recruitment behavior.
+- Explicit provider posted time is used; missing time remains unknown and never becomes the email time.
+- Strict location, employment, role, stack, language, seniority, salary, recency, scoring, company cap, freelance ceiling, notification tiers, jobs-table dedup, and receipts remain unchanged.
+- Same job in several alert messages, both providers, a source scan, and a direct ATS URL produces only the normal deduplicated result.
+- Dry-run parser diagnostics remain bounded and fully immutable.
+
+Run focused parser/routing/storage/concurrency tests, the full Phase 6A1 verification sequence, a `job-bot:phase6a2` Docker build, sanitized dry/write runtime proofs, `/health` validation, and memory measurement. Both providers must parse fixture-based single and multiple jobs and complete normal-pipeline integration before Phase 6A2 is done.
+
+Commit Phase 6A2 separately as `feat: ingest LinkedIn and Indeed job-alert emails` and stop for review before Phase 6B.
+
+---
+
+## Phase 6B — Remaining provider alert parsers
+
+**Status:** Not started
+
+Reuse Phase 6A infrastructure without changing shared routing, storage, identity, checkpoint, dry-run, locking, source scheduling, or delivery semantics. Implement and review providers in this exact order:
+
+1. StepStone — `stepstone_alert`
+2. JOIN — `join_alert`
+3. BerlinStartupJobs — `berlinstartupjobs_alert`
+4. freelancermap — `freelancermap_alert`
+5. GULP — `gulp_alert`
+
+Each provider is an independent fixture-backed review gate and focused commit. Require sanitized user-owned structural samples before its parser begins; do not require all five in one commit or infer templates from memory.
+
+For every provider:
+
+- Add only its provider-specific match/parse/canonicalization module and sanitized fixtures.
+- Reuse provider-native ID → canonical URL → content-hash identity, normal `Job` normalization, one-sync company cap, parser health, dry-run, checkpoint, retry, cleanup, job-ingestion, delivery, and cross-source dedup contracts.
+- Cover non-alert mail, one/multiple/duplicate/malformed/missing/unsafe/tracking cases and all shared bounds.
+- Perform no page fetch, browser automation, attachment processing, script execution, or arbitrary redirect resolution.
+- Preserve the existing manual-only StepStone adapter and all Phase 5 source-admission/scheduling decisions.
+- Run focused/full tests, Docker, bounded dry/write runtime proof, `/health`, and memory verification before marking that provider complete.
+
+Phase 6 is complete only after all admitted Phase 6B provider gates pass. Phase 7 remains separate and must not start in a Phase 6 implementation run.
 
 ---
 
@@ -2264,10 +2551,26 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - No production source, catalog, scheduler, configuration, database schema, dependency, fixture, or test file changed. Group C membership remains empty and its scheduler job remains absent. Every candidate remains manually runnable for bounded diagnostics.
   - Known limitations: live feeds and provider latency remain volatile; no seven-day production yield comparison exists for manual-only candidates; GoodJobs parser drift, candidate component-outcome gaps, Tech Jobs for Good access, and StepStone remain deliberately unrepaired. Phase 6 was not started.
 
-## Phase 6
+## Phase 6A1
 
 - Status: Not started
 - Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 6A2
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
+
+## Phase 6B
+
+- Status: Not started
+- Commits:
 - Tests:
 - Peak memory:
 - Notes:
