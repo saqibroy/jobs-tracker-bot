@@ -1547,19 +1547,20 @@ For every candidate record live status, raw, hard-eligible pre-cap, final accept
 
 # Phase 6 — Job-alert email ingestion
 
-**Status:** In progress — Phase 6A1 completed; Phase 6A2 and Phase 6B not started
+**Status:** In progress — Phase 6A1 and Phase 6A2 completed; Phase 6A3 and Phase 6B not started
 
 ## Objective
 
-Increase coverage from platforms that are difficult or inappropriate to scrape by parsing bounded job-alert email content through the existing read-only Zoho integration. Keep application/recruiter history behavior intact, pass alert-derived jobs through the normal hard-eligibility/scoring/deduplication/delivery path, and remain safe under the 512 MiB production limit.
+Increase coverage from platforms that are difficult or inappropriate to scrape by parsing bounded job-alert email content through read-only Zoho and Gmail transports. Keep application/recruiter history behavior intact, pass alert-derived jobs through the normal hard-eligibility/scoring/deduplication/delivery path, and remain safe under the 512 MiB production limit.
 
-Phase 6 is split into two review gates for the foundation and initial providers, followed by provider-by-provider Phase 6B gates:
+Phase 6 is split into three review gates for the foundation, initial providers, and Gmail transport, followed by provider-by-provider Phase 6B gates:
 
 1. Phase 6A1 — message routing, storage, shared job-ingestion foundation, and safety semantics
 2. Phase 6A2 — LinkedIn and Indeed alert parsers backed by sanitized user-owned fixtures
-3. Phase 6B — StepStone, JOIN, BerlinStartupJobs, freelancermap, and GULP in that order
+3. Phase 6A3 — Gmail read-only job-alert transport
+4. Phase 6B — StepStone, JOIN, BerlinStartupJobs, freelancermap, and GULP in that order
 
-Stop for review after Phase 6A1 and again after Phase 6A2. Do not begin Phase 6B in the Phase 6A2 implementation run.
+Stop for review after Phase 6A1, Phase 6A2, and Phase 6A3. Do not begin Phase 6B in the Phase 6A3 implementation run.
 
 ## Verified pre-Phase-6 Zoho lifecycle
 
@@ -1874,11 +1875,93 @@ Commit Phase 6A2 separately as `feat: ingest LinkedIn and Indeed job-alert email
 
 ---
 
+## Phase 6A3 — Gmail read-only job-alert transport
+
+**Status:** Not started
+
+### Architecture and shared mail-processing boundary
+
+Add Gmail as a mail transport only. Indeed alerts currently stored in Gmail and future StepStone alerts must enter the existing Phase 6 routing, provider-parser, alert-item, normal-job ingestion, filtering/scoring, deduplication, and notification path without duplicating any of that behavior. LinkedIn alerts in Zoho remain unchanged.
+
+Keep the established Zoho message and checkpoint tables. Add focused Gmail message/checkpoint state and extract only the smallest post-fetch mail-processing service from `ZohoMailIngestionWorker` so both workers normalize into and process the same bounded mail representation:
+
+- transport and stable non-secret mailbox key
+- transport-native message ID and bounded folder/label metadata
+- subject, sender, summary/snippet, and authoritative received time
+- the existing `MailMessageMetadata` and `BoundedMailContent` contracts used by routing and provider parsers
+
+The shared service owns the existing likely-job check, intent routing, alert-provider selection, 14-day alert-candidate rule, parser execution, processing-version semantics, alert-item persistence/replay, provider health, and construction of one bounded `JobIngestionCandidate` batch. Transport workers retain API paging, content retrieval, transport-specific message/checkpoint persistence, and final checkpoint decisions. Zoho retains its existing application/recruitment persistence callback; Phase 6A3 does not expand Gmail into a second application-history source. Gmail messages routed as non-alert mail are handled deterministically without fabricating alert jobs or duplicating application extraction.
+
+Do not import `main.py` into mail integrations and do not add a generic plugin framework. Prefer the existing async HTTP and OAuth-capable standard-library primitives; add no production dependency unless implementation proves the current packages insufficient.
+
+### Cross-mailbox identity and state
+
+Keep `(provider, identity_key)` in `email_job_alert_items` as the global alert-item identity, using the existing provider-native ID → canonical URL → normalized content-hash order. Keep the jobs table's URL ID/content-hash deduplication and delivery receipts as the final authorities across mail and direct sources.
+
+Add an idempotent mailbox occurrence relation keyed by `(transport, mailbox_key, message_id, provider, identity_key)`. Backfill existing alert-item account/message provenance as `zoho` occurrences during migration, without changing existing alert-item identities or terminal results. Use occurrences rather than the alert item's single latest origin when finding pending work and deciding whether a Gmail or Zoho message is fully handled. This must preserve replay if the same pending alert is seen through both mailboxes and ensure a Gmail/Zoho duplicate produces at most one stored `Job` and one receipt-driven notification obligation.
+
+Add focused, idempotently migrated Gmail state rather than putting Gmail IDs in `zoho_mail_messages` or `zoho_mail_sync_state`:
+
+- `gmail_mail_messages`, keyed by mailbox key and Gmail message ID, stores bounded metadata, first/last seen time, likely-job state, processed state, processing version, route/provider, and bounded result/reason.
+- `gmail_mail_sync_state`, keyed by mailbox key, stores the active scope fingerprint, last successful sync time, and bounded update metadata.
+- Compute the scope fingerprint from at least the stable mailbox identity, sorted configured Gmail label IDs, and the exact configured Gmail query. If it differs from stored state, ignore the old checkpoint and start a fresh bounded scope using the 14-day first-run safety rule; persist the new fingerprint/checkpoint only after a successful write-mode sync.
+
+For an established scope, derive the overlap boundary from the last successful checkpoint minus the configured overlap, defaulting to the existing 48 hours. Add `after:<epoch-seconds>` to the configured Gmail query and paginate the complete bounded query using every returned `nextPageToken`. Do not assume list order and do not stop pagination because an individual message is older than the boundary. Use Gmail `internalDate`, not a `Date` header or list position, as authoritative received time. A missing/invalid `internalDate` follows the existing missing-date alert safety behavior.
+
+Advance the Gmail checkpoint only after every in-scope message reaches deterministic completion and all pending alert items reach a normal terminal result. A fetch, MIME, parser, database, normal-job pipeline, backlog, or unexpected processing failure leaves it unchanged. Reuse current-version message skipping, bounded overlap/replay, the 500-item sync limit, 90-day processed-item cleanup, job-ingestion lease, and delivery lease. Fetching and parsing remain outside those leases.
+
+### Gmail API and bounded MIME handling
+
+Use the official Gmail REST API with `userId=me`. Apply configurable Gmail label IDs and exact query scope to `users.messages.list`, use a bounded page size, and follow all page tokens. For each returned ID, perform one `users.messages.get(format=full)` processing lifecycle that supplies headers, `internalDate`, and the MIME tree. Stream processing and release response/body data promptly; do not retain an unbounded page or mailbox result set.
+
+Walk nested MIME parts with a single aggregate decoded-content budget of 512 KiB per message:
+
+- Accept only body-like `text/plain` and `text/html` parts. Normalize HTML/text through the existing bounded mail-content builder and retain the existing link/body/item limits.
+- Decode inline `body.data` locally. Gmail may externalize a body-like text part behind `attachmentId`; permit `users.messages.attachments.get` only when the MIME type is `text/plain` or `text/html`, filename is empty, `Content-Disposition` is not `attachment`, and the declared size fits the remaining content budget.
+- Count any permitted externalized text-body retrieval inside the same one bounded full-message processing lifecycle. Reject or truncate further body parts when the aggregate budget is exhausted.
+- Never fetch a part with a filename, attachment disposition, non-text MIME type, or declared size above the remaining budget. Never fetch images, PDFs, documents, archives, or other user attachments.
+- Never load remote images/content, follow body links, execute scripts, or make parser-triggered provider requests.
+
+The Gmail client exposes no mailbox mutation operation. Never mark messages read, modify labels, delete/trash messages, create drafts, or send mail.
+
+### OAuth, configuration, dry-run, and scheduling
+
+Use installed-app OAuth with offline access and exactly `https://www.googleapis.com/auth/gmail.readonly`. Document enabling the Gmail API, creating the OAuth client/consent configuration, authorizing the intended personal mailbox outside the headless server, and securely transferring the refresh-token cache. `gmail.readonly` is a restricted scope: an external app left in Testing may receive refresh tokens that expire after seven days. Document the durable personal-use setup, unverified-app/user-cap behavior, and that Google verification and restricted-scope security requirements depend on the app's publishing, user, storage, and distribution model; do not claim they categorically never apply.
+
+Keep OAuth client secrets and tokens under untracked private storage with restrictive permissions and never print or log them. Use an explicit cache-write policy before refresh:
+
+- `python main.py --gmail-sync --dry-run` is the strong read-only diagnostic.
+- `python main.py --gmail-sync` is normal sync: Gmail remains API-read-only, while refreshed OAuth tokens and local processing state may be persisted.
+- Dry-run may read a valid token or refresh an expired token in memory, but it must leave existing token-cache bytes, SHA-256, and nanosecond mtime unchanged; an absent cache remains absent. It must not initialize/migrate SQLite or write message state, occurrences, alert items, parser health, checkpoints, jobs, receipts, metrics, notifications, or discovery data.
+- Normal sync persists refreshed tokens atomically and securely only after the effective write policy is known. Revoked, expired, under-scoped, or otherwise unusable refresh tokens fail with bounded non-secret diagnostics.
+
+Add disabled-by-default Gmail settings for the stable mailbox key, label IDs, exact query, page size, sync interval, overlap hours, OAuth client/token paths, scheduled dry-run policy, and enable flag. Require a bounded label/query scope rather than silently scanning the whole mailbox.
+
+Register Gmail as an independent mail interval job using the existing Zoho scheduling pattern where practical, with a stable `gmail_mail_sync` ID, its own overlap protection, `max_instances=1`, coalescing, and bounded failure logging. Gmail is not a Group A/B/C source, does not acquire the production source coordinator, and does not use the Phase 5 source HTTP budget or `source_scan_runs`. Only the final shared Job ingestion and immediate-delivery stages acquire their existing leases. Group A/B membership, cadence, offsets, readiness, and `/health` contracts remain unchanged.
+
+### Phase 6A3 tests and verification
+
+Automated tests use mocked Gmail/OAuth/provider/notifier HTTP only; no test calls live Gmail. Cover at least:
+
+- complete pagination independent of message order, `after:<epoch-seconds>` composition, `internalDate`, checkpoint/48-hour replay, scope-fingerprint match/mismatch, first-run safety, and failure/backlog checkpoint blocking
+- nested multipart HTML/text selection, base64url decoding, aggregate size/link bounds, permitted externalized text-body retrieval, and refusal to fetch filenames, attachment dispositions, images, PDFs, files, oversized parts, or remote content
+- absence of every Gmail mutation request, strong dry-run write freedom, valid/expired/absent OAuth cache immutability, normal secure token persistence, and bounded auth failures
+- current processing-version skip/replay, the same Indeed alert repeated in Gmail, Gmail plus direct-source URL/content duplicates, Gmail plus Zoho duplicates, pending cross-mailbox replay, and one Job/notification result
+- unchanged LinkedIn/Indeed parser registration and behavior, provider health, 14-day rule, alert-item identity, jobs-table dedup, company cap, eligibility/filtering/scoring, ingestion/delivery leases, and receipts
+- independent Gmail scheduling with unchanged Group A/B membership, offsets, source coordinator, source HTTP budget, `source_scan_runs`, readiness, and compact `/health`
+- repeated migrations/backfill, Gmail state cleanup, bounded error storage, cancellation/failure release, and representative memory below 430 MiB
+
+Run focused Gmail/mail-processing/storage/replay/scheduler tests, `python -m pytest tests/v2 -q`, `python -m pytest -q --timeout=30`, the historical diagnostic, a `job-bot:phase6a3` Docker build, mocked dry/write runtime proofs, `/health`, scheduler/source-group validation, and representative memory measurement. Record files, tests, results, memory, limitations, and the next Phase 6B recommendation.
+
+Commit Phase 6A3 separately as `feat: add Gmail job-alert transport` and stop for review before Phase 6B.
+
+---
+
 ## Phase 6B — Remaining provider alert parsers
 
 **Status:** Not started
 
-Reuse Phase 6A infrastructure without changing shared routing, storage, identity, checkpoint, dry-run, locking, source scheduling, or delivery semantics. Implement and review providers in this exact order:
+Reuse Phase 6A infrastructure through either configured read-only mail transport without changing shared routing, storage, identity, checkpoint, dry-run, locking, source scheduling, or delivery semantics. Implement and review providers in this exact order:
 
 1. StepStone — `stepstone_alert`
 2. JOIN — `join_alert`
@@ -2597,6 +2680,14 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Tests cover single/multiple/duplicate/malformed/missing-field/unsafe/tracking/direct-ATS/item-bound cases, German hybrid evidence, explicit/missing posted time, stable provider identity, production registration, provider source attribution, strong dry-run behavior, and LinkedIn source-first/alert-first URL and content dedup. Existing eligibility, employment, language, scoring, company-cap, notification, storage, replay, and receipt gates remain green.
   - Final image: `job-bot:phase6a2`, `sha256:7d7ad225c82faa75004c0a721120e91501b6efbe8e025911d35cb95a3e0cd124`. The isolated service used temporary data/log mounts, no project `.env`, disabled Zoho and notification sends, loopback-only health, and a 512 MiB limit. `/health` returned `status=ok`, `ready=true`, zero tracked jobs, and the unchanged compact contract. The dry scan fetched 175 healthy Arbeitnow jobs and wrote nothing.
   - Known limitations: wrapper decoding intentionally supports only the sanitized fixture-proven offline JSON structure; provider email template changes may require new sanitized fixtures. There is no network fallback, Gmail ingestion, StepStone alert parser, authenticated provider automation, or page fetch. Phase 6B and Phase 7 remain Not started.
+
+## Phase 6A3
+
+- Status: Not started
+- Commit:
+- Tests:
+- Peak memory:
+- Notes:
 
 ## Phase 6B
 
