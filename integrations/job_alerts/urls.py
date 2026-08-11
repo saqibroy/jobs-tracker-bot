@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import base64
+import binascii
+import json
+import re
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 MAX_URL_LENGTH = 1_000
 MAX_WRAPPER_LAYERS = 3
@@ -20,7 +26,22 @@ _TRACKING_KEYS = {
     "tracking",
     "trackingid",
     "trk",
+    "trkemail",
+    "eid",
+    "lipi",
+    "midtoken",
+    "midsig",
+    "otptoken",
 }
+
+_LINKEDIN_JOB_PATH_RE = re.compile(r"/(?:comm/)?jobs/view/(\d+)(?:/|$)")
+_INDEED_KEY_RE = re.compile(r"[A-Za-z0-9_-]{6,100}")
+
+
+@dataclass(frozen=True, slots=True)
+class IndeedJobLink:
+    provider_item_id: str
+    canonical_url: str
 
 
 def normalize_alert_url(
@@ -117,3 +138,104 @@ def alert_identity_key(
     if normalized:
         return f"url:{normalized}", content_hash
     return f"hash:{content_hash}", content_hash
+
+
+def canonicalize_linkedin_job_url(value: object) -> tuple[str, str] | None:
+    """Return the stable numeric LinkedIn identity and public jobs URL."""
+
+    normalized = normalize_alert_url(value)
+    if normalized is None:
+        return None
+    parsed = urlsplit(normalized)
+    host = (parsed.hostname or "").lower()
+    if host != "linkedin.com" and not host.endswith(".linkedin.com"):
+        return None
+    match = _LINKEDIN_JOB_PATH_RE.search(parsed.path)
+    if match is None:
+        return None
+    job_id = match.group(1)
+    return job_id, f"https://www.linkedin.com/jobs/view/{job_id}"
+
+
+def canonicalize_indeed_job_url(value: object) -> IndeedJobLink | None:
+    """Resolve a fixture-proven Indeed URL locally; never perform I/O."""
+
+    normalized = normalize_alert_url(value)
+    if normalized is None:
+        return None
+    parsed = urlsplit(normalized)
+    host = (parsed.hostname or "").lower()
+    if host == "cts.indeed.com" and parsed.path.startswith("/v3/"):
+        return _decode_indeed_v3_wrapper(parsed.path.removeprefix("/v3/"))
+    if host != "indeed.com" and not host.endswith(".indeed.com"):
+        return None
+    if parsed.path.rstrip("/") != "/viewjob":
+        return None
+    query = dict(parse_qsl(parsed.query, keep_blank_values=False))
+    return _indeed_job_link(query.get("jk", ""))
+
+
+def _decode_indeed_v3_wrapper(encoded_payload: str) -> IndeedJobLink | None:
+    """Decode only the sanitized-sample base64url JSON wrapper structure."""
+
+    encoded = unquote(encoded_payload).strip()
+    if not encoded or len(encoded) > MAX_URL_LENGTH:
+        return None
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        raw = base64.urlsafe_b64decode(encoded + padding)
+        if len(raw) > MAX_URL_LENGTH:
+            return None
+        payload = json.loads(raw.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    target = _find_payload_string(
+        payload,
+        ("url", "jobUrl", "targetUrl", "redirectUrl"),
+    )
+    target_key = ""
+    if target:
+        normalized_target = normalize_alert_url(target)
+        if normalized_target is None:
+            return None
+        target_parts = urlsplit(normalized_target)
+        target_host = (target_parts.hostname or "").lower()
+        if target_host != "indeed.com" and not target_host.endswith(".indeed.com"):
+            return None
+        if target_parts.path.rstrip("/") != "/viewjob":
+            return None
+        target_key = dict(parse_qsl(target_parts.query)).get("jk", "")
+
+    stable_key = target_key or _find_payload_string(
+        payload,
+        ("jk", "aggJobId", "jobKey"),
+    )
+    return _indeed_job_link(stable_key)
+
+
+def _find_payload_string(payload: Any, keys: tuple[str, ...]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for value in payload.values():
+        if isinstance(value, dict):
+            found = _find_payload_string(value, keys)
+            if found:
+                return found
+    return ""
+
+
+def _indeed_job_link(job_key: str) -> IndeedJobLink | None:
+    key = job_key.strip()
+    if _INDEED_KEY_RE.fullmatch(key) is None:
+        return None
+    return IndeedJobLink(
+        provider_item_id=key,
+        canonical_url=f"https://de.indeed.com/viewjob?jk={key}",
+    )

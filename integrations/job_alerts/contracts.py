@@ -19,6 +19,7 @@ MAX_COMPANY = 160
 MAX_LOCATION = 200
 MAX_URL = 1_000
 MAX_SUMMARY = 1_000
+MAX_SALARY = 200
 MAX_EVIDENCE = 8
 MAX_EVIDENCE_LENGTH = 120
 MAX_ISSUES = 10
@@ -157,6 +158,7 @@ class JobAlertItem:
     eligible_countries: tuple[str, ...] = ()
     eligible_regions: tuple[str, ...] = ()
     employment_text: str = ""
+    salary: str = ""
     summary: str = ""
     confidence: int = 0
     evidence: tuple[str, ...] = ()
@@ -193,6 +195,7 @@ class JobAlertItem:
             tuple(bounded_text(value, 80).lower() for value in self.eligible_regions[:20]),
         )
         object.__setattr__(self, "employment_text", bounded_text(self.employment_text, 500))
+        object.__setattr__(self, "salary", bounded_text(self.salary, MAX_SALARY))
         object.__setattr__(self, "summary", bounded_text(self.summary, MAX_SUMMARY))
         object.__setattr__(self, "confidence", max(0, min(100, int(self.confidence))))
         object.__setattr__(

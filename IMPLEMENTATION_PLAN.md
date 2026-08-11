@@ -1816,7 +1816,7 @@ python main.py --zoho-sync --dry-run
 
 ## Phase 6A2 — LinkedIn and Indeed alert parsers
 
-**Status:** Not started
+**Status:** Completed on 2026-08-11
 
 ### Authoritative fixtures and privacy
 
@@ -2578,11 +2578,25 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 6A2
 
-- Status: Not started
-- Commit:
+- Status: Completed on 2026-08-11
+- Commit: `feat: ingest LinkedIn and Indeed job-alert emails` (this Phase 6A2 commit)
 - Tests:
+  - Focused provider/routing/storage/replay/cross-path gate in the final 512 MiB image: `python -m pytest tests/v2/test_phase6a2_provider_alerts.py tests/v2/test_phase6a1_alert_foundation.py tests/v2/test_phase6a1_replay_concurrency.py -q` — 62 passed in 2.94 seconds.
+  - Blocking v2: `python -m pytest tests/v2 -q` — 489 passed and one third-party `audioop` deprecation warning.
+  - CI-equivalent: `python -m pytest -q --timeout=30` — 489 passed and the same warning.
+  - Historical diagnostic: `python -m pytest tests -q --timeout=30 --tb=no` — 1,366 passed, exactly the recorded 104 failures, and 11 warnings in 12.82 seconds. A Phase 6A1-image JUnit comparison of historical failing node IDs found zero additions and zero omissions.
 - Peak memory:
+  - The bounded sanitized/fake Zoho parser, write-ingestion, replay, and cross-path workload used 135,614,464 bytes (129.3 MiB) / 512 MiB cgroup peak.
+  - The isolated ready service peaked at 61,034,496 bytes (58.2 MiB); the representative Arbeitnow dry scan peaked at 65,069,056 bytes (62.1 MiB). All measurements remain below the 430 MiB target.
 - Notes:
+  - Added registered offline LinkedIn and Indeed parsers using sanitized user-owned structural fixtures plus synthetic edge variants. Fixtures contain fake numeric IDs, synthetic Indeed keys/tokens, `Test User`, and no raw mailbox messages, screenshots, personal addresses, account/profile IDs, or real tracking values.
+  - LinkedIn detection requires the structurally equivalent job-alert sender, body heading, footer, and LinkedIn job link; the subject may be job-specific. Repeated cards preserve required title/company/location, optional salary/summary/employment/workplace evidence and explicit provider timestamp, while missing timestamps remain `None`. Numeric identity canonicalizes to `https://www.linkedin.com/jobs/view/{id}` with tracking/session parameters discarded.
+  - Indeed detection supports the German single-recommendation structure with `Job anzeigen` / `Passt nicht`, plus bounded multiple-card variants. Fixture-proven `cts.indeed.com/v3/` base64url JSON wrappers decode locally, require a safe Indeed target and stable `jk`/`aggJobId`-style identity, and canonicalize to `https://de.indeed.com/viewjob?jk={key}`. Malformed or unsafe wrappers produce bounded parser issues without network resolution or invented IDs.
+  - Clearly associated employer/ATS links remain the normal `Job.url` while provider identity and canonical provider URL stay separate. Normalized source labels are `linkedin_alert` and `indeed_alert`, with compact presentation icons; neither provider was added to the source catalog, source groups, HTTP budget, scheduler, or `source_scan_runs`.
+  - Positive fixture mail creates no application or review rows. The LinkedIn “land a job faster” / hiring-manager recommendation structure is rejected, unrelated mail stays unknown, and application, rejection, interview, and recruiter lifecycle routing retains application-first precedence.
+  - Tests cover single/multiple/duplicate/malformed/missing-field/unsafe/tracking/direct-ATS/item-bound cases, German hybrid evidence, explicit/missing posted time, stable provider identity, production registration, provider source attribution, strong dry-run behavior, and LinkedIn source-first/alert-first URL and content dedup. Existing eligibility, employment, language, scoring, company-cap, notification, storage, replay, and receipt gates remain green.
+  - Final image: `job-bot:phase6a2`, `sha256:7d7ad225c82faa75004c0a721120e91501b6efbe8e025911d35cb95a3e0cd124`. The isolated service used temporary data/log mounts, no project `.env`, disabled Zoho and notification sends, loopback-only health, and a 512 MiB limit. `/health` returned `status=ok`, `ready=true`, zero tracked jobs, and the unchanged compact contract. The dry scan fetched 175 healthy Arbeitnow jobs and wrote nothing.
+  - Known limitations: wrapper decoding intentionally supports only the sanitized fixture-proven offline JSON structure; provider email template changes may require new sanitized fixtures. There is no network fallback, Gmail ingestion, StepStone alert parser, authenticated provider automation, or page fetch. Phase 6B and Phase 7 remain Not started.
 
 ## Phase 6B
 

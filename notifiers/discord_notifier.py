@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from discord_webhook import AsyncDiscordWebhook, DiscordEmbed
 from loguru import logger
@@ -40,6 +40,8 @@ _SOURCE_ICONS: dict[str, str] = {
     "goodjobs": "🟢",
     "devex": "🔴",
     "linkedin": "🔷",
+    "linkedin_alert": "🔷",
+    "indeed_alert": "🟦",
     "stepstone": "🟦",
     "greenhouse": "🟩",
     "ashby": "🟨",

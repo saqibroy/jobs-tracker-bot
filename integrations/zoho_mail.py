@@ -102,6 +102,10 @@ ATS_HINT_KEYWORDS = {
     "workdayjobs.com",
     "successfactors",
 }
+ALERT_SENDER_HINTS = {
+    "jobalerts-noreply@linkedin.com",
+    "donotreply@match.indeed.com",
+}
 @dataclass(frozen=True)
 class ZohoAccount:
     account_id: str
@@ -544,6 +548,8 @@ def is_likely_job_email(message: ZohoMessageSummary) -> bool:
         [message.subject, message.sender, message.summary, " ".join(message.links)]
     ).lower()
     if any(hint in text for hint in ATS_HINT_KEYWORDS):
+        return True
+    if any(sender in message.sender.lower() for sender in ALERT_SENDER_HINTS):
         return True
     return any(
         re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in JOB_EMAIL_KEYWORDS

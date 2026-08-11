@@ -207,10 +207,13 @@ def registry(parser: SyntheticAlertParser | None = None) -> AlertParserRegistry:
     return AlertParserRegistry((parser or SyntheticAlertParser(),))
 
 
-def test_production_registry_is_empty_and_no_provider_parser_exists() -> None:
-    assert AlertParserRegistry().parsers == ()
-    assert not Path("integrations/job_alerts/linkedin.py").exists()
-    assert not Path("integrations/job_alerts/indeed.py").exists()
+def test_production_registry_contains_phase6a2_providers() -> None:
+    assert tuple(parser.provider for parser in AlertParserRegistry().parsers) == (
+        "linkedin",
+        "indeed",
+    )
+    assert Path("integrations/job_alerts/linkedin.py").is_file()
+    assert Path("integrations/job_alerts/indeed.py").is_file()
 
 
 def test_routing_precedence_and_all_three_intents() -> None:

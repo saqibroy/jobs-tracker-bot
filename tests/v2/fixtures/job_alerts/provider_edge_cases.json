@@ -1,0 +1,15 @@
+{
+  "privacy": "All values are synthetic variants derived from sanitized user-owned structures.",
+  "linkedin": {
+    "single_job_id": "900000010",
+    "duplicate_job_id": "900000010",
+    "unsafe_url": "javascript:alert(1)",
+    "missing_field": "company"
+  },
+  "indeed": {
+    "single_job_key": "SYNTHETIC_JK_010",
+    "malformed_wrapper": "https://cts.indeed.com/v3/NOT_BASE64_JSON",
+    "unsafe_url": "data:text/plain,not-a-job",
+    "missing_field": "location"
+  }
+}

@@ -226,11 +226,20 @@ own SQLite tables; supported alert items use the same eligibility, scoring,
 deduplication, persistence, and delivery path as normal source jobs. The worker
 does not fetch attachments or remote content.
 
-Phase 6A1 provides the bounded routing, storage, replay, dry-run, and concurrency
-foundation only. No production job-alert parser is registered yet: LinkedIn,
-Indeed, and other alert mail is durably classified as unknown rather than
-fabricating application records or jobs. Provider support begins separately in
-Phase 6A2 after sanitized user-owned fixtures are available.
+The bounded routing, storage, replay, dry-run, and concurrency foundation has
+offline parsers for LinkedIn job-alert digests and Indeed job recommendations.
+They recognize provider sender and body structure, extract only card-local
+evidence, canonicalize stable provider job identities without following links,
+and attribute resulting jobs as `linkedin_alert` or `indeed_alert`. Other alert
+mail remains unknown rather than fabricating application records or jobs.
+
+For useful coverage, configure LinkedIn alerts for the target role/location and
+leave their normal job-alert emails enabled. On Indeed, enable matching job
+recommendations; German-language single-job recommendations are supported.
+Keep the original HTML message structure intact—forwarded or rewritten mail may
+not retain the provider evidence required for safe parsing. The parsers never
+fetch LinkedIn or Indeed pages and do not resolve tracking links over the
+network.
 
 Use read-only OAuth scopes only:
 

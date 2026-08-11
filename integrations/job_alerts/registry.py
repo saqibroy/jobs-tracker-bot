@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from integrations.job_alerts.contracts import (
     AlertMatch,
@@ -12,9 +12,17 @@ from integrations.job_alerts.contracts import (
 )
 
 
+def _production_parsers() -> tuple[AlertParser, ...]:
+    # Local imports keep the provider modules independent of registry wiring.
+    from integrations.job_alerts.indeed import IndeedAlertParser
+    from integrations.job_alerts.linkedin import LinkedInAlertParser
+
+    return (LinkedInAlertParser(), IndeedAlertParser())
+
+
 @dataclass(frozen=True, slots=True)
 class AlertParserRegistry:
-    parsers: tuple[AlertParser, ...] = ()
+    parsers: tuple[AlertParser, ...] = field(default_factory=_production_parsers)
 
     def match(
         self,
