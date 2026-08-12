@@ -1547,20 +1547,20 @@ For every candidate record live status, raw, hard-eligible pre-cap, final accept
 
 # Phase 6 — Job-alert email ingestion
 
-**Status:** In progress — Phase 6A1, Phase 6A2, and Phase 6A3 completed; Phase 6B not started
+**Status:** Completed — Zoho and Gmail transports plus LinkedIn, Indeed, and StepStone production alert providers are complete
 
 ## Objective
 
 Increase coverage from platforms that are difficult or inappropriate to scrape by parsing bounded job-alert email content through read-only Zoho and Gmail transports. Keep application/recruiter history behavior intact, pass alert-derived jobs through the normal hard-eligibility/scoring/deduplication/delivery path, and remain safe under the 512 MiB production limit.
 
-Phase 6 is split into three review gates for the foundation, initial providers, and Gmail transport, followed by provider-by-provider Phase 6B gates:
+Phase 6 was delivered through three review gates for the foundation, initial providers, and Gmail transport, followed by the admitted StepStone provider gate:
 
 1. Phase 6A1 — message routing, storage, shared job-ingestion foundation, and safety semantics
 2. Phase 6A2 — LinkedIn and Indeed alert parsers backed by sanitized user-owned fixtures
 3. Phase 6A3 — Gmail read-only job-alert transport
-4. Phase 6B — StepStone, JOIN, BerlinStartupJobs, freelancermap, and GULP in that order
+4. Phase 6B — StepStone alert parser
 
-Stop for review after Phase 6A1, Phase 6A2, and Phase 6A3. Do not begin Phase 6B in the Phase 6A3 implementation run.
+The final supported production alert providers are exactly LinkedIn, Indeed, and StepStone. Zoho transport, Gmail transport, and all three provider parsers are completed. The previously planned JOIN, BerlinStartupJobs, freelancermap, and GULP email-parser gates were deliberately closed and not admitted because authoritative/useful alert-mail coverage is unavailable or not needed. Existing JOIN application/recruitment handling remains unchanged and is not job-alert support.
 
 ## Verified pre-Phase-6 Zoho lifecycle
 
@@ -1957,38 +1957,21 @@ Commit Phase 6A3 separately as `feat: add Gmail job-alert transport` and stop fo
 
 ---
 
-## Phase 6B — Remaining provider alert parsers
+## Phase 6B — Provider alert-parser closure
 
-**Status:** In progress — StepStone completed; remaining providers not started
+**Status:** Completed — StepStone admitted and completed; remaining proposed provider gates closed without implementation
 
-Provider gates:
+Final provider decisions:
 
 - StepStone — `stepstone_alert`: **Completed**
-- JOIN — `join_alert`: **Not started**
-- BerlinStartupJobs — `berlinstartupjobs_alert`: **Not started**
-- freelancermap — `freelancermap_alert`: **Not started**
-- GULP — `gulp_alert`: **Not started**
+- JOIN — email alert gate **Closed / not admitted**
+- BerlinStartupJobs — email alert gate **Closed / not admitted**
+- freelancermap — email alert gate **Closed / not admitted**
+- GULP — email alert gate **Closed / not admitted**
 
-Reuse Phase 6A infrastructure through either configured read-only mail transport without changing shared routing, storage, identity, checkpoint, dry-run, locking, source scheduling, or delivery semantics. Implement and review providers in this exact order:
+The closed gates are not implementations and must not be described as email support. They were deliberately not admitted because authoritative/useful alert-mail coverage is unavailable or not needed. JOIN's existing application/recruitment handling remains unchanged and is outside job-alert support. Preserve the completed StepStone parser, its fixtures/tests, and all historical Phase 6 implementation evidence.
 
-1. StepStone — `stepstone_alert`
-2. JOIN — `join_alert`
-3. BerlinStartupJobs — `berlinstartupjobs_alert`
-4. freelancermap — `freelancermap_alert`
-5. GULP — `gulp_alert`
-
-Each provider is an independent fixture-backed review gate and focused commit. Require sanitized user-owned structural samples before its parser begins; do not require all five in one commit or infer templates from memory.
-
-For every provider:
-
-- Add only its provider-specific match/parse/canonicalization module and sanitized fixtures.
-- Reuse provider-native ID → canonical URL → content-hash identity, normal `Job` normalization, one-sync company cap, parser health, dry-run, checkpoint, retry, cleanup, job-ingestion, delivery, and cross-source dedup contracts.
-- Cover non-alert mail, one/multiple/duplicate/malformed/missing/unsafe/tracking cases and all shared bounds.
-- Perform no page fetch, browser automation, attachment processing, script execution, or arbitrary redirect resolution.
-- Preserve the existing manual-only StepStone adapter and all Phase 5 source-admission/scheduling decisions.
-- Run focused/full tests, Docker, bounded dry/write runtime proof, `/health`, and memory verification before marking that provider complete.
-
-Phase 6 is complete only after all admitted Phase 6B provider gates pass. Phase 7 remains separate and must not start in a Phase 6 implementation run.
+Phase 6 is complete. Further platform coverage belongs to Phase 7 direct/public lightweight source admission, not additional email parsing.
 
 ---
 
@@ -1996,7 +1979,7 @@ Phase 6 is complete only after all admitted Phase 6B provider gates pass. Phase 
 
 ## Objective
 
-Add only platforms proven to provide unique, relevant roles after the earlier recall improvements.
+Audit and add only direct/public lightweight sources proven technically admissible and able to provide unique, relevant roles after the earlier recall improvements.
 
 ## Candidate order
 
@@ -2004,8 +1987,28 @@ Add only platforms proven to provide unique, relevant roles after the earlier re
 2. GermanTechJobs
 3. BerlinStartupJobs
 4. Impactpool
-5. Wellfound, preferably through alerts
-6. freelancermap, preferably through alerts before direct scraping
+5. Wellfound
+6. freelancermap
+7. JOIN
+8. GULP
+
+No candidate is assumed technically admissible. Every candidate must first undergo a lightweight admission audit before implementation. Preserve the candidate order above unless BerlinStartupJobs is explicitly selected for the next gate; selecting it changes only the next audit target, not the remaining order.
+
+## Next implementation gate
+
+The next technical task after the Phase 6 closure documentation is a direct-source admission audit, not an email parser. The audit must determine:
+
+- public access path
+- API, RSS, JSON-LD, or lightweight HTML availability
+- robots/access constraints where relevant
+- fields available
+- pagination
+- location quality
+- employment data
+- likely unique yield
+- runtime and memory cost
+
+No browser automation is permitted.
 
 ## Source admission checklist
 
@@ -2733,7 +2736,7 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 6B
 
-- Status: In progress — StepStone completed on 2026-08-12; JOIN, BerlinStartupJobs, freelancermap, and GULP remain Not started.
+- Status: Completed on 2026-08-12 — StepStone was admitted and completed; the JOIN, BerlinStartupJobs, freelancermap, and GULP email gates were subsequently closed/not admitted by roadmap decision.
 - Commit: `feat: ingest StepStone job-alert emails` (this StepStone provider-gate commit)
 - Tests:
   - Focused StepStone and Phase 6 mail/provider/replay gate in the existing Python 3.11 Phase 6A3 image: `python -m pytest tests/v2/test_phase6b_stepstone_alerts.py tests/v2/test_phase6a1_alert_foundation.py tests/v2/test_phase6a1_replay_concurrency.py tests/v2/test_phase6a2_provider_alerts.py tests/v2/test_phase6a3_gmail_transport.py -q` — 103 passed in 4.44 seconds.
@@ -2751,7 +2754,7 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Tests prove wrapper-token-independent identity, safe navigation, repeated Gmail occurrence replay, cross-source content dedup in both orders, one stored Job and one receipt-driven immediate obligation, strong dry-run database immutability, unchanged source scheduling/catalog behavior, and no `source_scan_runs` rows.
   - Final aggregate live Gmail strong dry-run with `from:info@jobagent.stepstone.de`: one page, 12 messages seen/full, zero external body fetches or current-version skips, 11 recognized alert messages, 77 valid and zero invalid alert items, 14 pipeline acceptances and 24 rejections after same-sync identity consolidation, no backlog, and `stepstone:parsed`. SQLite and OAuth token-cache bytes, sizes, hashes, and nanosecond mtimes were unchanged; the checkpoint did not advance and no notifications ran.
   - Known limitations: the real evidence exposes no offline native StepStone job ID or safe canonical job URL, so identity intentionally uses explicit content and may change if those fields change. Provider template changes may require a new sanitized structural fixture. There is no wrapper resolution, page fetch, StepStone web request, browser automation, or authenticated provider automation.
-  - Phase 6B is not complete. JOIN is the next provider gate and remains Not started; BerlinStartupJobs, freelancermap, GULP, and Phase 7 also remain Not started.
+  - Roadmap closure decision: Phase 6 production email-alert coverage is exactly LinkedIn, Indeed, and StepStone over the completed Zoho and Gmail transports. JOIN, BerlinStartupJobs, freelancermap, and GULP were not implemented as alert providers because authoritative/useful alert-mail coverage is unavailable or not needed. Existing JOIN application/recruitment handling remains unchanged and is not alert support. The next technical gate is a Phase 7 direct-source admission audit, not an email parser.
 
 ## Phase 7
 
