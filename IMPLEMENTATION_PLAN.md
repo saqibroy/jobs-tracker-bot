@@ -1996,10 +1996,12 @@ No candidate is assumed technically admissible. Every candidate must first under
 
 ## Next implementation gate
 
-BerlinStartupJobs is admitted and implemented as a manual-only source. Its next
-gate is the required seven-day unique-yield comparison before promotion to
-scheduled Group B at the existing 120-minute cadence. No browser automation is
-permitted, and the remaining candidate order is unchanged.
+BerlinStartupJobs is admitted and implemented as a manual-only source. Its
+seven-day unique-yield validation started on 2026-08-12 using the read-only
+`tools/source_yield_probe.py` observation log. Promotion to scheduled Group B
+at the existing 120-minute cadence remains pending; no conclusion may be drawn
+until the seven-day review. No browser automation is permitted, and the
+remaining candidate order is unchanged.
 
 ## Source admission checklist
 
@@ -2750,7 +2752,7 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 7
 
-- Status: In progress — BerlinStartupJobs admitted and implemented as manual-only on 2026-08-12; seven-day default-enable gate pending
+- Status: In progress — BerlinStartupJobs admitted and implemented as manual-only on 2026-08-12; read-only seven-day validation started, default-enable gate pending
 - Commit: `feat: add BerlinStartupJobs source` (this BerlinStartupJobs implementation commit)
 - Tests:
   - Focused adapter/registry gate: `python -m pytest tests/v2/test_berlinstartupjobs_source.py -q` — 12 passed in 0.47 seconds.
@@ -2774,6 +2776,7 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - BerlinStartupJobs is registered as a real explicit/manual source and remains absent from scheduled Groups A, B, and C and from the default scheduled union. The eventual target remains Group B at 120 minutes only after the seven-day comparison demonstrates meaningful unique useful yield.
   - No historical tests, Docker rebuild, `/health` service run, or Phase 5 concurrency experiment was performed, as required for this source-local implementation. The admission decision remains **ADMIT**; default scheduling remains deliberately unapproved.
   - Exact next gate: run the BerlinStartupJobs seven-day unique-yield validation before default Group B scheduling, unless the roadmap explicitly chooses another Phase 7 audit in parallel. The remaining candidate order is unchanged.
+  - **Seven-day yield validation started (2026-08-12) — no conclusion yet.** `tools/source_yield_probe.py` fetches the explicit source, applies the unchanged normal filter pipeline in memory, opens the production jobs database with SQLite `mode=ro`, and appends only bounded hash/score/tier/company observations to ignored `data/validation/berlinstartupjobs.jsonl`. Report mode deduplicates accepted jobs by content hash across observations. BerlinStartupJobs remains manual-only and Group B promotion remains a review gate after seven days.
 
 ## Phase 8
 

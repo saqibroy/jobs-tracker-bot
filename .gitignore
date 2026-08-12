@@ -18,6 +18,7 @@ data/*.db
 data/private/
 data/zoho/
 data/mail/
+data/validation/
 data/discovery/*
 !data/discovery/sniffed_from_jobs.txt
 !data/discovery/zoho_mail_candidates.txt
