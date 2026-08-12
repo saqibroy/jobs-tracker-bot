@@ -60,7 +60,8 @@ def metadata(
     return MailMessageMetadata(
         "account-1",
         message_id,
-        subject=subject or "Senior Frontend Engineer",
+        subject=subject
+        or "Senior Frontend React TypeScript Engineer bei Beispiel Digital GmbH",
         sender="Indeed <donotreply@match.indeed.com>",
         message_date=datetime(2026, 8, 11, tzinfo=timezone.utc),
     )
@@ -241,17 +242,27 @@ def test_indeed_authoritative_german_single_recommendation() -> None:
     assert len(parsed.items) == 1
     item = parsed.items[0]
     assert (item.title, item.company, item.location) == (
-        "Senior Frontend Engineer",
+        "Senior Frontend React TypeScript Engineer",
         "Beispiel Digital GmbH",
         "Berlin",
     )
-    assert item.provider_item_id == "SYNTHETIC_JK_001"
-    assert item.canonical_url == (
-        "https://de.indeed.com/viewjob?jk=SYNTHETIC_JK_001"
-    )
+    assert item.provider_item_id.startswith("content-")
+    assert item.canonical_url.startswith("https://de.indeed.com/jobs?")
+    assert "cts.indeed.com" not in item.canonical_url
+    assert canonicalize_indeed_job_url(item.canonical_url) is None
     assert item.workplace_type == "hybrid"
     assert item.posted_at is None
+    assert item.summary == ""
     assert alert_item_to_job(item).source == "indeed_alert"
+
+    changed_wrappers = fixture("indeed_alert_sanitized.html").replace(
+        "U1lOVEhFVElDX09QQVFVRV9USVRMRQ",
+        "U1lOVEhFVElDX09USEVSX09QQVFVRV9USVRMRQ",
+    )
+    repeated = IndeedAlertParser().parse(
+        metadata("indeed"), build_bounded_mail_content(changed_wrappers)
+    )
+    assert repeated.items[0].provider_item_id == item.provider_item_id
 
 
 def test_indeed_wrapper_decoding_and_canonicalization_are_offline() -> None:
@@ -414,7 +425,10 @@ async def test_worker_routes_realistic_subjects_without_false_application_rows(
         ),
         message(
             "indeed-realistic",
-            subject="Senior Frontend Engineer",
+            subject=(
+                "Senior Frontend React TypeScript Engineer "
+                "bei Beispiel Digital GmbH"
+            ),
             sender="Indeed <donotreply@match.indeed.com>",
         ),
     ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from bs4 import Tag
 
@@ -25,6 +25,7 @@ from integrations.job_alerts.provider_parsing import (
     workplace_evidence,
 )
 from integrations.job_alerts.urls import canonicalize_indeed_job_url
+from integrations.job_alerts.urls import alert_content_hash
 
 _SENDER_RE = re.compile(r"(?:^|<)donotreply@match\.indeed\.com(?:>|$)", re.I)
 _VIEW_RE = re.compile(r"\bjob anzeigen\b", re.I)
@@ -42,6 +43,12 @@ _FIELD_SELECTORS = (
     "[data-company]",
     ".job-location",
     "[data-location]",
+)
+_SUBJECT_RE = re.compile(r"^(?P<title>.+?)\s+bei\s+(?P<company>.+)$", re.I)
+_NON_LOCATION_RE = re.compile(
+    r"\b(job anzeigen|passt nicht|hybrides arbeiten|hybrid|remote|homeoffice|"
+    r"vollzeit|teilzeit|festanstellung|befristet)\b|(?:€|\bEUR\b)",
+    re.I,
 )
 
 
@@ -98,6 +105,15 @@ class IndeedAlertParser:
         for href in content.links:
             if href not in seen_hrefs and _is_indeed_candidate(href):
                 candidates.append((href, soup))
+
+        opaque_item = _opaque_table_recommendation(message, content, soup, candidates)
+        if opaque_item is not None:
+            return JobAlertParseResult(
+                self.provider,
+                AlertParseStatus.PARSED,
+                items=(opaque_item,),
+                examined_count=1,
+            )
 
         items: list[JobAlertItem] = []
         seen_ids: set[str] = set()
@@ -167,6 +183,106 @@ class IndeedAlertParser:
 def _append_issue(issues: list[str], issue: str) -> None:
     if issue not in issues:
         issues.append(issue)
+
+
+def _opaque_table_recommendation(
+    message: MailMessageMetadata,
+    content: BoundedMailContent,
+    soup: Tag,
+    candidates: list[tuple[str, Tag]],
+) -> JobAlertItem | None:
+    """Parse the live German single-card table when its CTS wrapper is opaque."""
+
+    if not candidates or any(
+        canonicalize_indeed_job_url(href) is not None for href, _ in candidates
+    ):
+        return None
+    subject = _SUBJECT_RE.fullmatch(message.subject.strip())
+    if subject is None:
+        return None
+    title = subject.group("title").strip()
+    company = subject.group("company").strip()
+    title_anchor = next(
+        (
+            anchor
+            for anchor in soup.find_all("a", href=True, limit=200)
+            if _is_indeed_candidate(str(anchor.get("href") or ""))
+            and " ".join(anchor.get_text(" ", strip=True).split()).casefold()
+            == title.casefold()
+        ),
+        None,
+    )
+    if title_anchor is None:
+        return None
+    company_element = next(
+        (
+            element
+            for element in soup.find_all(("p", "span", "div"), limit=500)
+            if " ".join(element.get_text(" ", strip=True).split()).casefold()
+            == company.casefold()
+        ),
+        None,
+    )
+    if company_element is None:
+        return None
+    location = _following_location(company_element, title=title, company=company)
+    href = str(title_anchor.get("href") or "")
+    if not location or not _is_indeed_candidate(href):
+        return None
+    workplace_text = "Hybrides Arbeiten" if re.search(
+        r"\bhybrides arbeiten\b", content.cleaned_text, re.I
+    ) else ""
+    workplace, is_remote, remote_scope = workplace_evidence(
+        location, workplace_text
+    )
+    content_identity = alert_content_hash(title, company, location)
+    employment_text = _explicit_employment_text(soup)
+    return JobAlertItem(
+        provider="indeed",
+        provider_item_id=f"content-{content_identity}",
+        title=title,
+        company=company,
+        location=location,
+        canonical_url=_safe_indeed_search_url(title, company, location),
+        account_id=message.account_id,
+        message_id=message.message_id,
+        posted_at=None,
+        workplace_type=workplace,
+        is_remote=is_remote,
+        remote_scope=remote_scope,
+        employment_text=employment_text,
+        confidence=95,
+        evidence=("indeed_table_recommendation", "stable_content_identity"),
+    )
+
+
+def _following_location(element: Tag, *, title: str, company: str) -> str:
+    for candidate in element.find_all_next(("p", "span", "div"), limit=20):
+        value = " ".join(candidate.get_text(" ", strip=True).split())[:200]
+        if (
+            value
+            and value.casefold() not in {title.casefold(), company.casefold()}
+            and _NON_LOCATION_RE.search(value) is None
+        ):
+            return value
+    return ""
+
+
+def _explicit_employment_text(soup: Tag) -> str:
+    pattern = re.compile(
+        r"\b(vollzeit|teilzeit|festanstellung|befristet|freelance|freiberuflich)\b",
+        re.I,
+    )
+    for element in soup.find_all(("p", "li"), limit=500):
+        value = " ".join(element.get_text(" ", strip=True).split())[:500]
+        if pattern.search(value):
+            return value
+    return ""
+
+
+def _safe_indeed_search_url(title: str, company: str, location: str) -> str:
+    query = urlencode({"q": f"{title} {company}"[:300], "l": location[:200]})
+    return f"https://de.indeed.com/jobs?{query}"
 
 
 def _is_indeed_candidate(value: str) -> bool:

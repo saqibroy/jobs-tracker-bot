@@ -44,8 +44,38 @@ from tests.v2.test_phase6a1_alert_foundation import (
     SyntheticAlertParser,
     message as zoho_message,
 )
+from tools.inspect_gmail_indeed import build_safe_report
 
 FIXTURES = Path(__file__).parent / "fixtures" / "job_alerts"
+
+
+@pytest.mark.asyncio
+async def test_indeed_inspector_reports_only_bounded_structure() -> None:
+    private_marker = "private-recipient@example.invalid"
+    tracking_marker = "PERSONALIZED_TRACKING_TOKEN_ABC123"
+    body = (FIXTURES / "indeed_alert_sanitized.html").read_text(encoding="utf-8")
+    body = body.replace(
+        "_wABU1lOVEhFVElDX09QQVFVRV9USVRMRQ",
+        tracking_marker,
+    ) + f"<p>{private_marker}</p>"
+    raw = gmail_message("private-message-id", body)
+    raw["payload"]["headers"].append({"name": "To", "value": private_marker})
+    api = FakeGmailAPI(pages={}, messages={})
+    decoded = await decode_gmail_message(api, raw, "private-message-id")
+    report = build_safe_report(raw, decoded)
+    serialized = json.dumps(report)
+    assert report["cts_indeed_url_count"] == 3
+    assert report["known_cta_present"] == {
+        "Job anzeigen": True,
+        "Passt nicht": True,
+        "Hybrides Arbeiten": True,
+    }
+    assert report["link_host_path_shapes"] == {
+        "cts.indeed.com/v3/{encoded}": 3
+    }
+    assert private_marker not in serialized
+    assert tracking_marker not in serialized
+    assert "private-message-id" not in serialized
 
 
 def _b64(value: str | bytes) -> str:
@@ -58,7 +88,9 @@ def gmail_message(
     body: str,
     *,
     sender: str = "Indeed <donotreply@match.indeed.com>",
-    subject: str = "Senior Frontend Engineer jobs",
+    subject: str = (
+        "Senior Frontend React TypeScript Engineer bei Beispiel Digital GmbH"
+    ),
     received_at: datetime | None = None,
 ) -> dict[str, Any]:
     received_at = received_at or datetime.now(timezone.utc)
@@ -736,7 +768,10 @@ async def test_zoho_pending_item_replayed_by_gmail_is_one_job_and_obligation(
         [
             zoho_message(
                 "zoho-copy",
-                subject="Senior Frontend Engineer",
+                subject=(
+                    "Senior Frontend React TypeScript Engineer "
+                    "bei Beispiel Digital GmbH"
+                ),
                 sender="Indeed <donotreply@match.indeed.com>",
             )
         ],
@@ -955,7 +990,10 @@ async def test_repeated_gmail_alert_and_direct_source_duplicate_are_one_job(
         MailMessageMetadata(
             "direct",
             "direct",
-            subject="Senior Frontend Engineer",
+            subject=(
+                "Senior Frontend React TypeScript Engineer "
+                "bei Beispiel Digital GmbH"
+            ),
             sender="Indeed <donotreply@match.indeed.com>",
             message_date=datetime.now(timezone.utc),
         ),

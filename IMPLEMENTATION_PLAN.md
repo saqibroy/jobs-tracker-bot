@@ -2705,6 +2705,24 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - The independent disabled-by-default `gmail_mail_sync` scheduler job coalesces runs with `max_instances=1` and does not use source groups, the production source coordinator, the source HTTP budget, readiness/health source state, or `source_scan_runs`. Group A/B membership, offsets, cadence, and health semantics remain unchanged.
   - Automated Gmail/OAuth/provider/notifier paths are mocked. Live Gmail was intentionally not called, so final personal OAuth consent, label/query selection, and mailbox-template behavior remain an operator setup/runtime validation. Phase 6B remains Not started; after Phase 6A3 review, the next approved gate is the StepStone alert parser only. Phase 7 remains out of scope.
 
+## Phase 6A3 live Indeed parser follow-up
+
+- Status: Completed (2026-08-12)
+- Commit: `fix: parse live Indeed Gmail alerts` (this follow-up commit)
+- Tests:
+  - Focused Indeed/Gmail gate in the existing Python 3.11 Phase 6A3 image: `python -m pytest tests/v2/test_phase6a2_provider_alerts.py tests/v2/test_phase6a3_gmail_transport.py -q` — 44 passed in 2.46 seconds. The host Python 3.10 environment also passed all 44 focused tests.
+  - Required v2 gate in the existing Python 3.11 Phase 6A3 image: `python -m pytest tests/v2 -q` — 516 passed with the existing third-party `audioop` warning and read-only pytest-cache warnings in 7.77 seconds.
+  - The host-only Python 3.10 v2 diagnostic reached 515 passed and one unrelated failure because Python 3.10 has no `asyncio.timeout`; the established Python 3.11 gate passed. No historical suite or image rebuild was run for this provider-local fix.
+- Peak memory:
+  - The final real Gmail dry run used 132,096 KiB (129.0 MiB) maximum resident set size, below the 430 MiB target.
+- Notes:
+  - Root cause: real German Indeed recommendations use classless presentation tables and oversized opaque-binary `cts.indeed.com/v3/` wrappers. The Phase 6A2 fixture used semantic card classes and base64url JSON wrappers containing a directly recoverable `jk`, so live messages matched strongly but every candidate failed identity decoding.
+  - Added a developer-only one-message Gmail inspector that emits bounded MIME/tag/attribute names, CTA presence, link host/path shapes, and wrapper capability facts. It emits no body, recipient, message/account ID, OAuth value, wrapper token, raw URL, or personalized identifier; a focused leakage test covers those boundaries.
+  - Updated the sanitized synthetic Indeed fixture to the observed table/subject/opaque-wrapper shape. The parser retains application/recruitment precedence and the existing JSON/direct/multi-card path. The new fallback still requires the exact sender, both German CTAs, an Indeed wrapper, the `title bei company` subject, the same title anchor, the same company text, and an adjacent required location.
+  - Opaque wrapper values are neither resolved nor persisted. Identity is a stable content digest over explicit title/company/location; the job URL is a bounded non-personalized Indeed search URL. `posted_at` remains `None` without explicit provider evidence.
+  - Final aggregate live dry run: one page, 30 messages seen/full, zero external text-body fetches, 28 valid alert items, one pipeline acceptance, 27 pipeline rejections, zero processed/persisted alert items, no backlog, unchanged scope, unchanged checkpoint, and `indeed:parsed`. Database and Gmail token-cache bytes, SHA-256 values, sizes, and mtimes were identical before/after; therefore no application/review/job/receipt/checkpoint state or token cache changed, and no notifications ran.
+  - Files changed: `integrations/job_alerts/indeed.py`; `tools/inspect_gmail_indeed.py`; the sanitized Indeed fixture; the Phase 6A2/6A3 focused tests; and this progress entry. No dependency, schema, source, scheduler, StepStone, or Phase 6B work was added. Phase 6B remains Not started.
+
 ## Phase 6B
 
 - Status: Not started
