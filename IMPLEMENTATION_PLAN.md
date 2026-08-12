@@ -1959,7 +1959,15 @@ Commit Phase 6A3 separately as `feat: add Gmail job-alert transport` and stop fo
 
 ## Phase 6B — Remaining provider alert parsers
 
-**Status:** Not started
+**Status:** In progress — StepStone completed; remaining providers not started
+
+Provider gates:
+
+- StepStone — `stepstone_alert`: **Completed**
+- JOIN — `join_alert`: **Not started**
+- BerlinStartupJobs — `berlinstartupjobs_alert`: **Not started**
+- freelancermap — `freelancermap_alert`: **Not started**
+- GULP — `gulp_alert`: **Not started**
 
 Reuse Phase 6A infrastructure through either configured read-only mail transport without changing shared routing, storage, identity, checkpoint, dry-run, locking, source scheduling, or delivery semantics. Implement and review providers in this exact order:
 
@@ -2725,11 +2733,25 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 6B
 
-- Status: Not started
-- Commits:
+- Status: In progress — StepStone completed on 2026-08-12; JOIN, BerlinStartupJobs, freelancermap, and GULP remain Not started.
+- Commit: `feat: ingest StepStone job-alert emails` (this StepStone provider-gate commit)
 - Tests:
+  - Focused StepStone and Phase 6 mail/provider/replay gate in the existing Python 3.11 Phase 6A3 image: `python -m pytest tests/v2/test_phase6b_stepstone_alerts.py tests/v2/test_phase6a1_alert_foundation.py tests/v2/test_phase6a1_replay_concurrency.py tests/v2/test_phase6a2_provider_alerts.py tests/v2/test_phase6a3_gmail_transport.py -q` — 103 passed in 4.44 seconds.
+  - Required v2 gate: `python -m pytest tests/v2 -q` — 530 passed with one existing third-party `audioop` deprecation warning in 7.41 seconds.
+  - `compileall` passed for the StepStone parser, bounded Gmail inspector, and focused tests; `git diff --check` passed. Ruff was unavailable in both the host and the existing Phase 6A3 image, so no Ruff result is claimed.
+  - Per the approved parser-only verification path, the default/historical suites and Docker rebuild were not rerun: no dependency, schema, shared startup, or runtime packaging change was made.
 - Peak memory:
+  - The final real Gmail strong dry-run ran under the 512 MiB container limit and used 128,696 KiB (125.7 MiB) maximum resident set size, below the 430 MiB target.
 - Notes:
+  - Files changed: `integrations/job_alerts/stepstone.py`; provider registration/source-label/sender-hint/presentation wiring; `tools/inspect_gmail_stepstone.py`; the sanitized StepStone fixture; focused Phase 6B tests plus the two registry expectations; and this plan status/progress entry. No dependency, schema, source adapter, source catalog, source group, scheduler, HTTP-budget, or `source_scan_runs` change was added.
+  - Safe inspection of one recent user-owned message showed the real template uses classless nested presentation tables: one wrapper-linked strong title per fit card, followed by explicit company/location spans and optional employment/workplace/salary spans. The bounded inspector reports only MIME/tag/attribute names, host/path shapes, role/count booleans, field-presence shapes, and parser/routing status; it excludes sender/recipient values, subjects, bodies, mailbox/message IDs, raw URLs, wrapper paths/tokens, and OAuth values.
+  - Detection requires the exact StepStone job-agent sender, both digest-heading/body signals, the matching-jobs CTA from bounded HTML, a `click.stepstone.de` wrapper structure, and no lifecycle exclusion. Application/recruitment routing remains first, unrelated StepStone mail remains unknown, and positive alerts create no application/review rows.
+  - Parsing supports one or multiple classless cards, optional Strong Fit / Good Fit badges, required title/company/location, optional employee count, explicit contract/workplace/time/salary values, malformed/missing fields, and bounded duplicate handling. `Homeoffice möglich` maps to hybrid without fabricating Germany-wide remote scope; `posted_at` remains `None` without explicit provider job-posted evidence.
+  - Personalized wrapper URLs are recognized only as structural evidence. They are never logged, persisted, normalized into `Job.url`, decoded, requested, or followed. No native ID is invented: identity is a stable content digest over explicit title/company/location, and navigation uses a bounded non-personalized `https://www.stepstone.de/jobs` search URL.
+  - Tests prove wrapper-token-independent identity, safe navigation, repeated Gmail occurrence replay, cross-source content dedup in both orders, one stored Job and one receipt-driven immediate obligation, strong dry-run database immutability, unchanged source scheduling/catalog behavior, and no `source_scan_runs` rows.
+  - Final aggregate live Gmail strong dry-run with `from:info@jobagent.stepstone.de`: one page, 12 messages seen/full, zero external body fetches or current-version skips, 11 recognized alert messages, 77 valid and zero invalid alert items, 14 pipeline acceptances and 24 rejections after same-sync identity consolidation, no backlog, and `stepstone:parsed`. SQLite and OAuth token-cache bytes, sizes, hashes, and nanosecond mtimes were unchanged; the checkpoint did not advance and no notifications ran.
+  - Known limitations: the real evidence exposes no offline native StepStone job ID or safe canonical job URL, so identity intentionally uses explicit content and may change if those fields change. Provider template changes may require a new sanitized structural fixture. There is no wrapper resolution, page fetch, StepStone web request, browser automation, or authenticated provider automation.
+  - Phase 6B is not complete. JOIN is the next provider gate and remains Not started; BerlinStartupJobs, freelancermap, GULP, and Phase 7 also remain Not started.
 
 ## Phase 7
 

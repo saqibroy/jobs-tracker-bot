@@ -16,8 +16,9 @@ def _production_parsers() -> tuple[AlertParser, ...]:
     # Local imports keep the provider modules independent of registry wiring.
     from integrations.job_alerts.indeed import IndeedAlertParser
     from integrations.job_alerts.linkedin import LinkedInAlertParser
+    from integrations.job_alerts.stepstone import StepStoneAlertParser
 
-    return (LinkedInAlertParser(), IndeedAlertParser())
+    return (LinkedInAlertParser(), IndeedAlertParser(), StepStoneAlertParser())
 
 
 @dataclass(frozen=True, slots=True)

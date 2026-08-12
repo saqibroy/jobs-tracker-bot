@@ -128,6 +128,7 @@ def test_registry_and_job_specific_subject_routing() -> None:
     assert tuple(parser.provider for parser in registry.parsers) == (
         "linkedin",
         "indeed",
+        "stepstone",
     )
     for provider, name in (
         ("linkedin", "linkedin_alert_sanitized.html"),

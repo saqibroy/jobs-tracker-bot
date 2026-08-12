@@ -69,6 +69,7 @@ _ATS_HINT_KEYWORDS = {
 _ALERT_SENDER_HINTS = {
     "jobalerts-noreply@linkedin.com",
     "donotreply@match.indeed.com",
+    "info@jobagent.stepstone.de",
 }
 MAIL_PROCESSING_VERSION = 1
 

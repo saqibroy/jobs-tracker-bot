@@ -8,6 +8,7 @@ from integrations.job_alerts.contracts import JobAlertItem
 _ALERT_SOURCES = {
     "linkedin": "linkedin_alert",
     "indeed": "indeed_alert",
+    "stepstone": "stepstone_alert",
 }
 
 

@@ -43,6 +43,7 @@ _SOURCE_ICONS: dict[str, str] = {
     "linkedin_alert": "🔷",
     "indeed_alert": "🟦",
     "stepstone": "🟦",
+    "stepstone_alert": "🟦",
     "greenhouse": "🟩",
     "ashby": "🟨",
     "personio": "🟧",
