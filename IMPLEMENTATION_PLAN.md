@@ -1547,7 +1547,7 @@ For every candidate record live status, raw, hard-eligible pre-cap, final accept
 
 # Phase 6 — Job-alert email ingestion
 
-**Status:** In progress — Phase 6A1 and Phase 6A2 completed; Phase 6A3 and Phase 6B not started
+**Status:** In progress — Phase 6A1, Phase 6A2, and Phase 6A3 completed; Phase 6B not started
 
 ## Objective
 
@@ -1877,7 +1877,7 @@ Commit Phase 6A2 separately as `feat: ingest LinkedIn and Indeed job-alert email
 
 ## Phase 6A3 — Gmail read-only job-alert transport
 
-**Status:** Not started
+**Status:** Completed
 
 ### Architecture and shared mail-processing boundary
 
@@ -2683,11 +2683,27 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 6A3
 
-- Status: Not started
-- Commit:
+- Status: Completed (2026-08-12)
+- Commit: `feat: add Gmail job-alert transport` (this Phase 6A3 commit)
 - Tests:
+  - Focused Gmail/shared-mail/replay/scheduler gate in the final Python 3.11, 512 MiB image: `python -m pytest tests/v2/test_phase6a3_gmail_transport.py tests/v2/test_phase6a1_alert_foundation.py tests/v2/test_phase6a1_replay_concurrency.py tests/v2/test_phase6a2_provider_alerts.py tests/v2/test_phase5a_scheduling.py -q` — 109 passed and one dependency deprecation warning in 4.81 seconds.
+  - Required v2 gate: `python -m pytest tests/v2 -q` — 515 passed and one dependency deprecation warning in 6.78 seconds.
+  - Required default gate: `python -m pytest -q --timeout=30` — 515 passed and one dependency deprecation warning in 7.49 seconds.
+  - Historical diagnostic in the Python 3.11 image with the complete host `tests/` tree mounted read-only: `python -m pytest tests -q --timeout=30 --tb=no` — 1,392 passed, exactly the recorded 104 failures, and 11 warnings in 13.97 seconds. JUnit comparison against `/tmp/phase6a1-historical-final.xml` found zero added and zero removed failing node IDs.
+  - Static verification: `python -m ruff check` for all changed Python modules and the Phase 6A3 tests passed; `git diff --check` passed.
+  - Representative live dry scan in the final image fetched 176 healthy Arbeitnow jobs, accepted 3, and persisted nothing.
 - Peak memory:
+  - Final image: `job-bot:phase6a3`, `sha256:1a1e5f57b64630003621be11ab659740b8ecbd853d83a60c3e75fe792d66506c`, built successfully for the production Python 3.11 runtime.
+  - Mocked Gmail dry/write runtime under the 512 MiB container limit peaked at 130.58 MiB including the test harness. The dry run left the absent database absent; the write run stored two Gmail messages/occurrences as one global alert item and one Job, advanced one Gmail checkpoint, and wrote zero `source_scan_runs`.
+  - Scheduler/health runtime under the 512 MiB limit idled at 54.82 MiB. `/health` returned the unchanged compact `status=ok`, `ready=true` contract with zero tracked jobs.
 - Notes:
+  - Files changed: `.env.example`; `README.md`; `config.py`; `main.py`; `integrations/gmail_mail.py`; `integrations/job_alerts/service.py`; `integrations/zoho_mail.py`; `storage/gmail_mail.py`; `storage/zoho_mail.py`; `tools/setup_gmail.py`; `tests/v2/test_phase6a3_gmail_transport.py`; and this Phase 6A3 status/progress entry. No production dependency was added.
+  - Added a GET-only Gmail REST transport with installed-app OAuth restricted to exactly `gmail.readonly`, atomic mode-`0600` token persistence in write mode, and byte/SHA/nanosecond-mtime immutable token handling in strong dry-run mode. The local setup helper and README cover API enablement, personal authorization/secure transfer, Testing-mode seven-day expiry, unverified-app caps, and conditional restricted-scope verification/security requirements.
+  - Added dedicated `gmail_mail_messages` and `gmail_mail_sync_state` tables plus the idempotently backfilled mailbox-neutral `(transport, mailbox_key, message_id, provider, identity_key)` occurrence relation. Global alert identity remains `(provider, identity_key)` and Gmail IDs never enter Zoho message/checkpoint tables.
+  - Extracted the minimum shared post-fetch service used by both Zoho and Gmail for likely-job semantics, intent routing, 14-day safety, parser execution/health, processing version, occurrence-aware pending replay, one bounded normal-job batch, terminal results, and existing ingestion/delivery leases. Zoho application/recruitment persistence remains a Zoho-only callback.
+  - Gmail uses `internalDate`, complete page-token traversal independent of list order, exact scope fingerprints, 14-day fresh-scope safety, 48-hour established overlap, and failure/backlog checkpoint blocking. One full-message lifecycle enforces a 512 KiB aggregate decoded-body budget and refuses named, attachment-disposition, binary, image, PDF, document, archive, and oversized external parts; it never loads remote content or follows links.
+  - The independent disabled-by-default `gmail_mail_sync` scheduler job coalesces runs with `max_instances=1` and does not use source groups, the production source coordinator, the source HTTP budget, readiness/health source state, or `source_scan_runs`. Group A/B membership, offsets, cadence, and health semantics remain unchanged.
+  - Automated Gmail/OAuth/provider/notifier paths are mocked. Live Gmail was intentionally not called, so final personal OAuth consent, label/query selection, and mailbox-template behavior remain an operator setup/runtime validation. Phase 6B remains Not started; after Phase 6A3 review, the next approved gate is the StepStone alert parser only. Phase 7 remains out of scope.
 
 ## Phase 6B
 

@@ -360,6 +360,88 @@ Keep credentials and generated mail artefacts private. `.env`,
 `data/private/`, `data/zoho/`, `data/mail/`, and local Zoho JSON exports are
 ignored by Git.
 
+## Gmail read-only job-alert transport
+
+The optional Gmail worker is a transport for job-alert mail only. It feeds the
+same routing, LinkedIn/Indeed parsing, global alert-item identity, filtering,
+scoring, jobs-table deduplication and receipt-driven notification path as Zoho.
+It does not import Gmail application/recruitment history, join a scheduled
+source group, consume the source HTTP budget, or write `source_scan_runs`.
+Gmail message IDs and checkpoints stay in dedicated `gmail_mail_messages` and
+`gmail_mail_sync_state` tables. A mailbox-neutral occurrence table links both
+transports to one global `(provider, identity_key)` alert item.
+
+Set up the Gmail API and OAuth locally, outside the headless server:
+
+1. In a Google Cloud project, enable the Gmail API and configure the OAuth
+   consent screen.
+2. Create an **OAuth client ID → Desktop app** and download its JSON to
+   `data/private/gmail_oauth_client.json` (mode `0600`; never commit it).
+3. Run `python tools/setup_gmail.py`. The helper requests offline access with
+   exactly `https://www.googleapis.com/auth/gmail.readonly`, opens local browser
+   consent, and atomically writes `data/private/gmail_oauth_token.json` with
+   restrictive permissions.
+4. Transfer only the resulting token cache to the server over an encrypted
+   channel, keep it mode `0600`, and keep both client and token files under the
+   ignored `data/private/` directory.
+
+`gmail.readonly` is a Google restricted scope. An external consent app left in
+Testing can issue refresh tokens that expire after seven days. For a durable
+personal setup, configure the consent app and test/publishing status appropriate
+to the intended single-user use. An unverified app can show a warning and has a
+user cap. Whether Google verification and restricted-scope security assessment
+requirements apply depends on publishing status, users, distribution and how
+restricted-scope data is stored; personal use is not a categorical exemption.
+
+Configure a bounded mailbox scope. `GMAIL_MAILBOX_KEY` must be a stable,
+non-secret alias rather than an address; label IDs are case-sensitive and the
+query is passed exactly as configured:
+
+```env
+GMAIL_MAIL_SYNC_ENABLED=false
+GMAIL_MAIL_SYNC_DRY_RUN=true
+GMAIL_MAILBOX_KEY=personal-job-alerts
+GMAIL_LABEL_IDS=Label_jobs
+GMAIL_QUERY=from:(jobalerts-noreply@linkedin.com OR donotreply@match.indeed.com)
+GMAIL_PAGE_SIZE=100
+GMAIL_SYNC_OVERLAP_HOURS=48
+GMAIL_MAIL_SYNC_INTERVAL_MINUTES=180
+GMAIL_OAUTH_CLIENT_FILE=./data/private/gmail_oauth_client.json
+GMAIL_OAUTH_TOKEN_FILE=./data/private/gmail_oauth_token.json
+```
+
+Run the strong immutable diagnostic first:
+
+```bash
+python main.py --gmail-sync --dry-run
+```
+
+The diagnostic can read or refresh OAuth in memory, but it leaves an existing
+token cache byte/SHA/mtime-identical, keeps an absent cache absent, and creates
+or mutates no SQLite state, jobs, receipts, health, metrics, checkpoint or
+notification. A normal local-state sync is:
+
+```bash
+python main.py --gmail-sync
+```
+
+Normal sync may atomically persist refreshed OAuth tokens and local processing
+state, while every Gmail request remains read-only. The worker uses
+`internalDate`, follows every `nextPageToken`, overlaps established checkpoints
+by 48 hours, and starts a new or changed scope at a bounded 14-day boundary.
+Checkpoints advance only after deterministic message handling and terminal job
+pipeline results; failures and the 500-item backlog limit leave them unchanged.
+Each selected message has one `messages.get(format=full)` lifecycle with a
+single 512 KiB decoded-content budget. Only inline or externalized body-like
+`text/plain`/`text/html` is accepted. It never retrieves named files,
+attachment-disposition parts, images, PDFs, documents, archives or oversized
+parts, and never loads remote images or follows body links.
+
+After reviewing the diagnostic, enable independent scheduling with
+`GMAIL_MAIL_SYNC_ENABLED=true` and set `GMAIL_MAIL_SYNC_DRY_RUN=false`. The
+stable `gmail_mail_sync` interval job coalesces runs and permits one instance;
+Group A/B cadence, offsets, readiness and `/health` remain unchanged.
+
 ## CLI Reference
 
 ```
@@ -375,6 +457,7 @@ Options:
   --stats            Print database statistics and exit
   --zoho-sync        Run one Zoho Mail ingestion cycle and exit
   --zoho-write       Allow Zoho ingestion to write records and checkpoint
+  --gmail-sync       Run one Gmail read-only job-alert transport sync
 ```
 
 ## Setting Up Discord Notifications
@@ -484,6 +567,16 @@ The Discord bot lets you interact with the tracker from Discord (stats, trigger 
 | `MAX_CONCURRENT_HTTP_REQUESTS` | `4` | Absolute simultaneous source HTTP attempt ceiling per scan |
 | `MAX_CONCURRENT_SOURCES` | — | Deprecated fallback for adapter concurrency only |
 | `ENABLE_ATS_SNIFFING` | `true` | Mine aggregator apply links for known ATS boards and append discovery seeds |
+| `GMAIL_MAIL_SYNC_ENABLED` | `false` | Enable the independent `gmail_mail_sync` interval job |
+| `GMAIL_MAIL_SYNC_INTERVAL_MINUTES` | `180` | Gmail alert-transport interval |
+| `GMAIL_MAIL_SYNC_DRY_RUN` | `true` | Keep scheduled Gmail processing strongly immutable |
+| `GMAIL_MAILBOX_KEY` | — | Stable non-secret mailbox alias used in local state |
+| `GMAIL_LABEL_IDS` | — | Comma-separated, case-sensitive Gmail label IDs |
+| `GMAIL_QUERY` | — | Exact bounded Gmail query combined with the checkpoint boundary |
+| `GMAIL_PAGE_SIZE` | `100` | Bounded Gmail list page size (1–500) |
+| `GMAIL_SYNC_OVERLAP_HOURS` | `48` | Established-checkpoint replay overlap |
+| `GMAIL_OAUTH_CLIENT_FILE` | `./data/private/gmail_oauth_client.json` | Untracked installed-app OAuth client JSON |
+| `GMAIL_OAUTH_TOKEN_FILE` | `./data/private/gmail_oauth_token.json` | Untracked mode-0600 OAuth token cache |
 | `HEALTH_PORT` | `8080` | Port for the health HTTP endpoint |
 | `DATABASE_PATH` | `./data/jobs.db` | SQLite database file |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG` for verbose logs) |

@@ -150,11 +150,26 @@ CREATE TABLE IF NOT EXISTS email_job_alert_provider_health (
 );
 """
 
+_CREATE_ALERT_OCCURRENCES = """
+CREATE TABLE IF NOT EXISTS email_job_alert_occurrences (
+    transport TEXT NOT NULL,
+    mailbox_key TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    identity_key TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (transport, mailbox_key, message_id, provider, identity_key)
+);
+"""
+
 _CREATE_ALERT_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_email_alert_items_state_seen "
     "ON email_job_alert_items(state, last_seen_at);",
     "CREATE INDEX IF NOT EXISTS idx_email_alert_items_message "
     "ON email_job_alert_items(account_id, message_id);",
+    "CREATE INDEX IF NOT EXISTS idx_email_alert_occurrences_item "
+    "ON email_job_alert_occurrences(provider, identity_key);",
 )
 
 
@@ -206,8 +221,23 @@ async def init_zoho_mail_db() -> None:
                 )
         await db.execute(_CREATE_ALERT_ITEMS)
         await db.execute(_CREATE_ALERT_PROVIDER_HEALTH)
+        await db.execute(_CREATE_ALERT_OCCURRENCES)
         for statement in _CREATE_ALERT_INDEXES:
             await db.execute(statement)
+        # Phase 6A1/A2 stored only the latest Zoho provenance on the globally
+        # identified alert item. Preserve it in the mailbox-neutral occurrence
+        # relation without changing any item identity or terminal result.
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO email_job_alert_occurrences
+                (transport, mailbox_key, message_id, provider, identity_key,
+                 first_seen_at, last_seen_at)
+            SELECT 'zoho', account_id, message_id, provider, identity_key,
+                   first_seen_at, last_seen_at
+            FROM email_job_alert_items
+            WHERE account_id <> '' AND message_id <> ''
+            """
+        )
         await db.commit()
     logger.debug("Zoho Mail tables initialized at {}", path)
 
@@ -365,6 +395,8 @@ async def get_pending_alert_input_keys(
     *,
     account_id: str,
     message_id: str,
+    transport: str = "zoho",
+    mailbox_key: str | None = None,
 ) -> frozenset[str]:
     """Read bounded pending identities for replay without mutating SQLite."""
 
@@ -376,13 +408,24 @@ async def get_pending_alert_input_keys(
         async with aiosqlite.connect(uri, uri=True) as db:
             cursor = await db.execute(
                 """
-                SELECT provider, identity_key
-                FROM email_job_alert_items
-                WHERE account_id = ? AND message_id = ? AND state = 'pending'
-                ORDER BY provider, identity_key
+                SELECT item.provider, item.identity_key
+                FROM email_job_alert_occurrences AS occurrence
+                JOIN email_job_alert_items AS item
+                  ON item.provider = occurrence.provider
+                 AND item.identity_key = occurrence.identity_key
+                WHERE occurrence.transport = ?
+                  AND occurrence.mailbox_key = ?
+                  AND occurrence.message_id = ?
+                  AND item.state = 'pending'
+                ORDER BY item.provider, item.identity_key
                 LIMIT ?
                 """,
-                (account_id, message_id, MAX_ALERT_ITEMS_PER_MESSAGE),
+                (
+                    bounded_text(transport, 40).lower(),
+                    bounded_text(mailbox_key or account_id, 200),
+                    message_id,
+                    MAX_ALERT_ITEMS_PER_MESSAGE,
+                ),
             )
             rows = await cursor.fetchall()
     except Exception:
@@ -630,6 +673,8 @@ async def upsert_alert_item_pending(
     item: JobAlertItem,
     *,
     dry_run: bool,
+    transport: str = "zoho",
+    mailbox_key: str | None = None,
 ) -> AlertItemPersistence:
     """Persist a replayable item and retain an already-terminal state."""
 
@@ -690,6 +735,25 @@ async def upsert_alert_item_pending(
                 bounded_text(item.location, MAX_LOCATION),
                 bounded_text(item.summary, MAX_SUMMARY),
                 evidence,
+                now,
+                now,
+            ),
+        )
+        await db.execute(
+            """
+            INSERT INTO email_job_alert_occurrences
+                (transport, mailbox_key, message_id, provider, identity_key,
+                 first_seen_at, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(transport, mailbox_key, message_id, provider, identity_key)
+            DO UPDATE SET last_seen_at = excluded.last_seen_at
+            """,
+            (
+                bounded_text(transport, 40).lower(),
+                bounded_text(mailbox_key or item.account_id, 200),
+                bounded_text(item.message_id, 200),
+                item.provider,
+                identity_key,
                 now,
                 now,
             ),
@@ -842,6 +906,16 @@ async def cleanup_processed_alert_items(
             WHERE state = 'processed' AND last_seen_at < ?
             """,
             (cutoff_iso,),
+        )
+        await db.execute(
+            """
+            DELETE FROM email_job_alert_occurrences
+            WHERE NOT EXISTS (
+                SELECT 1 FROM email_job_alert_items AS item
+                WHERE item.provider = email_job_alert_occurrences.provider
+                  AND item.identity_key = email_job_alert_occurrences.identity_key
+            )
+            """
         )
         await db.commit()
         return max(0, int(cursor.rowcount or 0))

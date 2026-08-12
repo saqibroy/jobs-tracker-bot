@@ -793,6 +793,11 @@ def main():
         action="store_true",
         help="Allow --zoho-sync to write extracted records and advance checkpoints.",
     )
+    parser.add_argument(
+        "--gmail-sync",
+        action="store_true",
+        help="Run one Gmail read-only job-alert sync. Add --dry-run for strong local immutability.",
+    )
     args = parser.parse_args()
     args.verbose = args.verbose or getattr(args, "explain", False)
 
@@ -822,6 +827,11 @@ def main():
         logger.info("Running Zoho Mail ingestion...")
         dry_run = False if args.zoho_write else (True if args.dry_run else None)
         asyncio.run(_run_zoho_sync_cli(dry_run=dry_run))
+        return
+
+    if args.gmail_sync:
+        logger.info("Running Gmail job-alert transport sync...")
+        asyncio.run(_run_gmail_sync_cli(dry_run=bool(args.dry_run)))
         return
 
     sources = _get_sources(args.source)
@@ -930,6 +940,29 @@ def _refresh_next_scan_health(scheduler: AsyncIOScheduler) -> None:
         logger.exception("Failed to publish next source-group trigger")
 
 
+def _register_gmail_mail_job(
+    scheduler: AsyncIOScheduler,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Register Gmail independently from every production source group."""
+
+    if not config.GMAIL_MAIL_SYNC_ENABLED:
+        return
+    origin = now or datetime.now(timezone.utc)
+    scheduler.add_job(
+        _scheduled_gmail_mail_sync,
+        "interval",
+        minutes=config.GMAIL_MAIL_SYNC_INTERVAL_MINUTES,
+        id="gmail_mail_sync",
+        name="Gmail Job-alert Sync",
+        next_run_time=origin + timedelta(minutes=3),
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=config.SOURCE_GROUP_MISFIRE_GRACE_SECONDS,
+    )
+
+
 async def _async_main(sources: list) -> None:
     """Run scheduler, Discord bot, health server all in one event loop."""
     global _source_scheduler
@@ -951,6 +984,7 @@ async def _async_main(sources: list) -> None:
     _source_scheduler = scheduler
     _register_source_group_jobs(scheduler)
     _register_notification_delivery_jobs(scheduler, notification_policy)
+    _register_gmail_mail_job(scheduler)
 
     scheduler.add_job(
         _scheduled_health_check,
@@ -1001,6 +1035,13 @@ async def _async_main(sources: list) -> None:
             "Zoho Mail sync scheduled every {} min (dry_run={})",
             config.ZOHO_MAIL_SYNC_INTERVAL_MINUTES,
             config.ZOHO_MAIL_SYNC_DRY_RUN,
+        )
+
+    if config.GMAIL_MAIL_SYNC_ENABLED:
+        logger.info(
+            "Gmail alert sync scheduled every {} min (dry_run={})",
+            config.GMAIL_MAIL_SYNC_INTERVAL_MINUTES,
+            config.GMAIL_MAIL_SYNC_DRY_RUN,
         )
 
     scheduler.start()
@@ -1296,6 +1337,30 @@ async def _run_zoho_sync_cli(*, dry_run: bool | None) -> None:
     print(f"{'='*68}\n")
 
 
+async def _run_gmail_sync_cli(*, dry_run: bool) -> None:
+    from integrations.gmail_mail import GmailMailIngestionWorker
+
+    result = await GmailMailIngestionWorker().run(dry_run=dry_run)
+    mode = "DRY RUN" if result.dry_run else "WRITE"
+    print(f"\n{'='*68}")
+    print(f"  GMAIL JOB-ALERT TRANSPORT — {mode}")
+    print(f"{'='*68}")
+    print(f"  Mailbox key:             {result.mailbox_key}")
+    print(f"  Pages:                   {result.pages}")
+    print(f"  Messages seen/full:      {result.messages_seen}/{result.full_messages_fetched}")
+    print(f"  External text bodies:    {result.external_body_fetches}")
+    print(f"  Alert items valid:       {result.valid_alert_items}")
+    print(f"  Alert items processed:   {result.processed_alert_items}")
+    print(f"  Pipeline accepted:       {result.pipeline_accepted}")
+    print(f"  Pipeline rejected:       {result.pipeline_rejected}")
+    print(f"  Backlog deferred:        {result.backlog_deferred}")
+    print(f"  Scope changed:           {result.scope_changed}")
+    print(f"  Checkpoint advanced:     {result.checkpoint_advanced}")
+    if result.provider_health:
+        print(f"  Provider health:         {', '.join(result.provider_health)}")
+    print(f"{'='*68}\n")
+
+
 async def _scheduled_zoho_mail_sync() -> None:
     from integrations.zoho_mail import ZohoMailIngestionWorker
 
@@ -1328,6 +1393,39 @@ async def _scheduled_zoho_mail_sync() -> None:
         )
     except Exception:
         logger.exception("Scheduled Zoho Mail sync failed")
+
+
+async def _scheduled_gmail_mail_sync() -> None:
+    from integrations.gmail_mail import GmailMailIngestionWorker
+
+    logger.info("Scheduled Gmail job-alert sync starting")
+    try:
+        result = await GmailMailIngestionWorker().run(
+            dry_run=config.GMAIL_MAIL_SYNC_DRY_RUN
+        )
+        logger.info(
+            "Gmail sync finished: pages={} messages={} full={} alerts={} valid={} "
+            "processed={} accepted={} rejected={} backlog={} checkpoint={} dry_run={}",
+            result.pages,
+            result.messages_seen,
+            result.full_messages_fetched,
+            result.alert_messages,
+            result.valid_alert_items,
+            result.processed_alert_items,
+            result.pipeline_accepted,
+            result.pipeline_rejected,
+            result.backlog_deferred,
+            result.checkpoint_advanced,
+            result.dry_run,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.error("Scheduled Gmail sync failed: {}", bounded_scheduler_error(exc))
+
+
+def bounded_scheduler_error(exc: BaseException) -> str:
+    return " ".join(str(exc).split())[:160] or type(exc).__name__
 
 
 async def _scheduled_digest() -> None:

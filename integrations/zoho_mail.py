@@ -38,10 +38,15 @@ from integrations.job_alerts.contracts import (
     bounded_values,
 )
 from integrations.job_alerts.message import build_bounded_mail_content
-from integrations.job_alerts.processing import alert_item_to_job
-from integrations.job_alerts.routing import route_mail_intent
-from integrations.job_alerts.urls import alert_identity_key
-from job_ingestion import JobIngestionCandidate, process_discovered_jobs
+from integrations.job_alerts.service import (
+    ApplicationProcessingResult,
+    MailTransportEnvelope,
+    SharedMailPostFetchProcessor,
+    is_current_processing_state,
+    is_likely_job_message,
+    is_stale_legacy_processing_state,
+)
+from job_ingestion import process_discovered_jobs
 from notifiers.delivery import process_pending_immediate_deliveries
 from storage.database import init_db
 from storage.zoho_mail import (
@@ -49,63 +54,17 @@ from storage.zoho_mail import (
     complete_alert_item_results,
     enqueue_review,
     get_message_processing_state,
-    get_pending_alert_input_keys,
     get_last_successful_sync_at,
     init_zoho_mail_db,
     mark_message_processed,
-    record_alert_provider_health,
     save_successful_sync_checkpoint,
     set_message_routing,
-    upsert_alert_item_pending,
     upsert_application_record,
     upsert_message_summary,
 )
 from sources.registry import load_company_boards
 
 SKIPPED_FOLDER_NAMES = {name.lower() for name in config.ZOHO_SKIP_FOLDERS}
-JOB_EMAIL_KEYWORDS = {
-    "application",
-    "applied",
-    "applying",
-    "interview",
-    "recruiter",
-    "recruiting",
-    "talent",
-    "job",
-    "jobs",
-    "position",
-    "role",
-    "career",
-    "careers",
-    "candidate",
-    "offer",
-    "hiring",
-    "shortlisted",
-    "rejected",
-    "unfortunately",
-}
-ATS_HINT_KEYWORDS = {
-    "ashbyhq.com",
-    "greenhouse.io",
-    "personio.",
-    "m.personio.de",
-    "lever.co",
-    "workable.com",
-    "bamboohr.com",
-    "teamtailor.com",
-    "smartrecruiters.com",
-    "recruitee.com",
-    "join.com",
-    "onlyfy",
-    "softgarden",
-    "myworkdayjobs.com",
-    "workdayjobs.com",
-    "successfactors",
-}
-ALERT_SENDER_HINTS = {
-    "jobalerts-noreply@linkedin.com",
-    "donotreply@match.indeed.com",
-}
 @dataclass(frozen=True)
 class ZohoAccount:
     account_id: str
@@ -544,15 +503,18 @@ def should_process_folder(folder: ZohoFolder) -> bool:
 
 
 def is_likely_job_email(message: ZohoMessageSummary) -> bool:
-    text = " ".join(
-        [message.subject, message.sender, message.summary, " ".join(message.links)]
-    ).lower()
-    if any(hint in text for hint in ATS_HINT_KEYWORDS):
-        return True
-    if any(sender in message.sender.lower() for sender in ALERT_SENDER_HINTS):
-        return True
-    return any(
-        re.search(rf"\b{re.escape(keyword)}\b", text) for keyword in JOB_EMAIL_KEYWORDS
+    return is_likely_job_message(
+        MailMessageMetadata(
+            account_id="",
+            message_id=message.message_id,
+            folder_id=message.folder_id,
+            folder_name=message.folder_name,
+            subject=message.subject,
+            sender=message.sender,
+            summary=message.summary,
+            message_date=message.message_date,
+        ),
+        links=message.links,
     )
 
 
@@ -1146,23 +1108,6 @@ class _AccountSyncPlan:
     dry_run: bool
 
 
-@dataclass(frozen=True, slots=True)
-class _MessageCompletion:
-    account_id: str
-    message_id: str
-    intent: str
-    provider: str = ""
-    result: str = "handled"
-    reason: str = ""
-    dry_run: bool = False
-
-
-@dataclass(slots=True)
-class _SyncAccumulator:
-    alert_item_count: int = 0
-    limit_reached: bool = False
-
-
 class ZohoMailIngestionWorker:
     def __init__(
         self,
@@ -1223,16 +1168,22 @@ class ZohoMailIngestionWorker:
                 self._set_token_cache_policy(False)
 
             totals = _new_sync_totals(len(accounts))
-            accumulator = _SyncAccumulator()
             account_complete = {
                 plan.account.account_id: True for plan in plans
             }
-            completions: list[_MessageCompletion] = []
             discovery_records: list[ExtractedApplicationRecord] = []
-            pending_write: dict[str, JobIngestionCandidate] = {}
-            pending_dry: dict[str, JobIngestionCandidate] = {}
             provider_health: dict[str, str] = {}
             encountered: set[tuple[str, str]] = set()
+            processors = {
+                mode: SharedMailPostFetchProcessor(
+                    dry_run=mode,
+                    parser_registry=self.parser_registry,
+                    max_alert_items=MAX_ALERT_ITEMS_PER_SYNC,
+                    pipeline=process_discovered_jobs,
+                    terminal_callback=complete_alert_item_results,
+                )
+                for mode in {plan.dry_run for plan in plans}
+            }
 
             for plan in plans:
                 folders = await self.api.list_folders(plan.account.account_id)
@@ -1249,66 +1200,32 @@ class ZohoMailIngestionWorker:
                         plan=plan,
                         folder=folder,
                         totals=totals,
-                        accumulator=accumulator,
-                        completions=completions,
                         discovery_records=discovery_records,
-                        pending=(pending_dry if plan.dry_run else pending_write),
-                        provider_health=provider_health,
+                        processor=processors[plan.dry_run],
                         encountered=encountered,
                     )
                     if backlog:
                         account_complete[plan.account.account_id] = False
                         break
 
-            dry_ingestion = await process_discovered_jobs(
-                list(pending_dry.values()),
-                persist=False,
-                associate_items=True,
-            )
-            _add_pipeline_counts(totals, dry_ingestion.item_results)
-
-            if pending_write:
-                try:
-                    write_ingestion = await process_discovered_jobs(
-                        list(pending_write.values()),
-                        persist=True,
-                        associate_items=True,
-                        on_terminal=complete_alert_item_results,
+            for processor in processors.values():
+                shared = await processor.finalize()
+                for key, value in shared.counts.items():
+                    totals[key] += value
+                for entry in shared.provider_health:
+                    provider, _, status = entry.partition(":")
+                    provider_health[provider] = status
+                for completion in shared.completions:
+                    await mark_message_processed(
+                        account_id=completion.mailbox_key,
+                        message_id=completion.message_id,
+                        dry_run=processor.dry_run,
+                        processing_version=1,
+                        intent=completion.intent,
+                        provider=completion.provider,
+                        result=completion.result,
+                        reason=completion.reason,
                     )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    providers = {
-                        key.partition(":")[0] for key in pending_write
-                    }
-                    for provider in providers:
-                        await record_alert_provider_health(
-                            provider=provider,
-                            status="processing_error",
-                            examined_count=0,
-                            valid_count=0,
-                            invalid_count=0,
-                            issues=("normal_job_ingestion_failed",),
-                            processing_failure=True,
-                            dry_run=False,
-                        )
-                        totals["provider_failures"] += 1
-                        provider_health[provider] = "processing_error"
-                    raise
-                _add_pipeline_counts(totals, write_ingestion.item_results)
-                totals["processed_alert_items"] += len(write_ingestion.item_results)
-
-            for completion in completions:
-                await mark_message_processed(
-                    account_id=completion.account_id,
-                    message_id=completion.message_id,
-                    dry_run=completion.dry_run,
-                    processing_version=1,
-                    intent=completion.intent,
-                    provider=completion.provider,
-                    result=completion.result,
-                    reason=completion.reason,
-                )
 
             if discovery_records:
                 totals["discovery_candidates"] = append_zoho_discovery_candidates(
@@ -1351,11 +1268,8 @@ class ZohoMailIngestionWorker:
         plan: _AccountSyncPlan,
         folder: ZohoFolder,
         totals: dict[str, int],
-        accumulator: _SyncAccumulator,
-        completions: list[_MessageCompletion],
         discovery_records: list[ExtractedApplicationRecord],
-        pending: dict[str, JobIngestionCandidate],
-        provider_health: dict[str, str],
+        processor: SharedMailPostFetchProcessor,
         encountered: set[tuple[str, str]],
     ) -> bool:
         start = 1
@@ -1410,7 +1324,7 @@ class ZohoMailIngestionWorker:
                 )
                 if not likely:
                     continue
-                if state.current:
+                if is_current_processing_state(state):
                     totals["current_version_skipped"] += 1
                     continue
                 message_key = (plan.account.account_id, message.message_id)
@@ -1418,22 +1332,22 @@ class ZohoMailIngestionWorker:
                     continue
                 encountered.add(message_key)
 
-                if state.processed and state.processing_version == 0 and not _inside_alert_window(message.message_date):
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            MailIntent.UNKNOWN_JOB_EMAIL.value,
-                            result="legacy_reclassification_window_skipped",
-                            reason="legacy_message_outside_14_day_alert_window",
-                            dry_run=plan.dry_run,
-                        )
+                if (
+                    is_stale_legacy_processing_state(state, message.message_date)
+                ):
+                    processor.add_completion(
+                        transport="zoho",
+                        mailbox_key=plan.account.account_id,
+                        message_id=message.message_id,
+                        intent=MailIntent.UNKNOWN_JOB_EMAIL.value,
+                        result="legacy_reclassification_window_skipped",
+                        reason="legacy_message_outside_14_day_alert_window",
                     )
-                    totals["unknown_job_messages"] += 1
+                    processor.counts["unknown_job_messages"] += 1
                     continue
 
-                if accumulator.limit_reached:
-                    totals["backlog_deferred"] += 1
+                if processor.backlog:
+                    processor.counts["backlog_deferred"] += 1
                     return True
 
                 raw_content = await self.api.get_message_content(
@@ -1461,19 +1375,33 @@ class ZohoMailIngestionWorker:
                     summary=message.summary,
                     message_date=message.message_date,
                 )
-                decision = route_mail_intent(metadata, content, self.parser_registry)
-                await set_message_routing(
-                    account_id=plan.account.account_id,
-                    message_id=message.message_id,
-                    intent=decision.intent.value,
-                    provider=decision.provider,
-                    result="classified",
-                    reason=";".join(decision.evidence),
-                    dry_run=plan.dry_run,
+                envelope = MailTransportEnvelope(
+                    transport="zoho",
+                    mailbox_key=plan.account.account_id,
+                    message=metadata,
+                    content=content,
+                    summary_links=message.links,
                 )
 
-                if decision.intent == MailIntent.APPLICATION_OR_RECRUITMENT:
-                    totals["application_messages"] += 1
+                async def write_routing(
+                    intent: str,
+                    provider: str,
+                    result: str,
+                    reason: str,
+                ) -> None:
+                    await set_message_routing(
+                        account_id=plan.account.account_id,
+                        message_id=message.message_id,
+                        intent=intent,
+                        provider=provider,
+                        result=result,
+                        reason=reason,
+                        dry_run=plan.dry_run,
+                    )
+
+                async def process_application(
+                    _: MailTransportEnvelope,
+                ) -> ApplicationProcessingResult:
                     records = extract_application_records(
                         account_id=plan.account.account_id,
                         # Preserve the established application extractor input:
@@ -1482,6 +1410,7 @@ class ZohoMailIngestionWorker:
                         message=message,
                         cleaned_content=content.cleaned_text,
                     )
+                    review_count = 0
                     for record in records:
                         if not plan.dry_run:
                             discovery_records.append(record)
@@ -1489,7 +1418,6 @@ class ZohoMailIngestionWorker:
                             record,
                             dry_run=plan.dry_run,
                         )
-                        totals["extracted_records"] += 1
                         if record.needs_review:
                             await enqueue_review(
                                 application_id=application_id,
@@ -1499,184 +1427,18 @@ class ZohoMailIngestionWorker:
                                 payload=record.evidence,
                                 dry_run=plan.dry_run,
                             )
-                            totals["review_records"] += 1
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            decision.intent.value,
-                            result="application_processed",
-                            reason=";".join(decision.evidence),
-                            dry_run=plan.dry_run,
-                        )
+                            review_count += 1
+                    return ApplicationProcessingResult(
+                        extracted_records=len(records),
+                        review_records=review_count,
                     )
-                    continue
 
-                if decision.intent == MailIntent.UNKNOWN_JOB_EMAIL:
-                    totals["unknown_job_messages"] += 1
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            decision.intent.value,
-                            result="unknown_handled",
-                            reason=";".join(decision.evidence),
-                            dry_run=plan.dry_run,
-                        )
-                    )
-                    continue
-
-                totals["alert_messages"] += 1
-                inside_alert_window = _inside_alert_window(message.message_date)
-                pending_replay_keys = await get_pending_alert_input_keys(
-                    account_id=plan.account.account_id,
-                    message_id=message.message_id,
+                handled = await processor.process_message(
+                    envelope,
+                    routing_writer=write_routing,
+                    application_handler=process_application,
                 )
-                if not inside_alert_window and not pending_replay_keys:
-                    reason = (
-                        "alert_missing_reliable_message_date"
-                        if message.message_date is None
-                        else "alert_outside_14_day_window"
-                    )
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            decision.intent.value,
-                            provider=decision.provider,
-                            result="alert_skipped",
-                            reason=reason,
-                            dry_run=plan.dry_run,
-                        )
-                    )
-                    continue
-
-                parser = self.parser_registry.get(decision.provider)
-                if parser is None:
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            MailIntent.UNKNOWN_JOB_EMAIL.value,
-                            result="unsupported_alert_provider",
-                            reason="registered_parser_unavailable",
-                            dry_run=plan.dry_run,
-                        )
-                    )
-                    continue
-                try:
-                    parsed = parser.parse(metadata, content)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    totals["provider_failures"] += 1
-                    provider_health[decision.provider] = "parse_error"
-                    await record_alert_provider_health(
-                        provider=decision.provider,
-                        status="parse_error",
-                        examined_count=0,
-                        valid_count=0,
-                        invalid_count=0,
-                        issues=("provider_parser_exception",),
-                        processing_failure=True,
-                        dry_run=plan.dry_run,
-                    )
-                    raise
-
-                totals["parsed_alert_items"] += parsed.examined_count
-                provider_health[decision.provider] = parsed.status.value
-                totals["valid_alert_items"] += len(parsed.items)
-                totals["invalid_alert_items"] += parsed.invalid_count
-                await record_alert_provider_health(
-                    provider=decision.provider,
-                    status=parsed.status.value,
-                    examined_count=parsed.examined_count,
-                    valid_count=len(parsed.items),
-                    invalid_count=parsed.invalid_count,
-                    issues=parsed.issues,
-                    dry_run=plan.dry_run,
-                )
-
-                message_deferred = False
-                parsed_input_keys: set[str] = set()
-                stale_new_item_ignored = False
-                for raw_item in parsed.items:
-                    item = replace(
-                        raw_item,
-                        provider=decision.provider,
-                        account_id=plan.account.account_id,
-                        message_id=message.message_id,
-                    )
-                    identity_key, _ = alert_identity_key(
-                        provider_item_id=item.provider_item_id,
-                        canonical_url=item.canonical_url,
-                        title=item.title,
-                        company=item.company,
-                        location=item.location,
-                    )
-                    input_key = f"{item.provider}:{identity_key}"
-                    parsed_input_keys.add(input_key)
-                    if (
-                        not inside_alert_window
-                        and input_key not in pending_replay_keys
-                    ):
-                        stale_new_item_ignored = True
-                        continue
-                    if (
-                        input_key not in pending
-                        and accumulator.alert_item_count >= MAX_ALERT_ITEMS_PER_SYNC
-                    ):
-                        accumulator.limit_reached = True
-                        totals["backlog_deferred"] += 1
-                        message_deferred = True
-                        break
-                    persistence = await upsert_alert_item_pending(
-                        item,
-                        dry_run=plan.dry_run,
-                    )
-                    if persistence.state == "processed":
-                        totals["processed_alert_items"] += 1
-                        continue
-                    if persistence.input_key not in pending:
-                        pending[persistence.input_key] = JobIngestionCandidate(
-                            persistence.input_key,
-                            alert_item_to_job(item),
-                        )
-                        accumulator.alert_item_count += 1
-                        totals["pending_alert_items"] += 1
-
-                missing_pending = pending_replay_keys - parsed_input_keys
-                if not message_deferred and missing_pending:
-                    await record_alert_provider_health(
-                        provider=decision.provider,
-                        status="pending_replay_missing",
-                        examined_count=parsed.examined_count,
-                        valid_count=len(parsed.items),
-                        invalid_count=parsed.invalid_count,
-                        issues=("pending_item_not_reproduced",),
-                        processing_failure=True,
-                        dry_run=plan.dry_run,
-                    )
-                    provider_health[decision.provider] = "pending_replay_missing"
-                    totals["provider_failures"] += 1
-                    raise RuntimeError("pending alert item was not reproduced by parser")
-
-                if not message_deferred:
-                    completion_issues = list(parsed.issues)
-                    if stale_new_item_ignored:
-                        completion_issues.append("stale_new_alert_item_ignored")
-                    completions.append(
-                        _MessageCompletion(
-                            plan.account.account_id,
-                            message.message_id,
-                            decision.intent.value,
-                            provider=decision.provider,
-                            result="alert_items_handled",
-                            reason=";".join(completion_issues),
-                            dry_run=plan.dry_run,
-                        )
-                    )
-                else:
+                if not handled:
                     return True
 
             if len(page) < self.page_limit:
@@ -1686,13 +1448,6 @@ class ZohoMailIngestionWorker:
             start += self.page_limit
             await asyncio.sleep(0)
         return False
-
-
-def _inside_alert_window(message_date: datetime | None) -> bool:
-    if message_date is None:
-        return False
-    value = message_date if message_date.tzinfo else message_date.replace(tzinfo=timezone.utc)
-    return value >= datetime.now(timezone.utc) - timedelta(days=14)
 
 
 def _new_sync_totals(accounts: int) -> dict[str, int]:

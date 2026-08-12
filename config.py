@@ -257,6 +257,35 @@ ZOHO_SKIP_FOLDERS: list[str] = _get_list(
     "drafts,spam,trash,templates,outbox",
 )
 
+# ── Gmail job-alert transport ─────────────────────────────────────────────
+# Disabled by default. Gmail remains API read-only; normal sync may persist
+# local checkpoints and refreshed installed-app OAuth tokens.
+GMAIL_MAIL_SYNC_ENABLED: bool = _get("GMAIL_MAIL_SYNC_ENABLED", "false").lower() in ("true", "1", "yes")
+GMAIL_MAILBOX_KEY: str = _get("GMAIL_MAILBOX_KEY")
+GMAIL_LABEL_IDS: list[str] = [
+    value.strip()
+    for value in _get("GMAIL_LABEL_IDS").split(",")
+    if value.strip()
+]
+GMAIL_QUERY: str = _get("GMAIL_QUERY")
+GMAIL_PAGE_SIZE: int = max(1, min(500, int(_get("GMAIL_PAGE_SIZE", "100"))))
+GMAIL_MAIL_SYNC_INTERVAL_MINUTES: int = max(
+    5, min(1440, int(_get("GMAIL_MAIL_SYNC_INTERVAL_MINUTES", "180")))
+)
+GMAIL_SYNC_OVERLAP_HOURS: int = max(
+    0, min(336, int(_get("GMAIL_SYNC_OVERLAP_HOURS", "48")))
+)
+GMAIL_OAUTH_CLIENT_FILE: str = _get(
+    "GMAIL_OAUTH_CLIENT_FILE", "./data/private/gmail_oauth_client.json"
+)
+GMAIL_OAUTH_TOKEN_FILE: str = _get(
+    "GMAIL_OAUTH_TOKEN_FILE", "./data/private/gmail_oauth_token.json"
+)
+# Optional headless secret source. Prefer the restrictive token-cache file in
+# production; this exists so an absent cache can still authenticate in-memory.
+GMAIL_REFRESH_TOKEN: str = _get("GMAIL_REFRESH_TOKEN")
+GMAIL_MAIL_SYNC_DRY_RUN: bool = _get("GMAIL_MAIL_SYNC_DRY_RUN", "true").lower() in ("true", "1", "yes")
+
 # ── Health endpoint ────────────────────────────────────────────────────────
 HEALTH_PORT: int = int(_get("HEALTH_PORT", "8080"))
 
