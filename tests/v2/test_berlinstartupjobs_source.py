@@ -277,17 +277,20 @@ async def test_reported_pages_beyond_bound_are_partial_without_fourth_request() 
     assert source._get.await_count == 3
 
 
-def test_catalog_registers_source_but_does_not_schedule_it() -> None:
+def test_catalog_schedules_source_once_in_group_b_and_keeps_manual_access() -> None:
     definition = SOURCE_BY_NAME["berlinstartupjobs"]
 
     assert definition.adapter_class is BerlinStartupJobsSource
-    assert definition.manual_only is True
-    assert definition.scheduled_group is None
+    assert definition.manual_only is False
+    assert definition.scheduled_group == "source_group_b"
     assert "berlinstartupjobs" in main.ALL_SOURCES
-    assert "berlinstartupjobs" not in manual_all_source_names()
-    assert all(
-        "berlinstartupjobs" not in group.source_names for group in SOURCE_GROUPS
-    )
+    assert "berlinstartupjobs" in manual_all_source_names()
+    memberships = [
+        group for group in SOURCE_GROUPS if "berlinstartupjobs" in group.source_names
+    ]
+    assert len(memberships) == 1
+    assert memberships[0].scheduler_id == "source_group_b"
+    assert memberships[0].cadence_minutes == 120
     resolved = main._get_sources("berlinstartupjobs")
     assert len(resolved) == 1
     assert isinstance(resolved[0], BerlinStartupJobsSource)

@@ -467,6 +467,7 @@ def test_phase5_scheduling_and_source_catalog_remain_unchanged() -> None:
         "remoteok",
         "idealist",
         "linkedin",
+        "berlinstartupjobs",
     )
     assert "source_group_c" not in GROUP_BY_ID
     assert "stepstone" not in manual_all_source_names()

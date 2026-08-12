@@ -56,6 +56,7 @@ GROUP_B_NAMES = (
     "remoteok",
     "idealist",
     "linkedin",
+    "berlinstartupjobs",
 )
 
 
@@ -66,6 +67,7 @@ def test_catalog_has_exact_phase5a_groups_and_manual_all_union() -> None:
     )
     assert GROUP_BY_ID[GROUP_A_ID].source_names == GROUP_A_NAMES
     assert GROUP_BY_ID[GROUP_B_ID].source_names == GROUP_B_NAMES
+    assert GROUP_BY_ID[GROUP_B_ID].cadence_minutes == 120
     assert manual_all_source_names() == GROUP_A_NAMES + GROUP_B_NAMES
     assert "source_group_c" not in GROUP_BY_ID
 

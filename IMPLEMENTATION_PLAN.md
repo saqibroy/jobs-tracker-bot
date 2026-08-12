@@ -1996,17 +1996,18 @@ No candidate is assumed technically admissible. Every candidate must first under
 
 ## Next implementation gate
 
-BerlinStartupJobs is admitted and implemented as a manual-only source. Its
-seven-day unique-yield validation started on 2026-08-12 using the read-only
-`tools/source_yield_probe.py` observation log. Promotion to scheduled Group B
-at the existing 120-minute cadence remains pending; no conclusion may be drawn
-until the seven-day review. No browser automation is permitted, and the
+BerlinStartupJobs is admitted, implemented, and enabled in scheduled Group B
+at the existing 120-minute cadence. The previously blocking seven-day
+unique-yield gate is now a non-blocking post-enable observation/review.
+Production scans provide automatic observation through `source_scan_runs`,
+including raw, accepted, unseen, saved, rejection, routing, status/error, and
+timestamp metrics. `tools/source_yield_probe.py` remains an optional diagnostic;
+no manual daily probe is required. No browser automation is permitted, and the
 remaining candidate order is unchanged.
 
 ## Source admission checklist
 
-A new source is not enabled by default until it; the current BerlinStartupJobs
-state is:
+The current BerlinStartupJobs state is:
 
 - [x] has a stable public API, RSS, JSON-LD, or lightweight HTML path
 - [x] requires no authentication or prohibited automation
@@ -2014,12 +2015,14 @@ state is:
 - [x] has tests using saved fixtures/mocked responses
 - [x] has rate-limit and failure handling
 - [x] has source-health reporting
-- [ ] adds meaningful unique jobs in a seven-day comparison
+- [ ] complete the non-blocking post-enable seven-day uniqueness review
 - [x] stays within memory and scan-duration budgets
 
 ## Definition of done
 
-- Each enabled source demonstrates unique useful coverage.
+- Each enabled source's unique useful coverage is reviewed using production
+  observations; the BerlinStartupJobs seven-day review is post-enable and
+  non-blocking.
 - No new browser runtime is required.
 - Platform terms and access constraints are respected.
 
@@ -2752,13 +2755,15 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 7
 
-- Status: In progress — BerlinStartupJobs admitted and implemented as manual-only on 2026-08-12; read-only seven-day validation started, default-enable gate pending
-- Commit: `feat: add BerlinStartupJobs source` (this BerlinStartupJobs implementation commit)
+- Status: In progress — BerlinStartupJobs admitted and implemented on 2026-08-12, then enabled in scheduled Group B at the existing 120-minute cadence; post-enable uniqueness review remains pending and non-blocking
+- Commits: `feat: add BerlinStartupJobs source` (adapter implementation); `feat: schedule BerlinStartupJobs source` (this rollout commit)
 - Tests:
   - Focused adapter/registry gate: `python -m pytest tests/v2/test_berlinstartupjobs_source.py -q` — 12 passed in 0.47 seconds.
   - Host Python 3.10 diagnostic: `python -m pytest tests/v2 -q` — 541 passed and one unrelated failure because `asyncio.timeout` is unavailable on Python 3.10.
   - Authoritative production Python 3.11 gate in the existing `job-bot:phase6a3` image: `python -m pytest tests/v2 -q` — 542 passed and one existing third-party `audioop` deprecation warning in 6.92 seconds.
   - Static checks: focused `compileall`, Ruff, and `git diff --check` passed.
+  - Scheduling rollout focused gate in the existing Python 3.11 image: `python -m pytest tests/v2/test_phase5a_scheduling.py tests/v2/test_berlinstartupjobs_source.py tests/v2/test_phase6a1_replay_concurrency.py -q` — 48 passed and one existing third-party `audioop` deprecation warning in 2.31 seconds.
+  - Scheduling rollout required v2 gate in the existing Python 3.11 image: `python -m pytest tests/v2 -q` — 550 passed and one existing third-party `audioop` deprecation warning in 8.50 seconds.
 - Peak memory: The bounded live dry run used 133,880 KiB (130.7 MiB) maximum RSS, comfortably below 430 MiB, and completed in approximately 6.0 seconds.
 - Notes:
   - **BerlinStartupJobs admission audit (2026-08-12) — ADMIT.** The selected access path is the anonymous public WordPress REST API advertised by the site's HTML and response headers: resolve the stable `engineering` category and read `GET /wp-json/wp/v2/posts` with `categories=9`, bounded `per_page`, selected fields, and `wp:term` embedding. The endpoint returned HTTP 200 with `Allow: GET`; no login, JavaScript, browser, CAPTCHA handling, proxy, or detail-page fetch was required. The RSS feed is public but less complete; server-rendered HTML and JSON-LD were not needed once the stronger API path was verified.
@@ -2773,10 +2778,12 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Mapping retains bounded full description text, UTC publication time, company/location/category/tag/plan evidence, and only explicit salary/employment evidence. `Berlin, Germany` is on-site Berlin; Berlin plus `Remote Possible` is hybrid; `Remote` plus explicit Berlin/Germany retains Germany remote evidence; bare `Remote` remains unknown-scope and fails the unchanged strict location gate. The normal employment, language, role, stack, recency, scoring, cap, deduplication, and delivery policies remain authoritative.
   - Health behavior uses the existing typed contracts: complete jobs/empty scans are `healthy`/`zero_results`; a successful first page followed by failure is `partial_success`; no successful posts page retains the concrete rate-limit/network/blocked/parse status; and a server-reported page count above two is explicitly partial rather than silently complete. Existing timeout/retry and scan-wide HTTP-budget behavior is unchanged.
   - Live `python main.py --source berlinstartupjobs --dry-run` returned `healthy` with 26 raw jobs, two accepted and 24 rejected by existing hard filters, HTTP peak 1/4, two attempts, zero retries, and zero rate limits. The absent temporary SQLite path remained absent and notification credentials/workers were disabled; no persistence or send occurred.
-  - BerlinStartupJobs is registered as a real explicit/manual source and remains absent from scheduled Groups A, B, and C and from the default scheduled union. The eventual target remains Group B at 120 minutes only after the seven-day comparison demonstrates meaningful unique useful yield.
-  - No historical tests, Docker rebuild, `/health` service run, or Phase 5 concurrency experiment was performed, as required for this source-local implementation. The admission decision remains **ADMIT**; default scheduling remains deliberately unapproved.
-  - Exact next gate: run the BerlinStartupJobs seven-day unique-yield validation before default Group B scheduling, unless the roadmap explicitly chooses another Phase 7 audit in parallel. The remaining candidate order is unchanged.
-  - **Seven-day yield validation started (2026-08-12) — no conclusion yet.** `tools/source_yield_probe.py` fetches the explicit source, applies the unchanged normal filter pipeline in memory, opens the production jobs database with SQLite `mode=ro`, and appends only bounded hash/score/tier/company observations to ignored `data/validation/berlinstartupjobs.jsonl`. Report mode deduplicates accepted jobs by content hash across observations. BerlinStartupJobs remains manual-only and Group B promotion remains a review gate after seven days.
+  - **BerlinStartupJobs scheduling rollout (2026-08-12) — enabled.** The source is in Group B at the unchanged 120-minute cadence, is included once in the default scheduled source union, remains explicitly runnable with `--source berlinstartupjobs`, and is absent from every other scheduled group. Group A/B scheduler semantics and startup offsets are unchanged.
+  - Existing production scans automatically observe the rollout in `source_scan_runs`, including raw, accepted, unseen, saved, rejection, routing, status/error, and timestamp metrics. No new monitoring subsystem was added.
+  - Rollout verification intentionally reused the existing Python 3.11 image without rebuilding it. No historical suite, live source audit, Phase 5 concurrency experiment, Docker rebuild, or new memory measurement was run; the prior bounded live dry-run observation remains 130.7 MiB peak RSS and approximately 6.0 seconds.
+  - For the earlier source-local implementation, no historical tests, Docker rebuild, `/health` service run, or Phase 5 concurrency experiment was performed. The admission decision remained **ADMIT**, while default scheduling was deliberately unapproved at that point.
+  - The seven-day uniqueness review is now post-enable and non-blocking. `tools/source_yield_probe.py` remains available as an optional read-only diagnostic, but the operator does not need to run it daily because scheduled production metrics provide automatic observation.
+  - Phase 7 remains in progress. The remaining candidate order is unchanged; the next BerlinStartupJobs review is the post-enable uniqueness assessment based primarily on production `source_scan_runs`.
 
 ## Phase 8
 

@@ -85,6 +85,7 @@ SOURCE_GROUPS: tuple[SourceGroup, ...] = (
             "remoteok",
             "idealist",
             "linkedin",
+            "berlinstartupjobs",
         ),
     ),
 )
@@ -115,10 +116,8 @@ SOURCE_CATALOG: tuple[SourceDefinition, ...] = (
     _scheduled("remoteok", RemoteOKSource, GROUP_B_ID),
     _scheduled("idealist", IdealistSource, GROUP_B_ID),
     _scheduled("linkedin", LinkedInSource, GROUP_B_ID),
+    _scheduled("berlinstartupjobs", BerlinStartupJobsSource, GROUP_B_ID),
     _manual("stepstone", StepstoneSource),
-    # Phase 7 rollout: implemented for explicit/manual scans, but remains
-    # unscheduled until the required seven-day unique-yield gate passes.
-    _manual("berlinstartupjobs", BerlinStartupJobsSource),
     _manual("weworkremotely", WeWorkRemotelySource),
     _manual("reliefweb", ReliefWebSource),
     _manual("techjobsforgood", TechJobsForGoodSource),
