@@ -1996,32 +1996,24 @@ No candidate is assumed technically admissible. Every candidate must first under
 
 ## Next implementation gate
 
-The next technical task after the Phase 6 closure documentation is a direct-source admission audit, not an email parser. The audit must determine:
-
-- public access path
-- API, RSS, JSON-LD, or lightweight HTML availability
-- robots/access constraints where relevant
-- fields available
-- pagination
-- location quality
-- employment data
-- likely unique yield
-- runtime and memory cost
-
-No browser automation is permitted.
+BerlinStartupJobs is admitted and implemented as a manual-only source. Its next
+gate is the required seven-day unique-yield comparison before promotion to
+scheduled Group B at the existing 120-minute cadence. No browser automation is
+permitted, and the remaining candidate order is unchanged.
 
 ## Source admission checklist
 
-A new source is not enabled by default until it:
+A new source is not enabled by default until it; the current BerlinStartupJobs
+state is:
 
-- [ ] has a stable public API, RSS, JSON-LD, or lightweight HTML path
-- [ ] requires no authentication or prohibited automation
-- [ ] returns title, company, location, URL, and enough eligibility evidence
-- [ ] has tests using saved fixtures/mocked responses
-- [ ] has rate-limit and failure handling
-- [ ] has source-health reporting
+- [x] has a stable public API, RSS, JSON-LD, or lightweight HTML path
+- [x] requires no authentication or prohibited automation
+- [x] returns title, company, location, URL, and enough eligibility evidence
+- [x] has tests using saved fixtures/mocked responses
+- [x] has rate-limit and failure handling
+- [x] has source-health reporting
 - [ ] adds meaningful unique jobs in a seven-day comparison
-- [ ] stays within memory and scan-duration budgets
+- [x] stays within memory and scan-duration budgets
 
 ## Definition of done
 
@@ -2758,10 +2750,14 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
 
 ## Phase 7
 
-- Status: Admission stage — BerlinStartupJobs audited and admitted on 2026-08-12; adapter implementation not started
-- Commit:
+- Status: In progress — BerlinStartupJobs admitted and implemented as manual-only on 2026-08-12; seven-day default-enable gate pending
+- Commit: `feat: add BerlinStartupJobs source` (this BerlinStartupJobs implementation commit)
 - Tests:
-- Peak memory: Not measured; this documentation-only admission audit did not run the application or Docker.
+  - Focused adapter/registry gate: `python -m pytest tests/v2/test_berlinstartupjobs_source.py -q` — 12 passed in 0.47 seconds.
+  - Host Python 3.10 diagnostic: `python -m pytest tests/v2 -q` — 541 passed and one unrelated failure because `asyncio.timeout` is unavailable on Python 3.10.
+  - Authoritative production Python 3.11 gate in the existing `job-bot:phase6a3` image: `python -m pytest tests/v2 -q` — 542 passed and one existing third-party `audioop` deprecation warning in 6.92 seconds.
+  - Static checks: focused `compileall`, Ruff, and `git diff --check` passed.
+- Peak memory: The bounded live dry run used 133,880 KiB (130.7 MiB) maximum RSS, comfortably below 430 MiB, and completed in approximately 6.0 seconds.
 - Notes:
   - **BerlinStartupJobs admission audit (2026-08-12) — ADMIT.** The selected access path is the anonymous public WordPress REST API advertised by the site's HTML and response headers: resolve the stable `engineering` category and read `GET /wp-json/wp/v2/posts` with `categories=9`, bounded `per_page`, selected fields, and `wp:term` embedding. The endpoint returned HTTP 200 with `Allow: GET`; no login, JavaScript, browser, CAPTCHA handling, proxy, or detail-page fetch was required. The RSS feed is public but less complete; server-rendered HTML and JSON-LD were not needed once the stronger API path was verified.
   - Available fields are stable numeric post ID, canonical BerlinStartupJobs URL, title, full rendered description, publication and modification dates, category/tag terms, company taxonomy, and location taxonomy. The location terms distinguish `Berlin, Germany`, `Remote Possible`, and `Remote`; they provide useful remote/hybrid/on-site evidence without justifying Germany eligibility for a remote-only posting. Employment type and salary have no dedicated normalized API fields: internships/freelance and some schedule/term/salary evidence appear only in categories, tags, or description text and must remain unknown when absent.
@@ -2770,7 +2766,14 @@ The following 104 failing node IDs are the recorded pre-existing historical-test
   - Representative yield: 130 visible jobs, 26 IT/software jobs, 13 clearly frontend/full-stack/backend/software/product-engineer titles, 125 Berlin-tagged jobs, 10 Berlin plus `Remote Possible`, six Berlin/Germany plus `Remote`, and five remote-only jobs lacking sufficient Germany scope. Twenty postings were within the existing 14-day recency window. A read-only run through the existing filters retained two fresh DATATRONiQ roles: Senior Frontend Developer (score 87, immediate) and Senior Backend Developer (score 68, digest); the remaining current engineering sample was rejected by existing role policy, while older plausible roles failed recency.
   - Likely unique yield is **promising**. Only five of the 85 active companies, accounting for 13 of 130 postings, matched enabled companies in the direct ATS catalog. Both current filter survivors are from DATATRONiQ, which is absent from that catalog, and neither had an exact match in the local persisted job history; that history was stale and is supporting rather than conclusive evidence. Existing URL/content-hash deduplication should absorb any broad-aggregator overlap. No seven-day monitoring experiment was performed.
   - Recommended implementation shape: canonical source name `berlinstartupjobs`; lightweight REST adapter in Group B at the existing 120-minute cadence; sequential category-scoped pagination with a two-page / three-request bound; one bounded response retained at a time; saved sanitized API fixtures covering embedded taxonomies, pagination, a relevant Berlin role, remote-only uncertainty, stale content, and a malformed item; mocked partial-page/rate-limit/blocked/parse tests; `healthy`/`zero_results` for complete usable runs, `partial_success` when a later page fails after a completed page, and the existing concrete failure statuses when no page succeeds. Expected runtime and memory impact are small relative to the 512 MiB limit because the current scan is one 110 KB wire response and about 1.5 MB decoded.
-  - Exact next gate: implement the BerlinStartupJobs adapter separately, without changing the remaining Phase 7 candidate order.
+  - **BerlinStartupJobs adapter implementation (2026-08-12) — implemented, manual-only.** Added `sources/berlinstartupjobs.py`, a manual-only catalog entry, three sanitized WordPress REST fixtures, focused adapter/registry tests, and this plan update. No dependency, database schema, shared concurrency, scheduler group, or production notification change was made.
+  - Each scan resolves the `engineering` category once, then fetches at most two category-scoped post pages sequentially with selected fields and embedded `wp:term` taxonomies. The hard limit is three endpoint requests; current live data required two. Stable source identity is `berlinstartupjobs:{wordpress_post_id}`, while `Job.url` is the validated canonical public post URL. Duplicate provider IDs and malformed individual posts are skipped without turning a healthy page into a source incident.
+  - Mapping retains bounded full description text, UTC publication time, company/location/category/tag/plan evidence, and only explicit salary/employment evidence. `Berlin, Germany` is on-site Berlin; Berlin plus `Remote Possible` is hybrid; `Remote` plus explicit Berlin/Germany retains Germany remote evidence; bare `Remote` remains unknown-scope and fails the unchanged strict location gate. The normal employment, language, role, stack, recency, scoring, cap, deduplication, and delivery policies remain authoritative.
+  - Health behavior uses the existing typed contracts: complete jobs/empty scans are `healthy`/`zero_results`; a successful first page followed by failure is `partial_success`; no successful posts page retains the concrete rate-limit/network/blocked/parse status; and a server-reported page count above two is explicitly partial rather than silently complete. Existing timeout/retry and scan-wide HTTP-budget behavior is unchanged.
+  - Live `python main.py --source berlinstartupjobs --dry-run` returned `healthy` with 26 raw jobs, two accepted and 24 rejected by existing hard filters, HTTP peak 1/4, two attempts, zero retries, and zero rate limits. The absent temporary SQLite path remained absent and notification credentials/workers were disabled; no persistence or send occurred.
+  - BerlinStartupJobs is registered as a real explicit/manual source and remains absent from scheduled Groups A, B, and C and from the default scheduled union. The eventual target remains Group B at 120 minutes only after the seven-day comparison demonstrates meaningful unique useful yield.
+  - No historical tests, Docker rebuild, `/health` service run, or Phase 5 concurrency experiment was performed, as required for this source-local implementation. The admission decision remains **ADMIT**; default scheduling remains deliberately unapproved.
+  - Exact next gate: run the BerlinStartupJobs seven-day unique-yield validation before default Group B scheduling, unless the roadmap explicitly chooses another Phase 7 audit in parallel. The remaining candidate order is unchanged.
 
 ## Phase 8
 

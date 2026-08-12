@@ -12,6 +12,7 @@ from sources.arbeitnow import ArbeitnowSource
 from sources.ashby import AshbySource
 from sources.bamboohr import BambooHRSource
 from sources.base import BaseSource
+from sources.berlinstartupjobs import BerlinStartupJobsSource
 from sources.devex import DevexSource
 from sources.eurobrussels import EuroBrusselsSource
 from sources.goodjobs import GoodJobsSource
@@ -115,6 +116,9 @@ SOURCE_CATALOG: tuple[SourceDefinition, ...] = (
     _scheduled("idealist", IdealistSource, GROUP_B_ID),
     _scheduled("linkedin", LinkedInSource, GROUP_B_ID),
     _manual("stepstone", StepstoneSource),
+    # Phase 7 rollout: implemented for explicit/manual scans, but remains
+    # unscheduled until the required seven-day unique-yield gate passes.
+    _manual("berlinstartupjobs", BerlinStartupJobsSource),
     _manual("weworkremotely", WeWorkRemotelySource),
     _manual("reliefweb", ReliefWebSource),
     _manual("techjobsforgood", TechJobsForGoodSource),

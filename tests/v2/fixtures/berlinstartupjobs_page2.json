@@ -1,0 +1,47 @@
+[
+  {
+    "id": 5006,
+    "date_gmt": "2026-08-05T05:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/software-engineer-second-page/",
+    "title": {"rendered": "Software Engineer // Second Page GmbH"},
+    "content": {"rendered": "<p>Build and maintain a web platform in Berlin.</p>"},
+    "categories": [9],
+    "tags": [106],
+    "job_company": [206],
+    "job_location": [301],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [{"id": 106, "taxonomy": "post_tag", "name": "Software", "slug": "software"}],
+        [{"id": 206, "taxonomy": "job_company", "name": "Second Page GmbH", "slug": "second-page-gmbh"}],
+        [{"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"}],
+        [{"id": 401, "taxonomy": "job_plan", "name": "Standard Job Post", "slug": "standard-job-post"}]
+      ]
+    }
+  },
+  {
+    "id": 5002,
+    "date_gmt": "2026-08-09T09:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/backend-engineer-hybrid-works/",
+    "title": {"rendered": "Backend Engineer – duplicate"},
+    "content": {"rendered": "<p>Duplicate across pages.</p>"},
+    "categories": [9],
+    "tags": [],
+    "job_company": [202],
+    "job_location": [301, 302],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [{"id": 202, "taxonomy": "job_company", "name": "Hybrid Works", "slug": "hybrid-works"}],
+        [
+          {"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"},
+          {"id": 302, "taxonomy": "job_location", "name": "Remote Possible", "slug": "remote-possible"}
+        ]
+      ]
+    }
+  }
+]

@@ -1,0 +1,143 @@
+[
+  {
+    "id": 5001,
+    "date": "2026-08-10T12:00:00",
+    "date_gmt": "2026-08-10T10:00:00",
+    "modified": "2026-08-11T12:00:00",
+    "modified_gmt": "2026-08-11T10:00:00",
+    "slug": "senior-frontend-developer-example-labs",
+    "link": "https://berlinstartupjobs.com/engineering/senior-frontend-developer-example-labs/?utm_source=fixture#apply",
+    "title": {"rendered": "Senior Frontend Developer – TypeScript &amp; React // Example Labs"},
+    "content": {"rendered": "<p>Build an accessible React and TypeScript product in Berlin.</p><p>Full-time permanent employee role. Salary: €70,000–€85,000 per year.</p>"},
+    "categories": [9],
+    "tags": [101, 102],
+    "job_company": [201],
+    "job_location": [301],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [
+          {"id": 101, "taxonomy": "post_tag", "name": "Frontend", "slug": "frontend"},
+          {"id": 102, "taxonomy": "post_tag", "name": "ReactJS", "slug": "reactjs"}
+        ],
+        [{"id": 201, "taxonomy": "job_company", "name": "Example Labs", "slug": "example-labs"}],
+        [{"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"}],
+        [{"id": 401, "taxonomy": "job_plan", "name": "Standard Job Post", "slug": "standard-job-post"}]
+      ]
+    }
+  },
+  {
+    "id": 5002,
+    "date_gmt": "2026-08-09T09:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/backend-engineer-hybrid-works/",
+    "title": {"rendered": "Backend Engineer – Python // Hybrid Works"},
+    "content": {"rendered": "<p>Build Python web services. Teilzeit 32h/Woche with remote work possible.</p>"},
+    "categories": [9],
+    "tags": [103],
+    "job_company": [202],
+    "job_location": [301, 302],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [{"id": 103, "taxonomy": "post_tag", "name": "Python", "slug": "python"}],
+        [{"id": 202, "taxonomy": "job_company", "name": "Hybrid Works", "slug": "hybrid-works"}],
+        [
+          {"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"},
+          {"id": 302, "taxonomy": "job_location", "name": "Remote Possible", "slug": "remote-possible"}
+        ],
+        [{"id": 401, "taxonomy": "job_plan", "name": "Standard Job Post", "slug": "standard-job-post"}]
+      ]
+    }
+  },
+  {
+    "id": 5003,
+    "date_gmt": "2026-08-08T08:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/full-stack-developer-anywhere-labs/",
+    "title": {"rendered": "Full Stack Developer // Anywhere Labs"},
+    "content": {"rendered": "<p>Remote role building web applications. Full-time.</p>"},
+    "categories": [9],
+    "tags": [104],
+    "job_company": [203],
+    "job_location": [303],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [{"id": 104, "taxonomy": "post_tag", "name": "Fullstack", "slug": "fullstack"}],
+        [{"id": 203, "taxonomy": "job_company", "name": "Anywhere Labs", "slug": "anywhere-labs"}],
+        [{"id": 303, "taxonomy": "job_location", "name": "Remote", "slug": "remote"}],
+        [{"id": 401, "taxonomy": "job_plan", "name": "Standard Job Post", "slug": "standard-job-post"}]
+      ]
+    }
+  },
+  {
+    "id": 5004,
+    "date_gmt": "2026-08-07T07:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/freelance-web-developer-contract-co/",
+    "title": {"rendered": "Freelance Web Developer // Contract Co"},
+    "content": {"rendered": "<p>Explicit freelance B2B project for a Berlin product team.</p>"},
+    "categories": [9, 7],
+    "tags": [105],
+    "job_company": [204],
+    "job_location": [301],
+    "job_plan": [402],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [
+          {"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"},
+          {"id": 7, "taxonomy": "category", "name": "Freelance", "slug": "contracting-positions"}
+        ],
+        [{"id": 105, "taxonomy": "post_tag", "name": "Web Development", "slug": "web-development"}],
+        [{"id": 204, "taxonomy": "job_company", "name": "Contract Co", "slug": "contract-co"}],
+        [{"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"}],
+        [{"id": 402, "taxonomy": "job_plan", "name": "Freelance Job Post", "slug": "freelance-job-post"}]
+      ]
+    }
+  },
+  {
+    "id": 5005,
+    "date_gmt": "2026-08-06T06:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/malformed-without-company/",
+    "title": {"rendered": "Malformed Developer"},
+    "content": {"rendered": "<p>This item intentionally has no company taxonomy.</p>"},
+    "categories": [9],
+    "tags": [],
+    "job_company": [],
+    "job_location": [301],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [],
+        [{"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"}]
+      ]
+    }
+  },
+  {
+    "id": 5001,
+    "date_gmt": "2026-08-10T10:00:00",
+    "link": "https://berlinstartupjobs.com/engineering/duplicate-provider-id/",
+    "title": {"rendered": "Duplicate Provider Item"},
+    "content": {"rendered": "<p>Duplicate provider item.</p>"},
+    "categories": [9],
+    "tags": [],
+    "job_company": [205],
+    "job_location": [301],
+    "job_plan": [401],
+    "_links": {},
+    "_embedded": {
+      "wp:term": [
+        [{"id": 9, "taxonomy": "category", "name": "IT / Software Development", "slug": "engineering"}],
+        [{"id": 205, "taxonomy": "job_company", "name": "Duplicate Co", "slug": "duplicate-co"}],
+        [{"id": 301, "taxonomy": "job_location", "name": "Berlin, Germany", "slug": "berlin-germany"}]
+      ]
+    }
+  }
+]
