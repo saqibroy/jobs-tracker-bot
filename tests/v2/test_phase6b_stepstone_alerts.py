@@ -42,6 +42,20 @@ SUBJECT = "Example Product GmbH and 1 other company are looking for candidates l
 SENDER = "StepStone <info@jobagent.stepstone.de>"
 
 
+def test_documented_gmail_query_covers_all_completed_alert_providers() -> None:
+    expected_senders = {
+        "jobalerts-noreply@linkedin.com",
+        "donotreply@match.indeed.com",
+        "info@jobagent.stepstone.de",
+    }
+    for path in (Path(".env.example"), Path("README.md")):
+        query_line = next(
+            line for line in path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("GMAIL_QUERY=")
+        )
+        assert all(sender in query_line for sender in expected_senders)
+
+
 def fixture() -> str:
     return (FIXTURES / "stepstone_alert_sanitized.html").read_text(encoding="utf-8")
 
