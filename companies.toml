@@ -557,7 +557,8 @@ company = "Egym"
 provider = "personio"
 slug = "egym"
 url = "https://egym.jobs.personio.de"
-enabled = true
+# Retired board: both the XML feed and public board redirect to personio.com.
+enabled = false
 
 [[companies]]
 company = "Goreha"
@@ -662,7 +663,8 @@ company = "Pitch"
 provider = "personio"
 slug = "pitch"
 url = "https://pitch.jobs.personio.de"
-enabled = true
+# Retired board: both the XML feed and public board redirect to personio.com.
+enabled = false
 
 [[companies]]
 company = "Reisetopia"

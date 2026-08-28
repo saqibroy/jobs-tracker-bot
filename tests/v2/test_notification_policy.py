@@ -27,6 +27,8 @@ from filters.profile import DEFAULT_NOTIFICATION_SECTION, parse_notification_pol
 from models.job import Job
 from models.scan import RejectionCode
 
+_FRESH_JOB_TIME = datetime.now(timezone.utc)
+
 
 def make_job(suffix: str, *, score: int, **overrides) -> Job:
     values = {
@@ -39,8 +41,8 @@ def make_job(suffix: str, *, score: int, **overrides) -> Job:
         "description": "Build React and TypeScript products.",
         "source": "test",
         "match_score": score,
-        "posted_at": datetime(2026, 8, 7, tzinfo=timezone.utc),
-        "fetched_at": datetime(2026, 8, 7, tzinfo=timezone.utc),
+        "posted_at": _FRESH_JOB_TIME,
+        "fetched_at": _FRESH_JOB_TIME,
     }
     values.update(overrides)
     return Job(**values)
