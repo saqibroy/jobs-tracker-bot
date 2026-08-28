@@ -13,6 +13,19 @@ from scripts.discover_companies import (
     promotion_allowed,
     promote,
 )
+from sources.registry import load_company_boards
+
+
+def test_retired_personio_boards_are_not_enabled():
+    enabled = {(board.provider, board.slug) for board in load_company_boards()}
+    configured = {
+        (board.provider, board.slug): board
+        for board in load_company_boards(include_disabled=True)
+    }
+
+    for key in {("personio", "egym"), ("personio", "pitch")}:
+        assert key not in enabled
+        assert configured[key].enabled is False
 
 
 def test_discovery_parses_env_seed_lists_without_network():

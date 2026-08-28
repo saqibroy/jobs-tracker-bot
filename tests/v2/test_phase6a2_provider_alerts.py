@@ -483,6 +483,9 @@ async def test_linkedin_source_alert_cross_path_dedup_in_both_orders(
 ) -> None:
     db_path = tmp_path / "cross-path.db"
     monkeypatch.setattr(config, "DATABASE_PATH", str(db_path))
+    # This test owns cross-path identity/deduplication, not recency. Its
+    # sanitized alert fixture has a deliberately fixed historical date.
+    monkeypatch.setattr(config, "MAX_JOB_AGE_DAYS", 365)
     await init_db()
     parsed = LinkedInAlertParser().parse(
         metadata("linkedin"),
