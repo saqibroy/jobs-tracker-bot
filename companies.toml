@@ -1421,3 +1421,13 @@ provider = "personio"
 slug = "xu-de"
 url = "https://xu-de.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-09-03 10:37:13 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Recurly"
+provider = "workable"
+slug = "recurly"
+url = "https://apply.workable.com/recurly"
+enabled = true
