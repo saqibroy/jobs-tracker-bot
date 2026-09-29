@@ -1431,3 +1431,13 @@ provider = "workable"
 slug = "recurly"
 url = "https://apply.workable.com/recurly"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-09-29 12:02:00 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Tado"
+provider = "personio"
+slug = "tado"
+url = "https://tado.jobs.personio.de"
+enabled = true
