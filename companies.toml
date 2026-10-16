@@ -1441,3 +1441,13 @@ provider = "personio"
 slug = "tado"
 url = "https://tado.jobs.personio.de"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-10-16 10:34:32 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Checkout"
+provider = "ashby"
+slug = "checkout.com"
+url = "https://jobs.ashbyhq.com/checkout.com"
+enabled = true
