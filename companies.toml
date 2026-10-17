@@ -1451,3 +1451,13 @@ provider = "ashby"
 slug = "checkout.com"
 url = "https://jobs.ashbyhq.com/checkout.com"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-10-17 10:06:32 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Webflow"
+provider = "ashby"
+slug = "webflow"
+url = "https://jobs.ashbyhq.com/webflow"
+enabled = true
