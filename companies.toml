@@ -1461,3 +1461,20 @@ provider = "ashby"
 slug = "webflow"
 url = "https://jobs.ashbyhq.com/webflow"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-10-20 10:52:34 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Lightningai"
+provider = "greenhouse"
+slug = "lightningai"
+url = "http://job-boards.greenhouse.io/lightningai"
+enabled = true
+
+[[companies]]
+company = "Lightningai"
+provider = "greenhouse"
+slug = "lightningai"
+url = "https://job-boards.greenhouse.io/lightningai"
+enabled = true
