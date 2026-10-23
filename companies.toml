@@ -1478,3 +1478,13 @@ provider = "greenhouse"
 slug = "lightningai"
 url = "https://job-boards.greenhouse.io/lightningai"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-10-23 10:57:49 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Zapier"
+provider = "ashby"
+slug = "zapier"
+url = "https://jobs.ashbyhq.com/zapier"
+enabled = true
