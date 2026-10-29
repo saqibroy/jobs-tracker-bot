@@ -1488,3 +1488,13 @@ provider = "ashby"
 slug = "zapier"
 url = "https://jobs.ashbyhq.com/zapier"
 enabled = true
+
+# Auto-promoted by scripts/discover_companies.py on 2026-10-29 12:10:35 UTC.
+# Live-board promotion thresholds were applied before writing these boards.
+
+[[companies]]
+company = "Truelayer"
+provider = "ashby"
+slug = "truelayer"
+url = "https://jobs.ashbyhq.com/truelayer"
+enabled = true
